@@ -41,3 +41,6 @@ desktop.ini
 
 # TypeScript 증분 빌드 캐시
 web/*.tsbuildinfo
+
+# 작업 메모 (공개 저장소에 올리지 않는다)
+CLAUDE.md
