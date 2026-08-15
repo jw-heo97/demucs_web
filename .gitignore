@@ -1,0 +1,43 @@
+# ── 절대 커밋하면 안 되는 것 ───────────────────────────────
+# 계정 해시·발급 토큰·접속 기록·분리 결과물이 전부 여기 들어간다
+data/
+# yt-dlp 쿠키 = 로그인 세션 그 자체
+secrets/*
+!secrets/README.md
+# 실제 설정 (관리자 비밀번호, PROXY_SECRET 등)
+.env
+.env.local
+*.env
+!.env.example
+
+# ── 빌드 산출물 ────────────────────────────────────────
+web/node_modules/
+web/dist/
+web/.vite/
+node_modules/
+
+# ── 파이썬 ─────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+
+# ── 오디오·이미지 (실수로 결과물이 딸려 들어가는 것 방지) ──
+*.wav
+*.mp3
+*.flac
+*.webm
+*.m4a
+*.opus
+
+# ── 편집기·OS ──────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# TypeScript 증분 빌드 캐시
+web/*.tsbuildinfo

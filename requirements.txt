@@ -1,0 +1,15 @@
+# 베이스 이미지 pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime 에 이미 포함되어 있음.
+# 절대 재설치하지 말 것 (재설치하면 CPU 빌드로 덮여 RTX 5060 Ti / sm_120 이 죽는다):
+#   torch 2.8.0+cu128  torchaudio 2.8.0+cu128  torchvision 0.23.0+cu128  numpy 2.3.2
+#
+# yt-dlp 는 여기 없다. YouTube 변경에 따라 자주 깨지므로 Dockerfile 의
+# ARG YTDLP_VERSION 으로 분리해 두었다 (레이어 캐시를 덜 무효화하려는 목적).
+
+demucs==4.1.0
+librosa==0.11.0
+soundfile==0.14.0
+numba==0.66.0
+scipy==1.17.1
+
+fastapi==0.141.1
+uvicorn[standard]==0.52.1
