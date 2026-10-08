@@ -92,6 +92,7 @@ export const api = {
       duration: number;
       thumbnail: string;
       playable_in_embed: boolean | null;
+      live: boolean;
     }>(`/api/resolve?url=${encodeURIComponent(url)}`),
 
   // --- 곡 구성표 ---

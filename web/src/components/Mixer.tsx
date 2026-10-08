@@ -27,7 +27,18 @@ const audioCtx = () => (sharedCtx ??= new AudioContext());
 export function Mixer({ engine, bars, showRate, countIn, onCountInChange }: Props) {
   const { tracks, playing, time, duration, rate, muted, solo, vol } = engine;
   const [counting, setCounting] = useState(0);
+  const [hint, setHint] = useState("");
   const timers = useRef<{ t?: number; i?: number; oscs: OscillatorNode[] }>({ oscs: [] });
+
+  /** 재생 실패(자동재생 차단, 파일 없음)를 버튼 옆에 보여준다. 조용히 삼키면 ▶ 만 남는다. */
+  async function startPlay() {
+    try {
+      setHint("");
+      await engine.play();
+    } catch (e) {
+      setHint((e as Error).message);
+    }
+  }
 
   useEffect(() => () => cancelCount(), []);
 
@@ -71,7 +82,7 @@ export function Mixer({ engine, bars, showRate, countIn, onCountInChange }: Prop
     const pos = time;
     // 예비박은 곡 처음부터 재생할 때만. 중간에서 매번 붙으면 방해가 된다.
     if (!countIn || pos > 0.25) {
-      await engine.play();
+      await startPlay();
       return;
     }
     const b = cur ?? bars[0];
@@ -84,9 +95,12 @@ export function Mixer({ engine, bars, showRate, countIn, onCountInChange }: Prop
       ctx = audioCtx();
       await ctx.resume();
     } catch {
-      await engine.play();
+      await startPlay();
       return;
     }
+    // 실제 재생은 예비박이 끝난 뒤 타이머에서 시작한다. iOS 는 사용자 제스처 밖의 play()
+    // 를 거부하므로, 지금(버튼을 누른 제스처 안에서) 트랙들을 미리 풀어둔다.
+    engine.prime();
 
     // 마지막 클릭과 "곡의 다음 박자" 사이가 정확히 한 박이 되도록 맞춘다.
     // 이걸 안 하면 클릭은 일정한데 음악 진입만 최대 한 박까지 어긋난다.
@@ -111,7 +125,7 @@ export function Mixer({ engine, bars, showRate, countIn, onCountInChange }: Prop
         setCounting(0);
         const late = Math.max(0, ctx.currentTime - startAt) * (rate || 1);
         engine.seek(pos + late);
-        await engine.play();
+        await startPlay();
       },
       Math.max(0, (startAt - ctx.currentTime) * 1000),
     );
@@ -162,6 +176,7 @@ export function Mixer({ engine, bars, showRate, countIn, onCountInChange }: Prop
           <option value="4">예비박 4박</option>
           <option value="8">예비박 8박</option>
         </select>
+        {hint && <span className="err">{hint}</span>}
       </div>
 
       <div className="sectbar">

@@ -2,6 +2,8 @@ export interface JobFile {
   name: string;
   rel: string;
   size: number;
+  /** 수정 시각(ms). 같은 이름으로 다시 구운 파일을 구별하는 데 쓴다. */
+  mtime: number;
   url: string;
 }
 

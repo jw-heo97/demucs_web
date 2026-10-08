@@ -36,6 +36,10 @@ services:
       JOB_RETENTION_SEC: ${JOB_RETENTION_SEC:-0}
       # 쿠키를 쓸 때만 값을 넣는다 (.env 에서 COOKIES_FILE=/secrets/cookies.txt)
       COOKIES_FILE: ${COOKIES_FILE:-}
+      # 403 이 나면 이 순서로 플레이어 클라이언트를 바꿔가며 재시도한다 (.env 에서 조정)
+      YTDLP_CLIENTS: ${YTDLP_CLIENTS:-,android,tv,web_safari,ios,mweb}
+      # 앱(Capacitor/Tauri)처럼 다른 오리진에서 부를 때만. 웹으로만 쓰면 비워둔다.
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
 
     volumes:
       # 결과물은 Windows 탐색기에서 바로 열 수 있게 바인드 마운트

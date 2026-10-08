@@ -138,6 +138,9 @@ def probe_metadata(url_or_id: str) -> dict:
         # 이 값이 False 여도 다운로드/분리는 정상 동작한다.
         "playable_in_embed": info.get("playable_in_embed"),
         "availability": info.get("availability"),
+        # 진행 중/예정 방송. 길이가 없거나 무한이라 다운로드를 시작하면 끝나지 않는다.
+        "live": bool(info.get("is_live"))
+        or info.get("live_status") in ("is_live", "is_upcoming"),
     }
     _cache_put(key, data)
     return data

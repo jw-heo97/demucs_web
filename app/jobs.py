@@ -22,6 +22,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import quote
 
 import numpy as np
 
@@ -196,9 +197,25 @@ class JobStore:
                 raise ValueError("사용할 수 없는 제목입니다. 다른 이름을 입력하세요.")
 
         video_id = downloader.extract_video_id(url)   # 여기서 미리 검증해 즉시 400 을 낸다
+
+        # 다운로드 전에 길이와 라이브 여부를 확인한다. 이 검사가 다운로드 뒤에만 있으면
+        # 라이브 방송 URL 하나가 유일한 워커를 방송이 끝날 때까지 붙잡아 뒤의 작업이 전부 멈춘다.
+        # (제목 가져오기 버튼이 같은 조회를 하므로 보통 캐시에서 바로 온다)
+        meta = downloader.probe_metadata(video_id)
+        if meta.get("live"):
+            raise ValueError("라이브 방송은 분리할 수 없습니다. 방송이 끝나 VOD 로 올라온 뒤 다시 시도하세요.")
+        duration = float(meta.get("duration") or 0.0)
+        if MAX_DURATION_SEC and duration > MAX_DURATION_SEC:
+            raise ValueError(
+                f"길이 제한 초과: {duration:.0f}초 (허용 {MAX_DURATION_SEC}초). "
+                "MAX_DURATION_SEC 환경변수로 조정할 수 있습니다."
+            )
+
         job = Job(id=uuid.uuid4().hex[:12], url=url, fmt=fmt, target=target,
                   save_original=save_original, title_override=title_override,
-                  metronome=metronome, minus_mixes=minus_mixes, video_id=video_id)
+                  metronome=metronome, minus_mixes=minus_mixes, video_id=video_id,
+                  # 대기 중에도 목록에 제목·길이가 보이게 미리 채운다
+                  title=meta.get("title"), duration=duration)
         with self._lock:
             self._jobs[job.id] = job
         try:
@@ -339,13 +356,7 @@ class JobStore:
         for p in sorted(d.rglob("*")):
             if not p.is_file() or p.name in (META_FILE, MAP_HISTORY_FILE, PEAKS_FILE):
                 continue
-            rel = p.relative_to(d).as_posix()
-            out.append({
-                "name": p.name,
-                "rel": rel,
-                "size": p.stat().st_size,
-                "url": f"/api/jobs/{job.id}/files/{rel}",
-            })
+            out.append(self._file_entry(job, d, p))
         return out
 
     def _save_meta(self, job: Job) -> None:
@@ -1224,12 +1235,18 @@ class JobStore:
     @staticmethod
     def _file_entry(job: Job, out_dir: Path, path: Path) -> dict:
         rel = path.relative_to(out_dir).as_posix()
+        st = path.stat()
         return {
             "name": path.name,
             "rel": rel,
-            "size": path.stat().st_size,
-            # 폴더명이 한글/일본어라 URL 에는 안전한 작업 ID 를 쓴다 (서버가 folder 로 변환)
-            "url": f"/api/jobs/{job.id}/files/{rel}",
+            "size": st.st_size,
+            # 수정 시각(ms). 같은 이름으로 덮어쓰는 파일(메트로놈 재생성)을 브라우저가
+            # 캐시된 옛 데이터로 재생하지 않도록 프론트가 URL 과 트랙 키에 섞어 쓴다.
+            "mtime": int(st.st_mtime * 1000),
+            # 폴더명이 한글/일본어라 URL 에는 안전한 작업 ID 를 쓴다 (서버가 folder 로 변환).
+            # rel 은 인코딩한다 — 제목에 '#' 이 있으면 브라우저가 뒤를 프래그먼트로 잘라내고
+            # '%' 는 이스케이프로 풀려서 404 가 난다.
+            "url": f"/api/jobs/{job.id}/files/{quote(rel, safe='/')}",
         }
 
 
