@@ -1,32 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, setUnauthorizedHandler } from "./api";
-import { Login } from "./components/Login";
-import { SecurityDialog } from "./components/SecurityDialog";
+import { api } from "./api";
 import { SearchTab } from "./components/SearchTab";
 import { SongMapTab } from "./components/SongMapTab";
 import { WorkTab } from "./components/WorkTab";
-import type { Job, Me } from "./types";
+import type { Job } from "./types";
 
 type TabKey = "work" | "map" | "tube";
 
 export function App() {
-  const [me, setMe] = useState<Me | null>(null);
-  const [booting, setBooting] = useState(true);
   const [tab, setTab] = useState<TabKey>("work");
   const [jobs, setJobs] = useState<Job[]>([]);
   const [info, setInfo] = useState<string>("");
-  const [secOpen, setSecOpen] = useState(false);
   const [pick, setPick] = useState<{ videoId: string; title: string } | null>(null);
   const timer = useRef<number | undefined>(undefined);
-
-  useEffect(() => {
-    setUnauthorizedHandler(() => setMe(null));
-    api
-      .me()
-      .then(setMe)
-      .catch(() => setMe(null))
-      .finally(() => setBooting(false));
-  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -42,7 +28,6 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!me) return;
     refresh();
     api
       .info()
@@ -54,10 +39,7 @@ export function App() {
       )
       .catch(() => setInfo(""));
     return () => window.clearTimeout(timer.current);
-  }, [me, refresh]);
-
-  if (booting) return <div className="wrap"><div className="empty">불러오는 중…</div></div>;
-  if (!me) return <Login onDone={setMe} />;
+  }, [refresh]);
 
   return (
     <div className="wrap">
@@ -82,27 +64,6 @@ export function App() {
             {label}
           </button>
         ))}
-        <span style={{ flex: 1 }} />
-        <span className="meta" style={{ marginRight: 8 }}>
-          {me.username}
-          {me.is_admin && " · 관리자"}
-        </span>
-        {/* 보안 화면은 계정 관리·전체 접속 기록을 다루므로 관리자에게만 보인다.
-            서버에서도 해당 엔드포인트를 403 으로 막는다 (숨기기만 하면 안 된다). */}
-        {me.is_admin && (
-          <button className="ghost" onClick={() => setSecOpen(true)}>
-            보안
-          </button>
-        )}
-        <button
-          className="ghost"
-          onClick={async () => {
-            await api.logout();
-            setMe(null);
-          }}
-        >
-          로그아웃
-        </button>
       </div>
 
       {tab === "work" && (
@@ -117,8 +78,6 @@ export function App() {
           }}
         />
       )}
-
-      <SecurityDialog open={secOpen} me={me} onClose={() => setSecOpen(false)} />
     </div>
   );
 }

@@ -8,11 +8,8 @@ services:
     container_name: demucs-api
     restart: unless-stopped
 
-    # 기본은 이 PC에서만 접속 가능(127.0.0.1). LAN 에 열려면 .env 에서
-    #   WEB_BIND=0.0.0.0
-    # 으로 바꾼다. 단, 그 순간 같은 네트워크의 누구나 접근 가능해지므로
-    # 접근 제어는 Windows 방화벽 인바운드 규칙(원격 IP 제한)으로 걸어야 한다.
-    # (컨테이너 안에서 IP 필터링은 불가능 — README 의 "접근 제어" 항목 참고)
+    # 이 PC에서만 접속 가능(127.0.0.1). 앱에 로그인이 없으므로 0.0.0.0 으로 열지 말 것 —
+    # 외부(다른 기기)에서 쓰려면 호스트에서 `tailscale serve` 로 노출한다 (README 참고).
     ports:
       - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}:8000"
 
@@ -36,28 +33,13 @@ services:
       WAV_SUBTYPE: ${WAV_SUBTYPE:-PCM_16}
       MAX_DURATION_SEC: ${MAX_DURATION_SEC:-900}
       MAX_QUEUE: ${MAX_QUEUE:-20}
-      JOB_RETENTION_SEC: ${JOB_RETENTION_SEC:-86400}
+      JOB_RETENTION_SEC: ${JOB_RETENTION_SEC:-0}
       # 쿠키를 쓸 때만 값을 넣는다 (.env 에서 COOKIES_FILE=/secrets/cookies.txt)
       COOKIES_FILE: ${COOKIES_FILE:-}
-
-      # --- 인증 ---
-      AUTH_DIR: /data/auth
-      ADMIN_USER: ${ADMIN_USER:-admin}
-      # 비워두면 첫 기동 때 임의 비밀번호를 만들어 로그에 한 번만 찍는다
-      #   docker compose logs api | Select-String "비밀번호"
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
-      SESSION_DAYS: ${SESSION_DAYS:-30}
-      LOGIN_MAX_FAILS: ${LOGIN_MAX_FAILS:-5}
-      LOGIN_LOCK_SEC: ${LOGIN_LOCK_SEC:-300}
-      # Windows 호스트에 리버스 프록시를 둔 경우에만 1 로 (README "접속 IP 기록" 참고)
-      TRUST_PROXY_HEADER: ${TRUST_PROXY_HEADER:-0}
-      PROXY_SECRET: ${PROXY_SECRET:-}
 
     volumes:
       # 결과물은 Windows 탐색기에서 바로 열 수 있게 바인드 마운트
       - ./data/output:/data/output
-      # 계정·토큰·접속기록. 컨테이너를 지워도 로그인 정보가 유지되어야 한다.
-      - ./data/auth:/data/auth
       # 작업용 임시 파일은 named volume — Windows 바인드마운트(drvfs)보다 훨씬 빠르다
       - work:/data/work
       # 쿠키 등 민감 파일. 이미지에 굽지 말고 읽기 전용으로만 마운트

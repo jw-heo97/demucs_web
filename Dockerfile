@@ -67,9 +67,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
     CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status==200 else 1)"
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-# --no-proxy-headers 중요: uvicorn 은 proxy_headers 가 기본 True 라서
-# X-Forwarded-For 로 request.client.host 를 멋대로 덮어쓴다. 그러면 클라이언트가
-# 헤더를 위조해 접속 기록의 IP 를 속일 수 있다. 끄고, 신뢰 여부는 auth.client_ip()
-# 한 곳에서 TRUST_PROXY_HEADER/PROXY_SECRET 로만 판단한다.
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", \
-     "--workers", "1", "--no-proxy-headers"]
+# 워커 1개: 작업 큐(jobs.py)가 프로세스 메모리에 있어 여러 워커로 나누면 안 된다.
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

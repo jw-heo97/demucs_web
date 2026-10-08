@@ -53,8 +53,6 @@ button.ghost.on { background: var(--accent); color: #fff; border-color: var(--ac
 .tab[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
 
 /* 로그인 */
-.loginwrap { min-height: 70vh; display: flex; align-items: center; justify-content: center; }
-.loginwrap .panel { width: 100%; max-width: 360px; }
 
 /* 보관함 */
 .job { border: 1px solid var(--border); border-radius: 9px; margin-bottom: 7px; background: var(--panel); overflow: hidden; }

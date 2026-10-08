@@ -63,35 +63,6 @@ MAX_QUEUE = _int("MAX_QUEUE", 20)
 JOB_RETENTION_SEC = _int("JOB_RETENTION_SEC", 0)
 
 
-def _flag(name: str, default: bool = False) -> bool:
-    v = os.getenv(name, "").strip().lower()
-    if not v:
-        return default
-    return v not in ("0", "false", "no", "off")
-
-
-# --- 인증 ---
-AUTH_DIR = Path(os.getenv("AUTH_DIR", "/data/auth"))
-# 첫 기동 때 계정이 없으면 이 값으로 관리자를 만든다.
-# ADMIN_PASSWORD 가 비어 있으면 임의 비밀번호를 생성해 로그에 한 번 찍는다.
-ADMIN_USER = os.getenv("ADMIN_USER", "admin").strip() or "admin"
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
-SESSION_DAYS = _int("SESSION_DAYS", 30)
-# 로그인 무차별 대입 방지
-LOGIN_MAX_FAILS = _int("LOGIN_MAX_FAILS", 5)
-LOGIN_LOCK_SEC = _int("LOGIN_LOCK_SEC", 300)
-# 앱 전체 접근을 특정 역할로 제한하고 싶을 때만 채운다 (예: admin).
-# 기본은 비어 있음 — 로그인한 사용자면 누구나 쓸 수 있고,
-# 보안 화면(계정 관리·접속 기록)만 관리자로 따로 막는다.
-REQUIRE_ROLE = os.getenv("REQUIRE_ROLE", "").strip()
 # 앱(Capacitor/Tauri)에서 다른 오리진으로 호출할 때 허용할 목록. 쉼표 구분.
+# 웹으로만 쓸 때는 비워둔다.
 CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
-
-# --- 접속 IP 기록 ---
-# Docker Desktop for Windows 는 출발지 IP 를 보존하지 않는다(실측 확인).
-# 컨테이너는 모든 접속을 브리지 게이트웨이(172.x.0.1)로 본다.
-# 진짜 IP 를 남기려면 Windows 쪽에 리버스 프록시를 두고 X-Forwarded-For 를 받아야 한다.
-# 그 경우에만 아래를 켠다. PROXY_SECRET 을 함께 설정하면 헤더 위조를 막을 수 있다.
-TRUST_PROXY_HEADER = _flag("TRUST_PROXY_HEADER", False)
-PROXY_SECRET = os.getenv("PROXY_SECRET", "").strip()
-ACCESS_LOG_MAX_MB = _int("ACCESS_LOG_MAX_MB", 5)
