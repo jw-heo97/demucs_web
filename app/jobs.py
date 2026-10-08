@@ -371,9 +371,13 @@ class JobStore:
         data["minus_mixes"] = job.minus_mixes
         # 박자 배열은 저장하지 않는다 — 구성표에서 언제든 다시 만들 수 있고,
         # 곡당 수백~수천 개라 메타 파일만 커진다.
+        # 임시 파일에 쓰고 교체한다 — 쓰는 도중 죽어도 파일이 깨지지 않는다.
+        # 구성표·버전이 전부 여기 있어서, 깨지면 손으로 오래 잡은 작업이 통째로 날아간다.
+        path = job.out_dir / META_FILE
         try:
-            (job.out_dir / META_FILE).write_text(
-                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp, path)
         except OSError as e:
             print(f"[{job.id}] 메타 저장 실패(무시): {e}", flush=True)
 
@@ -531,10 +535,12 @@ class JobStore:
             self._save_meta(job)      # 재시작 후 복원용
 
         except Exception:
-            # 실패한 작업이 빈 폴더를 남기지 않도록 정리
-            if out_dir and out_dir.exists() and not any(out_dir.iterdir()):
+            # 실패한 작업의 폴더는 통째로 지운다. 파일이 일부만 남으면 재시작 때
+            # restore_from_disk 가 그 폴더를 '완료'로 되살려 반쪽 결과가 보관함에 들어온다.
+            if out_dir and out_dir.exists():
                 shutil.rmtree(out_dir, ignore_errors=True)
-                job.folder = None
+            job.folder = None
+            job.files = []
             raise
         finally:
             job.finished_at = time.time()
@@ -846,10 +852,21 @@ class JobStore:
     # 버전은 "연습용 / 원곡용" 처럼 의도적으로 여러 벌을 두고 오가는 용도다.
     MAX_VERSIONS = 20
 
-    @staticmethod
-    def _make_version(name: str, songmap: dict) -> dict:
+    # 버전 이름은 `{곡}_click_{이름}.wav` 파일 이름에 들어간다. 스템 이름과 같으면
+    # `곡_click_drums.wav` 가 생겨 스템을 찾을 때 걸리므로 처음부터 막는다.
+    _RESERVED_TAGS = {*STEMS, "original", "click", *(f"no_{s}" for s in STEMS)}
+
+    @classmethod
+    def _version_name(cls, name: Any) -> str:
+        n = (str(name or "").strip() or "이름 없음")[:40]
+        if safe_name(n, "v").lower() in cls._RESERVED_TAGS:
+            raise ValueError(f"'{n}' 은(는) 스템 이름과 겹쳐 버전 이름으로 쓸 수 없습니다.")
+        return n
+
+    @classmethod
+    def _make_version(cls, name: str, songmap: dict) -> dict:
         return {"id": uuid.uuid4().hex[:8],
-                "name": (str(name or "").strip() or "이름 없음")[:40],
+                "name": cls._version_name(name),
                 "map": songmap,
                 "updated": round(time.time(), 3)}
 
@@ -903,7 +920,7 @@ class JobStore:
         if not v:
             raise ValueError("그 버전을 찾을 수 없습니다.")
         old = v["name"]
-        v["name"] = (str(name or "").strip() or "이름 없음")[:40]
+        v["name"] = self._version_name(name)
         if old != v["name"]:
             self._remove_version_files(job, old)
             if job.map_active == vid:
@@ -1219,15 +1236,25 @@ class JobStore:
     @staticmethod
     def _find_stem(out_dir: Path, key: str) -> Optional[Path]:
         """스템 파일을 찾는다. 믹스 품질을 위해 wav 를 우선한다
-        (mp3 를 디코딩해 다시 인코딩하면 손실이 두 번 쌓인다)."""
+        (mp3 를 디코딩해 다시 인코딩하면 손실이 두 번 쌓인다).
+
+        파일은 `{폴더명}_{키}.{ext}` 로 굽기 때문에 그 이름을 먼저 본다. glob 으로만
+        찾으면 버전별 메트로놈 `곡_click_drums.wav` 가 정렬상 `곡_drums.wav` 보다 앞에 와서
+        드럼으로 잡힌다. 폴더 이름을 탐색기에서 바꾼 경우에만 glob 으로 물러선다.
+        """
         for sub, ext in (("wav", ".wav"), ("mp3", ".mp3")):
             d = out_dir / sub
             if not d.exists():
                 continue
+            exact = d / f"{out_dir.name}_{key}{ext}"
+            if exact.is_file():
+                return exact
             hits = sorted(d.glob(f"*_{key}{ext}"))
             # '_no_vocals' 를 '_vocals' 로 잘못 잡지 않도록 거른다
             if not key.startswith("no_"):
                 hits = [h for h in hits if not h.stem.endswith(f"_no_{key}")]
+            # 버전별 메트로놈 파일 제외
+            hits = [h for h in hits if "_click_" not in h.stem]
             if hits:
                 return hits[0]
         return None

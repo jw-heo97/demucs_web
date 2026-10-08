@@ -2,9 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { useAudioEngine } from "../hooks/useAudioEngine";
 import { barsFromMap, emptyRange, nearestBar, stepOf } from "../lib/songmap";
+import { stemFilesOf } from "../lib/stems";
 import { showTime } from "../lib/time";
 import type { Job, MapPayload, MapVersion, SongMap } from "../types";
 import { Mixer } from "./Mixer";
+import { TimeInput } from "./TimeInput";
 import { Waveform, type LoopRegion, type WaveMode } from "./Waveform";
 
 const STEM_LABEL: Record<string, string> = {
@@ -40,18 +42,12 @@ export function SongMapTab({ jobs, onChanged }: Props) {
   const [addBar, setAddBar] = useState("");
   const [bulk, setBulk] = useState("");
 
+  // 파형에 그릴 수 있는 트랙. 제외 믹스(no_*)와 버전별 메트로놈은 뺀다.
   const stems = useMemo(() => {
-    const found = new Set<string>();
-    for (const f of job?.files ?? []) {
-      // '_no_drums.mp3' 는 제외 믹스다. 뒤쪽 '_drums' 에 걸리지 않도록 먼저 걸러낸다
-      // (앞에 (?!no_) 를 붙이는 것만으로는 막히지 않는다).
-      if (/_no_[a-z]+\.(mp3|wav)$/i.test(f.name)) continue;
-      const m = /_(drums|bass|vocals|other|original|click)\.(mp3|wav)$/i.exec(f.name);
-      if (m) found.add(m[1].toLowerCase());
-    }
+    const found = job ? stemFilesOf(job) : new Map<string, unknown>();
     const order = ["drums", "bass", "other", "vocals", "original", "click"];
     return order.filter((k) => found.has(k));
-  }, [job?.files]);
+  }, [job]);
 
   const engine = useAudioEngine(job);
   const duration = payload?.duration || job?.duration || engine.duration || 0;
@@ -386,14 +382,7 @@ export function SongMapTab({ jobs, onChanged }: Props) {
               <div>
                 <label>1마디 1박 위치</label>
                 <div style={{ display: "flex", gap: 6 }}>
-                  <input
-                    type="text"
-                    value={showTime(map.anchor)}
-                    onChange={(e) => {
-                      const v = Number(e.target.value.replace(/[^0-9.:]/g, "").split(":").reduce((a, b, i, arr) => (arr.length === 2 && i === 0 ? Number(b) * 60 : a + Number(b)), 0));
-                      if (!Number.isNaN(v)) setMap({ ...map, anchor: v });
-                    }}
-                  />
+                  <TimeInput value={map.anchor} onChange={(v) => setMap({ ...map, anchor: v })} />
                   <button className="ghost" onClick={() => setMap({ ...map, anchor: +engine.time.toFixed(3) })}>
                     현재
                   </button>

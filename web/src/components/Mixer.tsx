@@ -104,16 +104,21 @@ export function Mixer({ engine, bars, showRate, countIn, onCountInChange }: Prop
 
     // 마지막 클릭과 "곡의 다음 박자" 사이가 정확히 한 박이 되도록 맞춘다.
     // 이걸 안 하면 클릭은 일정한데 음악 진입만 최대 한 박까지 어긋난다.
+    //
+    // 다음 박자가 예비박 전체 길이보다 멀리 있으면(드럼이 늦게 들어오는 인트로) 음악을
+    // 먼저 시작하고 클릭을 인트로 위에 얹는다. 예전처럼 시작 시각을 '지금'으로 잘라내면
+    // 클릭이 끝나고도 1마디 1박이 한참 뒤에 와서 예비박의 의미가 없어진다.
     const nextBeat = nextBeatAfter(bars, pos);
     const margin = 0.15;
-    const tBeat = ctx.currentTime + countIn * step + margin;
+    const toBeat = (nextBeat - pos) / (rate || 1); // 재생 속도를 반영한 실제 시간
+    const tBeat = ctx.currentTime + margin + Math.max(countIn * step, toBeat);
 
     timers.current.oscs = [];
     for (let k = countIn; k >= 1; k--) {
       click(ctx, tBeat - k * step, (countIn - k) % bpb === 0 ? 1500 : 1000, timers.current.oscs);
     }
 
-    const startAt = Math.max(ctx.currentTime, tBeat - (nextBeat - pos) / (rate || 1));
+    const startAt = tBeat - toBeat; // >= ctx.currentTime + margin
     setCounting(countIn);
     timers.current.i = window.setInterval(() => {
       const left = Math.ceil((tBeat - ctx.currentTime) / step);

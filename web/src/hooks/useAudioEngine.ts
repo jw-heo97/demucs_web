@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Job, JobFile } from "../types";
+import type { Job } from "../types";
 import { BASE } from "../api";
+import { stemFilesOf } from "../lib/stems";
 
 export interface Track {
   key: string;
@@ -24,21 +25,14 @@ const LABEL: Record<string, string> = {
 };
 
 export function tracksOf(job: Job): Track[] {
-  const best = new Map<string, { file: JobFile; mp3: boolean }>();
-  for (const f of job.files || []) {
-    const m = /_(no_)?(drums|bass|vocals|other|click)\.(mp3|wav)$/i.exec(f.name);
-    if (!m) continue;
-    const key = (m[1] ? "no_" : "") + m[2].toLowerCase();
-    const isMp3 = m[3].toLowerCase() === "mp3";
-    const prev = best.get(key);
-    // mp3 우선 — 용량이 작아 스트리밍이 빠르다
-    if (!prev || (isMp3 && !prev.mp3)) best.set(key, { file: f, mp3: isMp3 });
-  }
+  const best = stemFilesOf(job);
+  // 원본은 믹서에 올리지 않는다 — 스템과 겹쳐 소리가 두 배가 된다 (파형 표시용으로만 쓴다)
   const plain = ["drums", "bass", "vocals", "other"].filter((k) => best.has(k));
-  let keys = plain.length >= 2 ? plain : [...best.keys()].filter((k) => k !== "click");
+  let keys =
+    plain.length >= 2 ? plain : [...best.keys()].filter((k) => k !== "click" && k !== "original");
   if (best.has("click")) keys = [...keys, "click"];
   return keys.map((k) => {
-    const f = best.get(k)!.file;
+    const f = best.get(k)!;
     return {
       key: k,
       label: LABEL[k] ?? k,
