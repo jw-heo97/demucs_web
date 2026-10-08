@@ -121,6 +121,18 @@ export function SongMapTab({ jobs, onChanged }: Props) {
   const removeRange = (i: number) =>
     setMap((m) => (m && m.ranges.length > 1 ? { ...m, ranges: m.ranges.filter((_, k) => k !== i) } : m));
 
+  // 마디 번호를 손으로 고치면 순서가 어긋날 수 있다. 입력 중에는 그대로 두고(17 을 치려면
+  // 1 을 먼저 거친다) 입력란을 떠날 때 정렬한다. 같은 마디가 둘이면 표시해 두고 저장을 막는다
+  // (서버도 거절하지만, 어느 줄인지 여기서 보여야 고칠 수 있다).
+  const sortRanges = () =>
+    setMap((m) => (m ? { ...m, ranges: [...m.ranges].sort((a, b) => a.from_bar - b.from_bar) } : m));
+  const dupBars = useMemo(() => {
+    const seen = new Set<number>();
+    const dup = new Set<number>();
+    for (const r of map?.ranges ?? []) (seen.has(r.from_bar) ? dup : seen).add(r.from_bar);
+    return dup;
+  }, [map]);
+
   const addRow = (n: number) => {
     if (!map || !(n >= 1)) return;
     if (map.ranges.some((r) => r.from_bar === n)) {
@@ -284,7 +296,10 @@ export function SongMapTab({ jobs, onChanged }: Props) {
               )}
             </div>
 
+            {/* key 로 곡마다 새로 만든다 — 안 그러면 이전 곡에서 확대한 보기 창이 남아
+                짧은 곡으로 바꿨을 때 끝을 지난 빈 구간을 보게 된다 */}
             <Waveform
+              key={job.id}
               stemLabel={STEM_LABEL[stem] ?? stem}
               peaks={peaks}
               duration={duration}
@@ -302,6 +317,8 @@ export function SongMapTab({ jobs, onChanged }: Props) {
             <Mixer
               engine={engine}
               bars={bars}
+              jobId={job.id}
+              onChanged={onChanged}
               showRate
               countIn={countIn}
               onCountInChange={setCountIn}
@@ -439,14 +456,16 @@ export function SongMapTab({ jobs, onChanged }: Props) {
                     const t = bars.find((b) => b.bar === r.from_bar)?.start;
                     const until = map.ranges[i + 1] ? `${map.ranges[i + 1].from_bar - 1}마디까지` : "끝까지";
                     return (
-                      <tr key={i}>
+                      <tr key={i} className={dupBars.has(r.from_bar) ? "dup" : undefined}>
                         <td>
                           <input
                             type="number"
                             min={1}
                             value={r.from_bar}
                             disabled={i === 0}
+                            title={dupBars.has(r.from_bar) ? "같은 마디가 두 번 지정되었습니다" : undefined}
                             onChange={(e) => patchRange(i, { from_bar: Math.max(1, Number(e.target.value) || 1) })}
+                            onBlur={sortRanges}
                           />
                         </td>
                         <td className="meta">
@@ -588,7 +607,12 @@ export function SongMapTab({ jobs, onChanged }: Props) {
                 자동 재검출
               </button>
               <span style={{ flex: 1 }} />
-              <button onClick={save} disabled={busy}>
+              {dupBars.size > 0 && (
+                <span className="err">
+                  {[...dupBars].sort((a, b) => a - b).join(", ")}마디가 중복됩니다
+                </span>
+              )}
+              <button onClick={save} disabled={busy || dupBars.size > 0}>
                 저장 · 메트로놈 재생성
               </button>
             </div>

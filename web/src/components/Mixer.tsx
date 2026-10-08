@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { api } from "../api";
 import type { useAudioEngine } from "../hooks/useAudioEngine";
 import type { Bar } from "../types";
 import { barAtTime, stepOf } from "../lib/songmap";
@@ -9,6 +10,10 @@ type Engine = ReturnType<typeof useAudioEngine>;
 interface Props {
   engine: Engine;
   bars: Bar[];
+  /** 믹스 다운로드 요청에 쓴다 */
+  jobId: string;
+  /** 믹스 파일이 생기면 작업 목록을 다시 받아오게 한다 */
+  onChanged?: () => void;
   /** 속도 조절 노출 여부 (송 맵에서만) */
   showRate?: boolean;
   countIn: number;
@@ -24,11 +29,52 @@ const audioCtx = () => (sharedCtx ??= new AudioContext());
  * 예비박은 파일에 굽지 않고 Web Audio 로 즉석에서 만든다. 파일에 넣으려면 모든 스템 앞에
  * 같은 길이의 무음을 붙여 전부 재인코딩해야 하고, 곡 중간부터 연습할 때는 쓸 수 없다.
  */
-export function Mixer({ engine, bars, showRate, countIn, onCountInChange }: Props) {
+export function Mixer({ engine, bars, jobId, onChanged, showRate, countIn, onCountInChange }: Props) {
   const { tracks, playing, time, duration, rate, muted, solo, vol } = engine;
   const [counting, setCounting] = useState(0);
   const [hint, setHint] = useState("");
+  const [note, setNote] = useState("");
+  const [mixing, setMixing] = useState(false);
   const timers = useRef<{ t?: number; i?: number; oscs: OscillatorNode[] }>({ oscs: [] });
+
+  /**
+   * 지금 들리는 트랙(음소거·솔로·볼륨 반영)만 서버에서 합쳐 한 파일로 받는다.
+   * 예비박 설정이 있으면 파일 앞에도 그만큼 클릭이 들어간다.
+   */
+  async function downloadMix() {
+    const idx = engine.audibleIndexes();
+    if (!idx.length) {
+      setHint("들리는 트랙이 없습니다. 음소거를 풀거나 볼륨을 올려 주세요.");
+      return;
+    }
+    const stems = idx.map((i) => tracks[i].key);
+    const gains: Record<string, number> = {};
+    idx.forEach((i) => (gains[tracks[i].key] = vol[i] ?? 1));
+    setMixing(true);
+    setHint("");
+    setNote("믹스 만드는 중…");
+    try {
+      const r = await api.mixdown(jobId, { stems, gains, format: "mp3", count_in: countIn });
+      if (!r.file) throw new Error("믹스 파일을 만들지 못했습니다.");
+      const a = document.createElement("a");
+      a.href = api.fileUrl(r.file.url, true);
+      a.download = r.file.name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      onChanged?.();
+      setNote(
+        `${r.file.name} 저장` +
+          (r.normalized ? " · 합치면 음량이 넘쳐 전체 레벨을 낮췄습니다" : "") +
+          (r.count_in ? ` · 예비박 ${r.count_in}박 포함` : ""),
+      );
+    } catch (e) {
+      setNote("");
+      setHint((e as Error).message);
+    } finally {
+      setMixing(false);
+    }
+  }
 
   /** 재생 실패(자동재생 차단, 파일 없음)를 버튼 옆에 보여준다. 조용히 삼키면 ▶ 만 남는다. */
   async function startPlay() {
@@ -181,7 +227,16 @@ export function Mixer({ engine, bars, showRate, countIn, onCountInChange }: Prop
           <option value="4">예비박 4박</option>
           <option value="8">예비박 8박</option>
         </select>
+        <button
+          className="ghost"
+          onClick={downloadMix}
+          disabled={mixing || !tracks.length}
+          title="지금 들리는 트랙만 합쳐 mp3 로 받습니다. 예비박 설정이 있으면 앞에 함께 들어갑니다."
+        >
+          {mixing ? "믹스 만드는 중…" : "믹스 받기"}
+        </button>
         {hint && <span className="err">{hint}</span>}
+        {!hint && note && <span className="meta">{note}</span>}
       </div>
 
       <div className="sectbar">

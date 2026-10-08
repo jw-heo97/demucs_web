@@ -136,11 +136,18 @@ export function useAudioEngine(job: Job | null) {
     });
     const m = audiosRef.current[0];
     const onMeta = () => setDuration(m.duration || j?.duration || 0);
+    // 곡이 끝나면 멈춘 상태로 돌린다. 안 그러면 ❚❚ 가 그대로 남아 첫 누름이 헛되이 "일시정지"가 된다.
+    const onEnded = () => {
+      audiosRef.current.forEach((a) => a.pause());
+      setPlaying(false);
+    };
     m.addEventListener("loadedmetadata", onMeta);
+    m.addEventListener("ended", onEnded);
     setDuration(j?.duration ?? 0);
     const created = audiosRef.current;
     return () => {
       m.removeEventListener("loadedmetadata", onMeta);
+      m.removeEventListener("ended", onEnded);
       // src 를 비우면 currentTime 이 0 으로 돌아가므로 그 전에 기억해 둔다
       lastTime.current = created[0]?.currentTime ?? 0;
       // 리스너만 떼면 <audio> 가 살아남아 계속 재생된다. 확실히 놓아준다.
@@ -210,6 +217,8 @@ export function useAudioEngine(job: Job | null) {
     liveEngines.forEach((e) => {
       if (e !== selfRef.current) e.stop();
     });
+    // 끝까지 들은 뒤 다시 누르면 처음부터
+    if (as[0].ended) as.forEach((a) => (a.currentTime = 0));
     const t = as[0].currentTime;
     as.forEach((a) => {
       if (Math.abs(a.currentTime - t) > 0.05) a.currentTime = t;
