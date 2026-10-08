@@ -109,9 +109,9 @@ export function useAudioEngine(job: Job | null) {
     audiosRef.current = ts.map((t) => {
       const a = new Audio();
       a.preload = "auto"; // 예비박이 끝나는 순간 바로 소리가 나야 한다
-      // 같은 오리진일 때 crossOrigin 을 켜면 불필요하게 CORS 모드로 요청돼
-      // 인증 쿠키가 안 실려 재생이 막힌다. 다른 오리진(앱)일 때만 켠다.
-      if (BASE) a.crossOrigin = "use-credentials";
+      // 같은 오리진일 때 crossOrigin 을 켜면 불필요하게 CORS 모드로 요청된다.
+      // 다른 오리진(앱에서 VITE_API_BASE 를 쓸 때)일 때만 켠다.
+      if (BASE) a.crossOrigin = "anonymous";
       a.src = t.url;
       return a;
     });
