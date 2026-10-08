@@ -136,6 +136,10 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, countIn, onCou
     const step = stepRaw / (rate || 1);
     const bpb = b?.beats_per_bar ?? 4;
 
+    // 실제 재생은 예비박이 끝난 뒤 타이머에서 시작한다. iOS 는 사용자 제스처 밖의 play()
+    // 를 거부하므로, 제스처 안(첫 await 전)에서 트랙들을 미리 풀어둔다.
+    engine.prime();
+
     let ctx: AudioContext;
     try {
       ctx = audioCtx();
@@ -144,9 +148,6 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, countIn, onCou
       await startPlay();
       return;
     }
-    // 실제 재생은 예비박이 끝난 뒤 타이머에서 시작한다. iOS 는 사용자 제스처 밖의 play()
-    // 를 거부하므로, 지금(버튼을 누른 제스처 안에서) 트랙들을 미리 풀어둔다.
-    engine.prime();
 
     // 마지막 클릭과 "곡의 다음 박자" 사이가 정확히 한 박이 되도록 맞춘다.
     // 이걸 안 하면 클릭은 일정한데 음악 진입만 최대 한 박까지 어긋난다.

@@ -356,7 +356,7 @@ class JobStore:
         for p in sorted(d.rglob("*")):
             if not p.is_file() or p.name in (META_FILE, MAP_HISTORY_FILE, PEAKS_FILE):
                 continue
-            out.append(self._file_entry(job, d, p))
+            out.append(JobStore._file_entry(job, d, p))
         return out
 
     def _save_meta(self, job: Job) -> None:
