@@ -42,7 +42,7 @@ export function SearchTab({ onPick }: { onPick: (videoId: string, title: string)
             channel: d.channel,
             duration: d.duration,
             view_count: null,
-            live: false,
+            live: d.live ?? false,
             thumbnail: d.thumbnail,
           },
         ]);
@@ -103,7 +103,11 @@ export function SearchTab({ onPick }: { onPick: (videoId: string, title: string)
           <div className="card" key={v.video_id}>
             <div className="thumb" onClick={() => setPreview(v.video_id)} style={{ cursor: "pointer" }}>
               <img src={v.thumbnail} alt="" loading="lazy" />
-              {!!v.duration && <span className="dur">{clock(v.duration)}</span>}
+              {v.live ? (
+                <span className="dur live">LIVE</span>
+              ) : (
+                !!v.duration && <span className="dur">{clock(v.duration)}</span>
+              )}
             </div>
             <div className="body">
               <div className="t">{v.title}</div>
@@ -112,7 +116,13 @@ export function SearchTab({ onPick }: { onPick: (videoId: string, title: string)
                 {v.view_count ? ` · ${fmtViews(v.view_count)}` : ""}
               </div>
               <div style={{ display: "flex", gap: 6, marginTop: "auto", paddingTop: 6 }}>
-                <button style={{ flex: 1, padding: "6px 0", fontSize: ".78rem" }} onClick={() => onPick(v.video_id, v.title)}>
+                {/* 라이브는 서버가 거절하므로 (다운로드가 끝나지 않는다) 여기서부터 막는다 */}
+                <button
+                  style={{ flex: 1, padding: "6px 0", fontSize: ".78rem" }}
+                  disabled={v.live}
+                  title={v.live ? "라이브 방송은 분리할 수 없습니다" : undefined}
+                  onClick={() => onPick(v.video_id, v.title)}
+                >
                   선택
                 </button>
                 <button className="ghost" style={{ flex: 1 }} onClick={() => setPreview(v.video_id)}>

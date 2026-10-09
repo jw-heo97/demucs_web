@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { api } from "../api";
 import type { useAudioEngine } from "../hooks/useAudioEngine";
 import type { Bar } from "../types";
 import { barAtTime, stepOf } from "../lib/songmap";
@@ -9,6 +10,10 @@ type Engine = ReturnType<typeof useAudioEngine>;
 interface Props {
   engine: Engine;
   bars: Bar[];
+  /** 믹스 다운로드 요청에 쓴다 */
+  jobId: string;
+  /** 믹스 파일이 생기면 작업 목록을 다시 받아오게 한다 */
+  onChanged?: () => void;
   /** 속도 조절 노출 여부 (송 맵에서만) */
   showRate?: boolean;
   countIn: number;
@@ -24,10 +29,62 @@ const audioCtx = () => (sharedCtx ??= new AudioContext());
  * 예비박은 파일에 굽지 않고 Web Audio 로 즉석에서 만든다. 파일에 넣으려면 모든 스템 앞에
  * 같은 길이의 무음을 붙여 전부 재인코딩해야 하고, 곡 중간부터 연습할 때는 쓸 수 없다.
  */
-export function Mixer({ engine, bars, showRate, countIn, onCountInChange }: Props) {
+export function Mixer({ engine, bars, jobId, onChanged, showRate, countIn, onCountInChange }: Props) {
   const { tracks, playing, time, duration, rate, muted, solo, vol } = engine;
   const [counting, setCounting] = useState(0);
+  const [hint, setHint] = useState("");
+  const [note, setNote] = useState("");
+  const [mixing, setMixing] = useState(false);
   const timers = useRef<{ t?: number; i?: number; oscs: OscillatorNode[] }>({ oscs: [] });
+
+  /**
+   * 지금 들리는 트랙(음소거·솔로·볼륨 반영)만 서버에서 합쳐 한 파일로 받는다.
+   * 예비박 설정이 있으면 파일 앞에도 그만큼 클릭이 들어간다.
+   */
+  async function downloadMix() {
+    const idx = engine.audibleIndexes();
+    if (!idx.length) {
+      setHint("들리는 트랙이 없습니다. 음소거를 풀거나 볼륨을 올려 주세요.");
+      return;
+    }
+    const stems = idx.map((i) => tracks[i].key);
+    const gains: Record<string, number> = {};
+    idx.forEach((i) => (gains[tracks[i].key] = vol[i] ?? 1));
+    setMixing(true);
+    setHint("");
+    setNote("믹스 만드는 중…");
+    try {
+      const r = await api.mixdown(jobId, { stems, gains, format: "mp3", count_in: countIn });
+      if (!r.file) throw new Error("믹스 파일을 만들지 못했습니다.");
+      const a = document.createElement("a");
+      a.href = api.fileUrl(r.file.url, true);
+      a.download = r.file.name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      onChanged?.();
+      setNote(
+        `${r.file.name} 저장` +
+          (r.normalized ? " · 합치면 음량이 넘쳐 전체 레벨을 낮췄습니다" : "") +
+          (r.count_in ? ` · 예비박 ${r.count_in}박 포함` : ""),
+      );
+    } catch (e) {
+      setNote("");
+      setHint((e as Error).message);
+    } finally {
+      setMixing(false);
+    }
+  }
+
+  /** 재생 실패(자동재생 차단, 파일 없음)를 버튼 옆에 보여준다. 조용히 삼키면 ▶ 만 남는다. */
+  async function startPlay() {
+    try {
+      setHint("");
+      await engine.play();
+    } catch (e) {
+      setHint((e as Error).message);
+    }
+  }
 
   useEffect(() => () => cancelCount(), []);
 
@@ -71,7 +128,7 @@ export function Mixer({ engine, bars, showRate, countIn, onCountInChange }: Prop
     const pos = time;
     // 예비박은 곡 처음부터 재생할 때만. 중간에서 매번 붙으면 방해가 된다.
     if (!countIn || pos > 0.25) {
-      await engine.play();
+      await startPlay();
       return;
     }
     const b = cur ?? bars[0];
@@ -79,27 +136,36 @@ export function Mixer({ engine, bars, showRate, countIn, onCountInChange }: Prop
     const step = stepRaw / (rate || 1);
     const bpb = b?.beats_per_bar ?? 4;
 
+    // 실제 재생은 예비박이 끝난 뒤 타이머에서 시작한다. iOS 는 사용자 제스처 밖의 play()
+    // 를 거부하므로, 제스처 안(첫 await 전)에서 트랙들을 미리 풀어둔다.
+    engine.prime();
+
     let ctx: AudioContext;
     try {
       ctx = audioCtx();
       await ctx.resume();
     } catch {
-      await engine.play();
+      await startPlay();
       return;
     }
 
     // 마지막 클릭과 "곡의 다음 박자" 사이가 정확히 한 박이 되도록 맞춘다.
     // 이걸 안 하면 클릭은 일정한데 음악 진입만 최대 한 박까지 어긋난다.
+    //
+    // 다음 박자가 예비박 전체 길이보다 멀리 있으면(드럼이 늦게 들어오는 인트로) 음악을
+    // 먼저 시작하고 클릭을 인트로 위에 얹는다. 예전처럼 시작 시각을 '지금'으로 잘라내면
+    // 클릭이 끝나고도 1마디 1박이 한참 뒤에 와서 예비박의 의미가 없어진다.
     const nextBeat = nextBeatAfter(bars, pos);
     const margin = 0.15;
-    const tBeat = ctx.currentTime + countIn * step + margin;
+    const toBeat = (nextBeat - pos) / (rate || 1); // 재생 속도를 반영한 실제 시간
+    const tBeat = ctx.currentTime + margin + Math.max(countIn * step, toBeat);
 
     timers.current.oscs = [];
     for (let k = countIn; k >= 1; k--) {
       click(ctx, tBeat - k * step, (countIn - k) % bpb === 0 ? 1500 : 1000, timers.current.oscs);
     }
 
-    const startAt = Math.max(ctx.currentTime, tBeat - (nextBeat - pos) / (rate || 1));
+    const startAt = tBeat - toBeat; // >= ctx.currentTime + margin
     setCounting(countIn);
     timers.current.i = window.setInterval(() => {
       const left = Math.ceil((tBeat - ctx.currentTime) / step);
@@ -111,7 +177,7 @@ export function Mixer({ engine, bars, showRate, countIn, onCountInChange }: Prop
         setCounting(0);
         const late = Math.max(0, ctx.currentTime - startAt) * (rate || 1);
         engine.seek(pos + late);
-        await engine.play();
+        await startPlay();
       },
       Math.max(0, (startAt - ctx.currentTime) * 1000),
     );
@@ -162,6 +228,16 @@ export function Mixer({ engine, bars, showRate, countIn, onCountInChange }: Prop
           <option value="4">예비박 4박</option>
           <option value="8">예비박 8박</option>
         </select>
+        <button
+          className="ghost"
+          onClick={downloadMix}
+          disabled={mixing || !tracks.length}
+          title="지금 들리는 트랙만 합쳐 mp3 로 받습니다. 예비박 설정이 있으면 앞에 함께 들어갑니다."
+        >
+          {mixing ? "믹스 만드는 중…" : "믹스 받기"}
+        </button>
+        {hint && <span className="err">{hint}</span>}
+        {!hint && note && <span className="meta">{note}</span>}
       </div>
 
       <div className="sectbar">

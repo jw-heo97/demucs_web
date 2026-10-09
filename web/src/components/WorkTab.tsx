@@ -198,7 +198,14 @@ function JobRow({ job, open, onToggle, onChanged }: { job: Job; open: boolean; o
           {job.error && <div className="err" style={{ marginTop: 8 }}>{job.error}</div>}
 
           {job.status === "done" && (
-            <Mixer engine={engine} bars={bars} countIn={countIn} onCountInChange={setCountIn} />
+            <Mixer
+              engine={engine}
+              bars={bars}
+              jobId={job.id}
+              onChanged={onChanged}
+              countIn={countIn}
+              onCountInChange={setCountIn}
+            />
           )}
 
           {!!job.files?.length && (

@@ -1,8 +1,8 @@
 """FastAPI 서버.
 
-이 컨테이너는 포트를 직접 노출하지 않는다. compose 에서 Caddy 뒤에만 붙이고,
-IP 화이트리스트는 Caddy 가 처리한다. (main.py 에 IP 필터를 두면 프록시 헤더를
-믿어야 해서 위조가 가능해진다.)
+인증은 없다. 이 앱은 `tailscale serve` 뒤에서만 쓰는 것을 전제로 하며, 접근 제어는
+Tailscale 이 맡는다 — 내 tailnet 에 속한 기기만 접속할 수 있다. 컨테이너 포트는
+127.0.0.1 에만 바인딩하므로(compose 의 WEB_BIND) LAN 이나 인터넷에서는 직접 닿지 않는다.
 """
 from __future__ import annotations
 
@@ -10,57 +10,23 @@ import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Body, FastAPI, HTTPException, Request, Response
+from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-import auth
 import downloader
 import separator
-from config import (
-    BEATS_PER_BAR,
-    CORS_ORIGINS,
-    MAX_DURATION_SEC,
-    METRONOME_DEFAULT,
-    OUTPUT_DIR,
-    REQUIRE_ROLE,
-    SESSION_DAYS,
-    WORK_DIR,
-)
+from config import CORS_ORIGINS, MAX_DURATION_SEC, METRONOME_DEFAULT, OUTPUT_DIR, WORK_DIR
 from downloader import DownloadError
 from jobs import FORMATS, MAX_TITLE_LEN, STEMS, store
 
 STATIC_DIR = Path(__file__).parent / "static"
-COOKIE_NAME = "demucs_session"
-
-# 인증 없이 접근 가능한 경로. 그 외는 전부 토큰이 필요하다.
-PUBLIC_PATHS = {"/healthz", "/api/auth/login", "/favicon.ico"}
-# React 앱은 로그인 화면도 같은 번들이라 /ui 정적 자산은 열어두고,
-# 실제 데이터는 전부 /api 에서 막는다.
-PUBLIC_PREFIXES = ("/ui/assets/", "/ui/login")
-
-# 접속 기록을 남길 요청. 1초마다 도는 폴링(GET /api/jobs)까지 남기면
-# 로그가 순식간에 쓸모없어지므로, 상태를 바꾸거나 파일을 가져가는 요청만 남긴다.
-def _should_log(method: str, path: str) -> bool:
-    if method != "GET":
-        return True
-    return "/files/" in path
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     WORK_DIR.mkdir(parents=True, exist_ok=True)
-
-    auth.store.load()
-    generated = auth.store.bootstrap()
-    if generated:
-        print("=" * 64, flush=True)
-        print(f"  관리자 계정이 생성되었습니다.", flush=True)
-        print(f"    아이디   : {auth.ADMIN_USER}", flush=True)
-        print(f"    비밀번호 : {generated}", flush=True)
-        print(f"  이 비밀번호는 다시 표시되지 않습니다. 로그인 후 변경하세요.", flush=True)
-        print("=" * 64, flush=True)
 
     # 모델 로딩(수 초)을 첫 요청이 아니라 기동 때 끝내둔다.
     await asyncio.to_thread(separator.get_loaded_model)
@@ -84,224 +50,14 @@ if CORS_ORIGINS:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=CORS_ORIGINS,
-        allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
 
-def _bearer(request: Request) -> str:
-    header = request.headers.get("authorization", "")
-    if header.lower().startswith("bearer "):
-        return header[7:].strip()
-    return request.cookies.get(COOKIE_NAME, "")
-
-
-@app.middleware("http")
-async def auth_middleware(request: Request, call_next):
-    path = request.url.path
-    if path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES):
-        return await call_next(request)
-
-    ip = auth.client_ip(request)
-    ua = request.headers.get("user-agent", "")
-    identity = auth.store.verify_token(_bearer(request), ip=ip, ua=ua)
-
-    if not identity:
-        if path.startswith("/api/"):
-            return JSONResponse({"detail": "인증이 필요합니다."}, status_code=401)
-        return RedirectResponse("/ui/login", status_code=303)
-
-    # 역할 게이트 — 기본값 REQUIRE_ROLE=admin 이면 관리자 계정만 화면을 볼 수 있다.
-    if not auth.role_allowed(identity.get("role", "user")):
-        auth.store.log_event("forbidden", user=identity["user"], ip=ip, path=path)
-        if path.startswith("/api/"):
-            return JSONResponse(
-                {"detail": f"이 계정에는 접근 권한이 없습니다 (필요 역할: {REQUIRE_ROLE})."},
-                status_code=403)
-        return JSONResponse({"detail": "접근 권한이 없습니다."}, status_code=403)
-
-    request.state.identity = identity
-    request.state.client_ip = ip
-    response = await call_next(request)
-
-    if _should_log(request.method, path):
-        auth.store.log_event(
-            "access", user=identity["user"], ip=ip,
-            method=request.method, path=path,
-            status=response.status_code, token=identity["label"], ua=ua[:160],
-        )
-    return response
-
-
 @app.get("/healthz")
 def healthz():
     return {"ok": True, "queue": store.queue_depth()}
-
-
-# --------------------------------------------------------------------------
-# 인증
-# --------------------------------------------------------------------------
-@app.post("/api/auth/login")
-def login(request: Request, response: Response, payload: dict = Body(...)):
-    username = (payload.get("username") or "").strip()
-    password = payload.get("password") or ""
-    ip = auth.client_ip(request)
-    ua = request.headers.get("user-agent", "")
-
-    locked = auth.store.locked_for(username)
-    if locked:
-        auth.store.log_event("login_locked", user=username, ip=ip, ua=ua[:160])
-        raise HTTPException(429, f"로그인 시도가 많아 잠겼습니다. {locked}초 후 다시 시도하세요.")
-
-    if not auth.store.authenticate(username, password):
-        auth.store.log_event("login_fail", user=username, ip=ip, ua=ua[:160])
-        raise HTTPException(401, "아이디 또는 비밀번호가 올바르지 않습니다.")
-
-    role = auth.store.role_of(username)
-    if not auth.role_allowed(role):
-        auth.store.log_event("login_forbidden", user=username, ip=ip, detail=role)
-        raise HTTPException(403, f"이 계정에는 접근 권한이 없습니다 (필요 역할: {REQUIRE_ROLE}).")
-
-    token, tid = auth.store.create_token(username, kind="session", ua=ua, ip=ip)
-    auth.store.log_event("login_ok", user=username, ip=ip, ua=ua[:160], token=tid)
-
-    response.set_cookie(
-        COOKIE_NAME, token,
-        max_age=SESSION_DAYS * 86400,
-        httponly=True,          # JS 에서 못 읽으므로 XSS 로 토큰이 새지 않는다
-        samesite="lax",
-        path="/",
-    )
-    # 앱(Capacitor/Tauri)은 쿠키를 못 쓰는 경우가 있어 토큰 원문도 함께 준다.
-    return {"username": username, "token_id": tid, "role": role, "token": token}
-
-
-@app.post("/api/auth/logout")
-def logout(request: Request, response: Response):
-    ident = request.state.identity
-    auth.store.revoke_token(ident["user"], ident["token_id"])
-    auth.store.log_event("logout", user=ident["user"], ip=request.state.client_ip)
-    response.delete_cookie(COOKIE_NAME, path="/")
-    return {"ok": True}
-
-
-@app.get("/api/auth/me")
-def me(request: Request):
-    ident = request.state.identity
-    return {
-        "username": ident["user"],
-        "token_id": ident["token_id"],
-        "role": ident.get("role", "user"),
-        "is_admin": ident.get("role") == "admin",
-        "kind": ident["kind"],
-        "client_ip": request.state.client_ip,
-        "ip_trustworthy": auth.ip_is_meaningful(),
-    }
-
-
-@app.post("/api/auth/password")
-def change_password(request: Request, payload: dict = Body(...)):
-    ident = request.state.identity
-    try:
-        auth.store.change_password(ident["user"],
-                                   payload.get("old") or "", payload.get("new") or "")
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
-    return {"ok": True, "note": "비밀번호가 변경되어 모든 세션이 해제되었습니다. 다시 로그인하세요."}
-
-
-def _require_admin(request: Request) -> dict:
-    ident = request.state.identity
-    if ident.get("role") != "admin":
-        raise HTTPException(403, "관리자만 할 수 있습니다.")
-    return ident
-
-
-@app.get("/api/auth/tokens")
-def list_tokens(request: Request):
-    ident = request.state.identity
-    return {"current": ident["token_id"], "tokens": auth.store.list_tokens(ident["user"])}
-
-
-@app.post("/api/auth/tokens")
-def create_token(request: Request, payload: dict = Body(default={})):
-    """API 토큰 발급. 원문은 이 응답에서 한 번만 볼 수 있다."""
-    ident = request.state.identity
-    label = (payload.get("label") or "").strip()[:60] or "API 토큰"
-    days = int(payload.get("days") or 0)
-    token, tid = auth.store.create_token(
-        ident["user"], kind="api", label=label, days=days,
-        ip=request.state.client_ip, ua=request.headers.get("user-agent", ""))
-    auth.store.log_event("token_create", user=ident["user"],
-                         ip=request.state.client_ip, token=tid, detail=label)
-    return {"token": token, "id": tid, "label": label}
-
-
-@app.delete("/api/auth/tokens/{tid}")
-def revoke_token(request: Request, tid: str):
-    ident = request.state.identity
-    if not auth.store.revoke_token(ident["user"], tid):
-        raise HTTPException(404, "토큰을 찾을 수 없습니다.")
-    auth.store.log_event("token_revoke", user=ident["user"],
-                         ip=request.state.client_ip, token=tid)
-    return {"ok": True}
-
-
-@app.get("/api/auth/log")
-def access_log(request: Request, limit: int = 200):
-    # 다른 사용자의 접속까지 보이므로 관리자만
-    _require_admin(request)
-    return {
-        "entries": auth.store.read_log(max(1, min(limit, 1000))),
-        "ip_trustworthy": auth.ip_is_meaningful(),
-    }
-
-
-# --------------------------------------------------------------------------
-# 계정 관리 (관리자 전용)
-# --------------------------------------------------------------------------
-@app.get("/api/auth/users")
-def list_users(request: Request):
-    _require_admin(request)
-    return {"users": auth.store.list_users(), "require_role": REQUIRE_ROLE}
-
-
-@app.post("/api/auth/users")
-def create_user(request: Request, payload: dict = Body(...)):
-    _require_admin(request)
-    try:
-        u = auth.store.create_user(payload.get("username") or "",
-                                   payload.get("password") or "",
-                                   payload.get("role") or "user")
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
-    return u
-
-
-@app.patch("/api/auth/users/{username}")
-def update_user(request: Request, username: str, payload: dict = Body(...)):
-    _require_admin(request)
-    try:
-        if payload.get("role"):
-            auth.store.set_role(username, payload["role"])
-        if payload.get("password"):
-            auth.store.reset_password(username, payload["password"])
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
-    return {"ok": True, "username": username, "role": auth.store.role_of(username)}
-
-
-@app.delete("/api/auth/users/{username}")
-def delete_user(request: Request, username: str):
-    ident = _require_admin(request)
-    if username == ident["user"]:
-        raise HTTPException(400, "자기 계정은 삭제할 수 없습니다.")
-    try:
-        auth.store.delete_user(username)
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
-    return {"ok": True}
 
 
 @app.get("/api/info")

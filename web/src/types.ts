@@ -1,19 +1,9 @@
-export type Role = "admin" | "user";
-
-export interface Me {
-  username: string;
-  role: Role;
-  is_admin: boolean;
-  token_id: string;
-  kind: string;
-  client_ip: string;
-  ip_trustworthy: boolean;
-}
-
 export interface JobFile {
   name: string;
   rel: string;
   size: number;
+  /** 수정 시각(ms). 같은 이름으로 다시 구운 파일을 구별하는 데 쓴다. */
+  mtime: number;
   url: string;
 }
 
@@ -105,35 +95,4 @@ export interface SearchItem {
   view_count: number | null;
   live: boolean;
   thumbnail: string;
-}
-
-export interface TokenInfo {
-  id: string;
-  user: string;
-  kind: string;
-  label: string;
-  created_at: number;
-  expires_at: number | null;
-  last_used: number;
-  last_ip: string;
-  ua: string;
-}
-
-export interface LogEntry {
-  ts: number;
-  event: string;
-  user?: string;
-  ip?: string;
-  method?: string;
-  path?: string;
-  status?: number;
-  detail?: string;
-  token?: string;
-  ua?: string;
-}
-
-export interface UserInfo {
-  username: string;
-  role: Role;
-  created_at: number | null;
 }

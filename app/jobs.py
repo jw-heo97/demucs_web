@@ -22,6 +22,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import quote
 
 import numpy as np
 
@@ -196,9 +197,25 @@ class JobStore:
                 raise ValueError("사용할 수 없는 제목입니다. 다른 이름을 입력하세요.")
 
         video_id = downloader.extract_video_id(url)   # 여기서 미리 검증해 즉시 400 을 낸다
+
+        # 다운로드 전에 길이와 라이브 여부를 확인한다. 이 검사가 다운로드 뒤에만 있으면
+        # 라이브 방송 URL 하나가 유일한 워커를 방송이 끝날 때까지 붙잡아 뒤의 작업이 전부 멈춘다.
+        # (제목 가져오기 버튼이 같은 조회를 하므로 보통 캐시에서 바로 온다)
+        meta = downloader.probe_metadata(video_id)
+        if meta.get("live"):
+            raise ValueError("라이브 방송은 분리할 수 없습니다. 방송이 끝나 VOD 로 올라온 뒤 다시 시도하세요.")
+        duration = float(meta.get("duration") or 0.0)
+        if MAX_DURATION_SEC and duration > MAX_DURATION_SEC:
+            raise ValueError(
+                f"길이 제한 초과: {duration:.0f}초 (허용 {MAX_DURATION_SEC}초). "
+                "MAX_DURATION_SEC 환경변수로 조정할 수 있습니다."
+            )
+
         job = Job(id=uuid.uuid4().hex[:12], url=url, fmt=fmt, target=target,
                   save_original=save_original, title_override=title_override,
-                  metronome=metronome, minus_mixes=minus_mixes, video_id=video_id)
+                  metronome=metronome, minus_mixes=minus_mixes, video_id=video_id,
+                  # 대기 중에도 목록에 제목·길이가 보이게 미리 채운다
+                  title=meta.get("title"), duration=duration)
         with self._lock:
             self._jobs[job.id] = job
         try:
@@ -339,13 +356,7 @@ class JobStore:
         for p in sorted(d.rglob("*")):
             if not p.is_file() or p.name in (META_FILE, MAP_HISTORY_FILE, PEAKS_FILE):
                 continue
-            rel = p.relative_to(d).as_posix()
-            out.append({
-                "name": p.name,
-                "rel": rel,
-                "size": p.stat().st_size,
-                "url": f"/api/jobs/{job.id}/files/{rel}",
-            })
+            out.append(JobStore._file_entry(job, d, p))
         return out
 
     def _save_meta(self, job: Job) -> None:
@@ -360,9 +371,13 @@ class JobStore:
         data["minus_mixes"] = job.minus_mixes
         # 박자 배열은 저장하지 않는다 — 구성표에서 언제든 다시 만들 수 있고,
         # 곡당 수백~수천 개라 메타 파일만 커진다.
+        # 임시 파일에 쓰고 교체한다 — 쓰는 도중 죽어도 파일이 깨지지 않는다.
+        # 구성표·버전이 전부 여기 있어서, 깨지면 손으로 오래 잡은 작업이 통째로 날아간다.
+        path = job.out_dir / META_FILE
         try:
-            (job.out_dir / META_FILE).write_text(
-                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp, path)
         except OSError as e:
             print(f"[{job.id}] 메타 저장 실패(무시): {e}", flush=True)
 
@@ -520,10 +535,12 @@ class JobStore:
             self._save_meta(job)      # 재시작 후 복원용
 
         except Exception:
-            # 실패한 작업이 빈 폴더를 남기지 않도록 정리
-            if out_dir and out_dir.exists() and not any(out_dir.iterdir()):
+            # 실패한 작업의 폴더는 통째로 지운다. 파일이 일부만 남으면 재시작 때
+            # restore_from_disk 가 그 폴더를 '완료'로 되살려 반쪽 결과가 보관함에 들어온다.
+            if out_dir and out_dir.exists():
                 shutil.rmtree(out_dir, ignore_errors=True)
-                job.folder = None
+            job.folder = None
+            job.files = []
             raise
         finally:
             job.finished_at = time.time()
@@ -835,10 +852,21 @@ class JobStore:
     # 버전은 "연습용 / 원곡용" 처럼 의도적으로 여러 벌을 두고 오가는 용도다.
     MAX_VERSIONS = 20
 
-    @staticmethod
-    def _make_version(name: str, songmap: dict) -> dict:
+    # 버전 이름은 `{곡}_click_{이름}.wav` 파일 이름에 들어간다. 스템 이름과 같으면
+    # `곡_click_drums.wav` 가 생겨 스템을 찾을 때 걸리므로 처음부터 막는다.
+    _RESERVED_TAGS = {*STEMS, "original", "click", *(f"no_{s}" for s in STEMS)}
+
+    @classmethod
+    def _version_name(cls, name: Any) -> str:
+        n = (str(name or "").strip() or "이름 없음")[:40]
+        if safe_name(n, "v").lower() in cls._RESERVED_TAGS:
+            raise ValueError(f"'{n}' 은(는) 스템 이름과 겹쳐 버전 이름으로 쓸 수 없습니다.")
+        return n
+
+    @classmethod
+    def _make_version(cls, name: str, songmap: dict) -> dict:
         return {"id": uuid.uuid4().hex[:8],
-                "name": (str(name or "").strip() or "이름 없음")[:40],
+                "name": cls._version_name(name),
                 "map": songmap,
                 "updated": round(time.time(), 3)}
 
@@ -892,7 +920,7 @@ class JobStore:
         if not v:
             raise ValueError("그 버전을 찾을 수 없습니다.")
         old = v["name"]
-        v["name"] = (str(name or "").strip() or "이름 없음")[:40]
+        v["name"] = self._version_name(name)
         if old != v["name"]:
             self._remove_version_files(job, old)
             if job.map_active == vid:
@@ -1208,15 +1236,25 @@ class JobStore:
     @staticmethod
     def _find_stem(out_dir: Path, key: str) -> Optional[Path]:
         """스템 파일을 찾는다. 믹스 품질을 위해 wav 를 우선한다
-        (mp3 를 디코딩해 다시 인코딩하면 손실이 두 번 쌓인다)."""
+        (mp3 를 디코딩해 다시 인코딩하면 손실이 두 번 쌓인다).
+
+        파일은 `{폴더명}_{키}.{ext}` 로 굽기 때문에 그 이름을 먼저 본다. glob 으로만
+        찾으면 버전별 메트로놈 `곡_click_drums.wav` 가 정렬상 `곡_drums.wav` 보다 앞에 와서
+        드럼으로 잡힌다. 폴더 이름을 탐색기에서 바꾼 경우에만 glob 으로 물러선다.
+        """
         for sub, ext in (("wav", ".wav"), ("mp3", ".mp3")):
             d = out_dir / sub
             if not d.exists():
                 continue
+            exact = d / f"{out_dir.name}_{key}{ext}"
+            if exact.is_file():
+                return exact
             hits = sorted(d.glob(f"*_{key}{ext}"))
             # '_no_vocals' 를 '_vocals' 로 잘못 잡지 않도록 거른다
             if not key.startswith("no_"):
                 hits = [h for h in hits if not h.stem.endswith(f"_no_{key}")]
+            # 버전별 메트로놈 파일 제외
+            hits = [h for h in hits if "_click_" not in h.stem]
             if hits:
                 return hits[0]
         return None
@@ -1224,12 +1262,18 @@ class JobStore:
     @staticmethod
     def _file_entry(job: Job, out_dir: Path, path: Path) -> dict:
         rel = path.relative_to(out_dir).as_posix()
+        st = path.stat()
         return {
             "name": path.name,
             "rel": rel,
-            "size": path.stat().st_size,
-            # 폴더명이 한글/일본어라 URL 에는 안전한 작업 ID 를 쓴다 (서버가 folder 로 변환)
-            "url": f"/api/jobs/{job.id}/files/{rel}",
+            "size": st.st_size,
+            # 수정 시각(ms). 같은 이름으로 덮어쓰는 파일(메트로놈 재생성)을 브라우저가
+            # 캐시된 옛 데이터로 재생하지 않도록 프론트가 URL 과 트랙 키에 섞어 쓴다.
+            "mtime": int(st.st_mtime * 1000),
+            # 폴더명이 한글/일본어라 URL 에는 안전한 작업 ID 를 쓴다 (서버가 folder 로 변환).
+            # rel 은 인코딩한다 — 제목에 '#' 이 있으면 브라우저가 뒤를 프래그먼트로 잘라내고
+            # '%' 는 이스케이프로 풀려서 404 가 난다.
+            "url": f"/api/jobs/{job.id}/files/{quote(rel, safe='/')}",
         }
 
 
