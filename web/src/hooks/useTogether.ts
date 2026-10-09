@@ -13,6 +13,8 @@ export interface RoomState {
   seq: number;
   /** 마지막으로 조작한 사람 */
   by: string;
+  /** '맞추고 시작' 준비 중 — 이 위치를 받아 두고 ready 를 보내면 모두 함께 시작한다 */
+  prepare: { id: string; pos: number; count_in: number; lead: number } | null;
 }
 
 export interface Member {
@@ -22,6 +24,8 @@ export interface Member {
   err: number | null;
   rtt: number | null;
   ready: boolean;
+  /** 시작 준비가 아직 안 끝남 */
+  preparing: boolean;
 }
 
 const LS_NAME = "together.name";
@@ -71,6 +75,28 @@ export function useTogether(jobId: string, onState: (s: RoomState, fresh: boolea
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
   }, []);
+
+  // 응답을 기다리는 ping (시작 직전에 시계를 다시 잴 때)
+  const pongWait = useRef<(() => void) | null>(null);
+  /** 시계를 다시 잰다 — 시작 직전에 부른다. 최선값을 버리고 n 번 새로 재서 그중 최선을 쓴다. */
+  const resync = useCallback(
+    (n = 6) =>
+      new Promise<void>((resolve) => {
+        bestRef.current = null;
+        let got = 0;
+        const done = () => {
+          pongWait.current = null;
+          resolve();
+        };
+        pongWait.current = () => {
+          if (++got >= n) done();
+        };
+        for (let i = 0; i < n; i++) window.setTimeout(() => send({ t: "ping", c: localNow() }), i * 80);
+        // 응답이 안 와도 오래 붙잡지 않는다
+        window.setTimeout(done, 1500);
+      }),
+    [send],
+  );
 
   const leave = useCallback(() => {
     wsRef.current?.close();
@@ -122,6 +148,7 @@ export function useTogether(jobId: string, onState: (s: RoomState, fresh: boolea
           if (!bestRef.current || r < bestRef.current.rtt) bestRef.current = { rtt: r, at: t1 };
           setRtt(Math.round(r));
         }
+        pongWait.current?.();
       } else if (msg.t === "hello") {
         setMe(msg.you);
         setMembers(msg.members);
@@ -182,6 +209,7 @@ export function useTogether(jobId: string, onState: (s: RoomState, fresh: boolea
     join,
     leave,
     send,
+    resync,
     serverNow,
     state: stateRef,
   };

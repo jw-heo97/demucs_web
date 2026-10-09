@@ -129,10 +129,19 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
   countingRef.current = counting;
   const tg = useTogether(jobId, (s) => applyRoomState(s));
 
+  const [preparing, setPreparing] = useState(false);
+  const prepRef = useRef("");
+
   function applyRoomState(s: RoomState) {
     cancelCount();
     if (Math.abs(s.rate - (rate || 1)) > 1e-3) engine.setRate(s.rate);
     engine.setLoop(s.loop);
+    prepRef.current = s.prepare?.id ?? "";
+    setPreparing(!!s.prepare);
+    if (s.prepare) {
+      void prepareLocal(s.prepare.id, s.prepare.pos);
+      return;
+    }
     if (!s.playing) {
       engine.pause();
       engine.seek(s.pos);
@@ -163,32 +172,76 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
     }
   }
 
-  // 재생 중 어긋남 보정 + 내 상태 알리기. 소리가 튀지 않게 60ms 넘게 벌어졌을 때만 맞춘다.
+  /**
+   * '맞추고 시작' 준비: 그 위치로 가서 모든 트랙이 재생할 만큼 받아질 때까지 기다리고, 시계를
+   * 다시 잰 뒤 준비됐다고 알린다. 모두 준비되면 서버가 시작 시각을 정해 보낸다.
+   */
+  async function prepareLocal(id: string, pos: number) {
+    engine.pause();
+    engine.seek(pos);
+    const t0 = performance.now();
+    await tg.resync();
+    // 받아 두기: 모든 트랙이 그 자리에서 바로 재생할 수 있을 때까지 (최대 9초)
+    while (performance.now() - t0 < 9000) {
+      if (prepRef.current !== id) return; // 그새 다른 명령이 왔다
+      const as = engine.audios.current;
+      if (as.length && as.every((a) => !a.seeking && a.readyState >= 3)) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    if (prepRef.current === id) tg.send({ t: "ready", id });
+  }
+
+  // 재생 중 미세 보정 + 내 상태 알리기.
+  // 위치를 옮기면 소리가 끊기므로, 작은 어긋남은 재생 속도를 살짝(최대 ±5%, 음정 유지)
+  // 바꿔 1초 남짓에 걸쳐 따라잡고, 크게(0.3초 넘게) 벌어졌을 때만 위치를 옮긴다.
+  // 재생 위치 값은 몇 ms 씩 흔들리므로 최근 5번의 가운데 값으로 판단한다.
   const { send, serverNow, state: roomRef } = tg;
   const rttRef = useRef(tg.rtt);
   rttRef.current = tg.rtt;
   useEffect(() => {
     if (!tg.joined) return;
-    let lastFix = 0;
     let tick = 0;
+    let win: number[] = [];
+    let nudged = false;
+    const setSpeed = (r: number) => engine.audios.current.forEach((a) => (a.playbackRate = r));
+    const restore = (s: RoomState | null) => {
+      if (nudged && s) setSpeed(s.rate);
+      nudged = false;
+    };
     const id = window.setInterval(() => {
       const s = roomRef.current;
       const a = engine.audios.current[0];
       if (!s) return;
-      let err: number | null = null;
-      if (s.playing && a && !a.paused && !a.seeking && !countingRef.current) {
+      let med: number | null = null;
+      if (s.playing && !s.prepare && a && !a.paused && !a.seeking && !countingRef.current) {
         const expected = roomPosition(s, serverNow() + deviceMsRef.current);
-        err = a.currentTime - expected;
-        if (Math.abs(err) > 0.06 && performance.now() - lastFix > 2500) {
-          lastFix = performance.now();
-          engine.seek(expected);
+        win.push(a.currentTime - expected);
+        if (win.length > 5) win.shift();
+        if (win.length >= 3) {
+          med = [...win].sort((x, y) => x - y)[Math.floor(win.length / 2)];
+          if (Math.abs(med) > 0.3) {
+            restore(s);
+            engine.seek(expected);
+            win = [];
+          } else if (Math.abs(med) > 0.01) {
+            // 앞서 있으면(+) 느리게, 뒤처지면(-) 빠르게. 1초에 어긋남만큼 따라잡는 정도.
+            const k = Math.max(-0.05, Math.min(0.05, -med / 1.0));
+            setSpeed(s.rate * (1 + k));
+            nudged = true;
+          } else restore(s);
         }
+      } else {
+        win = [];
+        restore(s);
       }
-      if (++tick % 2 === 0)
-        send({ t: "report", err: err == null ? null : Math.round(err * 1000), rtt: rttRef.current, ready: !!a && a.readyState >= 3 });
-    }, 1000);
-    return () => window.clearInterval(id);
-    // tg 는 매 렌더 새 객체라 의존성에 두면 1초 타이머가 계속 다시 걸린다 — 쓰는 것은 모두 안정적이다
+      if (++tick % 10 === 0)
+        send({ t: "report", err: med == null ? null : Math.round(med * 1000), rtt: rttRef.current, ready: !!a && a.readyState >= 3 });
+    }, 200);
+    return () => {
+      window.clearInterval(id);
+      restore(roomRef.current);
+    };
+    // tg 는 매 렌더 새 객체라 의존성에 두면 타이머가 계속 다시 걸린다 — 쓰는 것은 모두 안정적이다
   }, [tg.joined, engine.audios, send, serverNow, roomRef]);
 
   // 송 맵의 구간 반복을 켜고 끄면 방에도 알린다 (다른 사람도 같은 구간을 돈다)
@@ -338,7 +391,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
       // 함께 연습: 방에 알리기만 하고, 실제 재생은 방에서 돌아온 상태로 모두가 같이 한다
       engine.prime();
       voice.prime();
-      if ((playing || counting) && !opts.force) {
+      if ((playing || counting || preparing) && !opts.force) {
         tg.send({ t: "pause" });
         return;
       }
@@ -461,7 +514,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
     <div className="mixer">
       <div className="transport">
         <button className="playbtn" onClick={() => void handlePlay()}>
-          {counting ? counting : playing ? "❚❚" : "▶"}
+          {counting ? counting : preparing ? "…" : playing ? "❚❚" : "▶"}
         </button>
         {loopButton && (
           <button
@@ -571,7 +624,8 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
                 >
                   {m.name}
                   {m.id === tg.me && " (나)"}
-                  {m.err != null && (
+                  {preparing && <span className={m.preparing ? "warn" : "ok"}>{m.preparing ? " 준비 중" : " 준비됨"}</span>}
+                  {!preparing && m.err != null && (
                     <span className={Math.abs(m.err) < 30 ? "ok" : Math.abs(m.err) < 80 ? "warn" : "err"}>
                       {" "}
                       {m.err > 0 ? "+" : ""}
