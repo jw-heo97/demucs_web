@@ -399,6 +399,13 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
 
   const cur = barAtTime(bars, time);
   const next = cur ? bars.find((b) => b.bar === cur.bar + 1) : bars[0];
+  const lastBar = bars.length ? bars[bars.length - 1].bar : 0;
+  /** n 마디 첫 박으로 (재생 중이면 그대로 이어서, 함께 연습이면 방에 알린다) */
+  const gotoBar = (n: number) => {
+    if (!bars.length) return;
+    const b = bars.find((x) => x.bar === Math.max(1, Math.min(lastBar, Math.round(n))));
+    if (b) seekTo(b.start);
+  };
 
   if (control) control.current = { playFrom: (pos, loop) => void handlePlay({ force: true, from: pos, loop }) };
 
@@ -579,6 +586,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
         <span className="time">
           {clock(time)} / {clock(duration)}
         </span>
+        {bars.length > 0 && <BarJump cur={cur?.bar ?? 0} last={lastBar} onGo={gotoBar} />}
         {showRate && bars[0]?.bpm ? (
           <BpmControl base={bars[0].bpm} rate={rate} onRate={setRateShared} />
         ) : null}
@@ -716,9 +724,11 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
           <button className="playbtn" onClick={() => void handlePlay()}>
             {counting ? counting : preparing ? "…" : playing ? "❚❚" : "▶"}
           </button>
-          <span className="nowsec">
-            {cur ? `${cur.bar}마디 · ${beatOf(cur, time)}박${cur.name ? ` · ${cur.name}` : ""}` : "1마디 전"}
-          </span>
+          {bars.length > 0 ? (
+            <BarJump cur={cur?.bar ?? 0} last={lastBar} onGo={gotoBar} name={cur?.name} />
+          ) : (
+            <span className="nowsec">1마디 전</span>
+          )}
           <input
             className="seek"
             type="range"
@@ -845,9 +855,58 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
   );
 }
 
+/**
+ * 마디 이동: 지금 마디를 보여 주고 ◀ ▶ 로 한 마디씩, 번호를 쳐서 바로 그 마디로.
+ * 연습하다 "몇 마디 전으로" 돌아갈 때 파형을 더듬지 않아도 되게.
+ * 번호는 치는 동안 재생 위치가 바뀌어도 덮이지 않게 따로 들고, Enter/포커스 해제 때 이동한다.
+ */
+function BarJump({ cur, last, onGo, name }: { cur: number; last: number; onGo: (n: number) => void; name?: string }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const commit = () => {
+    if (draft !== null) {
+      const n = parseInt(draft, 10);
+      if (Number.isFinite(n)) onGo(n);
+    }
+    setDraft(null);
+  };
+  return (
+    <span className="barjump" title="지금 마디. ◀ ▶ 로 한 마디씩, 번호를 치고 Enter 로 그 마디 첫 박으로 이동">
+      <button className="ghost" onClick={() => onGo(cur - 1)} disabled={cur <= 1} aria-label="한 마디 앞으로">
+        ◀
+      </button>
+      <input
+        type="number"
+        inputMode="numeric"
+        min={1}
+        max={last}
+        value={draft ?? (cur || "")}
+        placeholder="마디"
+        onFocus={(e) => {
+          setDraft(String(cur || ""));
+          e.target.select();
+        }}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          if (e.key === "Escape") {
+            setDraft(null);
+            (e.target as HTMLInputElement).blur();
+          }
+        }}
+      />
+      <span className="meta">마디{name ? ` · ${name}` : ""}</span>
+      <button className="ghost" onClick={() => onGo(cur + 1)} disabled={cur >= last} aria-label="한 마디 뒤로">
+        ▶
+      </button>
+    </span>
+  );
+}
+
 function beatOf(b: Bar, t: number) {
   const step = stepOf(b.bpm, b.beat_unit);
-  return Math.min(b.beats_per_bar, Math.floor((t - b.start) / step) + 1);
+  // 마디 첫 박에 딱 서면 t 가 start 보다 아주 조금 작을 수 있다 (0박으로 보이던 것) → 1박
+  return Math.max(1, Math.min(b.beats_per_bar, Math.floor((t - b.start) / step) + 1));
 }
 
 function nextBeatAfter(bars: Bar[], pos: number) {
