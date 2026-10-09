@@ -6,7 +6,13 @@ export interface Me {
   admin: boolean;
   /** 바꾸는 요청(저장·삭제·분리 등록…)을 보낼 수 있는가. 보기 전용 기기는 재생·다운로드만 */
   canEdit: boolean;
+  /** 나를 가리키는 키 — 송 맵 버전의 owner 와 비교해 '내가 만든 것' 을 안다 */
+  key: string;
 }
 
-export const MeContext = createContext<Me>({ admin: false, canEdit: true });
+export const MeContext = createContext<Me>({ admin: false, canEdit: true, key: "" });
+
+/** 이 버전을 내가 다룰 수 있는가 (만든 사람이거나 관리자). 주인이 없는 예전 버전은 관리자 것. */
+export const ownsVersion = (me: Me, owner: string | null | undefined) =>
+  me.admin || (!!owner && owner !== "admin" && owner === me.key);
 export const useMe = () => useContext(MeContext);
