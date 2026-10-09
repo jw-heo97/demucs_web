@@ -323,3 +323,13 @@ button.danger { background: var(--err); }
 .updatebar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 10px 0; padding: 8px 12px; border-radius: 8px;
   background: var(--accent-weak); border: 1px solid var(--accent); font-size: .86rem; }
 .updatebar button { padding: 6px 14px; }
+
+/* 접속 링크 */
+.linkform { display: grid; grid-template-columns: 1fr 1fr 130px auto; gap: 6px; }
+.linklist { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+.linkitem { border: 1px solid var(--border); border-radius: 9px; padding: 10px 12px; }
+.linkitem.fresh { border-color: var(--accent); background: var(--accent-weak); }
+.linkhead { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.linkrow { display: flex; gap: 6px; margin: 8px 0; }
+.linkrow input { flex: 1; min-width: 0; }
+@media (max-width: 640px) { .linkform { grid-template-columns: 1fr; } }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { ask, confirmBox } from "../lib/dialog";
-import { api, type AccessClient, type AccessDevice, type AccessRole } from "../api";
+import { api, type AccessClient, type AccessDevice, type AccessLink, type AccessRole } from "../api";
 
 const ROLE: Record<AccessRole, string> = { view: "보기만", edit: "수정 가능" };
 
@@ -37,8 +37,8 @@ function shortUa(ua: string) {
  * 접속자 관리. 내 Tailscale 계정 기기(와 이 PC)에서만 탭이 보이고, 서버도 /api/admin/* 를
  * 그 밖의 접속에는 403 으로 막는다.
  *
- * - 초대 링크: funnel(공개 주소)로 들어올 기기를 등록하는 1회용 링크. 사람마다 이름을 붙여 만들고,
- *   처음 연 기기 한 대가 그 이름으로 등록되면 사라진다.
+ * - 접속 링크: funnel(공개 주소)로 들어올 기기를 등록하는 링크 + 비밀번호. 여러 사람이 같이 쓰고,
+ *   링크를 연 사람이 자기 이름과 비밀번호를 넣으면 그 기기가 그 이름으로 등록된다.
  * - 등록 기기: 링크로 등록한 브라우저들. 이름 변경·차단·등록 해제.
  * - 최근 접속: 서버가 켜진 뒤 들어온 접속 (Tailscale 계정·공개 링크 기기·이 PC).
  */
@@ -74,40 +74,58 @@ export function AccessTab() {
     }
   };
 
-  // 방금 만든 초대 링크 — 서버엔 해시만 남아서 지금만 볼 수 있다
-  const [fresh, setFresh] = useState<{ name: string; url: string } | null>(null);
-  const [inviteName, setInviteName] = useState("");
-  const [inviteRole, setInviteRole] = useState<AccessRole>("view");
+  // 새 접속 링크 입력
+  const [label, setLabel] = useState("");
+  const [password, setPassword] = useState("");
+  const [role, setRole] = useState<AccessRole>("view");
+  const [justMade, setJustMade] = useState<string | null>(null);
 
-  const copy = async (text: string) => {
+  // 이 PC 에서 직접 열었으면 서버가 공개 주소를 모르므로 지금 주소를 붙인다
+  const fullUrl = (l: AccessLink) => (l.url.startsWith("/") ? location.origin + l.url : l.url);
+
+  const copy = async (l: AccessLink) => {
     try {
-      await navigator.clipboard.writeText(text);
-      setMsg("초대 링크를 복사했습니다. 등록할 기기의 브라우저에서 한 번 열면 됩니다.");
+      await navigator.clipboard.writeText(fullUrl(l));
+      setMsg(`'${l.label}' 링크를 복사했습니다. 비밀번호는 따로 알려 주세요.`);
     } catch {
       setMsg("복사하지 못했습니다. 링크를 직접 선택해 복사해 주세요.");
     }
   };
 
-  const createInvite = async () => {
-    const name = inviteName.trim();
-    if (!name) {
-      setMsg("누구에게 보낼 링크인지 이름을 넣어 주세요.");
-      return;
-    }
+  const createLink = async () => {
+    if (!label.trim()) return setMsg("링크 이름을 넣어 주세요 (예: 밴드 친구들).");
+    if (password.trim().length < 4) return setMsg("비밀번호는 4자 이상이어야 합니다.");
     setBusy(true);
     try {
-      const r = await api.createInvite(name, inviteRole);
-      // 이 PC 에서 직접 열었으면 서버가 공개 주소를 모르므로 지금 주소를 붙인다
-      const url = r.url.startsWith("/") ? location.origin + r.url : r.url;
-      setFresh({ name: r.name, url });
-      setInviteName("");
-      setMsg("");
+      const l = await api.createLink(label.trim(), password.trim(), role);
+      setJustMade(l.id);
+      setLabel("");
+      setPassword("");
+      setMsg(`'${l.label}' 링크를 만들었습니다. 링크와 비밀번호를 보내 주세요.`);
       await load();
     } catch (e) {
       setMsg((e as Error).message);
     } finally {
       setBusy(false);
     }
+  };
+
+  const changePassword = async (l: AccessLink) => {
+    const pw = await ask({
+      title: `'${l.label}' 비밀번호 바꾸기`,
+      message: "이미 등록한 기기는 그대로 들어옵니다. 새로 등록할 때만 새 비밀번호가 필요합니다.",
+      kind: "pin",
+      okText: "바꾸기",
+    });
+    if (pw === null) return;
+    if (pw.trim().length < 4) return setMsg("비밀번호는 4자 이상이어야 합니다.");
+    void act(() => api.updateLink(l.id, { password: pw.trim() }), `'${l.label}' 비밀번호를 바꿨습니다.`);
+  };
+
+  const renameLink = async (l: AccessLink) => {
+    const v = await ask({ title: "링크 이름", value: l.label, okText: "바꾸기" });
+    if (v && v.trim() && v !== l.label)
+      void act(() => api.updateLink(l.id, { label: v.trim() }), "링크 이름을 바꿨습니다.");
   };
 
   const rename = async (d: AccessDevice) => {
@@ -117,86 +135,123 @@ export function AccessTab() {
   };
 
   if (!data) return <div className="panel meta">{msg || "불러오는 중…"}</div>;
+  const linkName = new Map(data.links.map((l) => [l.id, l.label]));
 
   return (
     <>
       <div className="panel">
-        <h2 style={{ marginTop: 0 }}>초대 링크 (공개 주소로 들어올 기기 등록)</h2>
+        <h2 style={{ marginTop: 0 }}>접속 링크 (공개 주소로 들어올 사람)</h2>
         <p className="meta" style={{ marginTop: 0 }}>
-          사람마다 <b>1회용</b> 링크를 만들어 보내세요. 그 링크를 브라우저에서 처음 연 기기 한 대가 그 이름으로
-          등록되고 링크는 사라집니다 — 남에게 넘겨도 다시 쓸 수 없습니다. {data.invite_days}일 안에 안 쓰면
-          만료됩니다. 폰과 노트북처럼 기기가 여러 대면 링크도 여러 개 만드세요.
+          링크와 비밀번호를 만들어 보내세요. 받은 사람이 링크를 열고 <b>자기 이름</b>과 <b>비밀번호</b>를 넣으면 그
+          기기가 그 이름으로 등록됩니다. 링크 하나를 여러 사람·여러 기기가 같이 써도 됩니다. 링크가 새도
+          비밀번호를 모르면 못 들어옵니다 (5번 틀리면 5분 막힘).
         </p>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+        <form
+          className="linkform"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void createLink();
+          }}
+        >
           <input
-            placeholder="누구에게? (예: 철수 폰)"
-            value={inviteName}
+            placeholder="링크 이름 (예: 밴드 친구들)"
+            value={label}
             maxLength={40}
-            style={{ flex: 1, minWidth: 180 }}
-            onChange={(e) => setInviteName(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && void createInvite()}
+            onChange={(e) => setLabel(e.target.value)}
+          />
+          <input
+            placeholder="비밀번호 (4자 이상)"
+            value={password}
+            maxLength={64}
+            autoComplete="new-password"
+            onChange={(e) => setPassword(e.target.value)}
           />
           <select
-            value={inviteRole}
-            style={{ width: 130 }}
-            onChange={(e) => setInviteRole(e.target.value as AccessRole)}
-            title="보기만: 재생·믹스 받기·다운로드. 수정 가능: 송 맵 저장·분리 등록·삭제까지. 등록된 뒤에도 아래 표에서 바꿀 수 있습니다."
+            value={role}
+            onChange={(e) => setRole(e.target.value as AccessRole)}
+            title="이 링크로 등록되는 기기의 권한. 보기만: 재생·믹스 받기·다운로드. 수정 가능: 송 맵 저장·분리 등록·삭제까지. 등록된 뒤에도 아래 표에서 기기별로 바꿀 수 있습니다."
           >
             <option value="view">보기만</option>
             <option value="edit">수정 가능</option>
           </select>
-          <button disabled={busy} onClick={() => void createInvite()}>
-            링크 만들기
-          </button>
-        </div>
-        {fresh && (
-          <div style={{ marginTop: 10 }}>
-            <label>{fresh.name} 에게 보낼 링크 — 지금만 볼 수 있습니다 (잃어버리면 취소하고 새로 만드세요)</label>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              <input readOnly value={fresh.url} style={{ flex: 1, minWidth: 220 }} onFocus={(e) => e.target.select()} />
-              <button className="ghost" onClick={() => void copy(fresh.url)}>
-                복사
-              </button>
-              <button className="ghost" onClick={() => setFresh(null)}>
-                닫기
-              </button>
-            </div>
-          </div>
-        )}
-        {data.invites.length > 0 && (
-          <div style={{ marginTop: 12 }}>
-            <label>아직 안 쓴 초대 {data.invites.length}개</label>
-            {data.invites.map((iv) => (
-              <div key={iv.id} style={{ display: "flex", gap: 8, alignItems: "center", padding: "3px 0" }}>
-                <span>{iv.name}</span>
-                <span className="meta">{ROLE[iv.role ?? "edit"]}</span>
-                <span className="meta">
-                  {when(iv.created)} 만듦 · {when(iv.expires)} 만료
-                </span>
-                <button
-                  className="ghost"
-                  disabled={busy}
-                  onClick={() => void act(() => api.cancelInvite(iv.id), `${iv.name} 초대를 취소했습니다.`)}
-                >
-                  취소
-                </button>
+          <button disabled={busy}>링크 만들기</button>
+        </form>
+        {msg && <p className="meta">{msg}</p>}
+
+        {data.links.length > 0 && (
+          <div className="linklist">
+            {data.links.map((l) => (
+              <div key={l.id} className={"linkitem" + (l.id === justMade ? " fresh" : "")}>
+                <div className="linkhead">
+                  <b>{l.label}</b>
+                  <span className="meta">
+                    {ROLE[l.role]} · 기기 {l.devices}대 · {when(l.created)} 만듦
+                  </span>
+                </div>
+                <div className="linkrow">
+                  <input readOnly value={fullUrl(l)} onFocus={(e) => e.target.select()} />
+                  <button className="ghost" onClick={() => void copy(l)}>
+                    복사
+                  </button>
+                </div>
+                <div className="rowbtns">
+                  <button className="ghost" disabled={busy} onClick={() => void changePassword(l)}>
+                    비밀번호 바꾸기
+                  </button>
+                  <button className="ghost" disabled={busy} onClick={() => void renameLink(l)}>
+                    이름
+                  </button>
+                  <select
+                    value={l.role}
+                    disabled={busy}
+                    style={{ width: 118 }}
+                    title="앞으로 이 링크로 등록할 기기의 권한 (이미 등록한 기기는 아래 표에서)"
+                    onChange={(e) =>
+                      void act(
+                        () => api.updateLink(l.id, { role: e.target.value as AccessRole }),
+                        `'${l.label}': 앞으로 등록하는 기기는 ${ROLE[e.target.value as AccessRole]}`,
+                      )
+                    }
+                  >
+                    <option value="view">보기만</option>
+                    <option value="edit">수정 가능</option>
+                  </select>
+                  <button
+                    className="ghost"
+                    disabled={busy}
+                    onClick={async () => {
+                      if (
+                        await confirmBox({
+                          title: `'${l.label}' 링크 지우기`,
+                          message:
+                            "이 링크로는 더 이상 새로 들어올 수 없습니다. 이미 등록한 기기는 그대로 들어오니, 끊으려면 아래 표에서 기기를 해제하세요.",
+                          okText: "지우기",
+                          danger: true,
+                        })
+                      )
+                        void act(() => api.deleteLink(l.id), `'${l.label}' 링크를 지웠습니다.`);
+                    }}
+                  >
+                    지우기
+                  </button>
+                </div>
               </div>
             ))}
           </div>
         )}
-        {msg && <p className="meta">{msg}</p>}
       </div>
 
       <div className="panel">
         <h2 style={{ marginTop: 0 }}>등록 기기 {data.devices.length}대</h2>
         {data.devices.length === 0 ? (
-          <p className="meta">아직 초대 링크로 등록한 기기가 없습니다.</p>
+          <p className="meta">아직 접속 링크로 등록한 기기가 없습니다.</p>
         ) : (
           <div className="tblwrap">
             <table className="grid">
               <thead>
                 <tr>
                   <th>이름</th>
+                  <th>링크</th>
                   <th>브라우저</th>
                   <th>등록</th>
                   <th>마지막 접속</th>
@@ -210,6 +265,7 @@ export function AccessTab() {
                 {data.devices.map((d) => (
                   <tr key={d.id} className={d.blocked ? "dup" : undefined}>
                     <td>{d.name}</td>
+                    <td className="meta">{(d.link && linkName.get(d.link)) || "—"}</td>
                     <td className="meta" title={d.ua}>
                       {shortUa(d.ua)}
                     </td>
@@ -260,7 +316,7 @@ export function AccessTab() {
                             if (
                               await confirmBox({
                                 title: `${d.name} 등록 해제`,
-                                message: "다시 들어오려면 초대 링크가 필요합니다.",
+                                message: "다시 들어오려면 접속 링크에서 이름과 비밀번호를 다시 넣어야 합니다.",
                                 okText: "해제",
                                 danger: true,
                               })

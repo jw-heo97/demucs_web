@@ -85,35 +85,55 @@ def api_me(request: Request):
 
 
 # --- 접속자 관리 (허용 계정의 tailnet 기기·이 PC 만 — 미들웨어가 /api/admin/* 를 막는다) ---
-def _invite_url(request: Request, key: str) -> str:
+def _link_url(request: Request, code: str) -> str:
     host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
-    # tailnet 으로 들어왔으면 그 주소(…ts.net)가 funnel 주소와 같다. 이 PC 에서 직접이면 모른다.
+    # tailnet 으로 들어왔으면 그 주소(…ts.net)가 funnel 주소와 같다. 이 PC 에서 직접이면 모른다
+    # (화면이 지금 주소를 앞에 붙인다).
     if not host or host.startswith(("127.0.0.1", "localhost")):
-        return f"/?key={key}"
-    return f"https://{host}/?key={key}"
+        return f"{access.JOIN_PREFIX}{code}"
+    return f"https://{host}{access.JOIN_PREFIX}{code}"
+
+
+def _links(request: Request) -> list[dict]:
+    return [{**ln, "url": _link_url(request, ln["code"])} for ln in access.store.links()]
 
 
 @app.get("/api/admin/access")
-def admin_access():
-    return {"devices": access.store.devices(), "invites": access.store.invites(),
+def admin_access(request: Request):
+    return {"devices": access.store.devices(), "links": _links(request),
             "clients": access.recent_clients(),
-            "allow_users": sorted(access.TAILSCALE_ALLOW_USERS),
-            "invite_days": access.INVITE_DAYS}
+            "allow_users": sorted(access.TAILSCALE_ALLOW_USERS)}
 
 
-@app.post("/api/admin/invites")
-def admin_invite_create(request: Request, payload: dict = Body(default={})):
-    """{name, role?} — 1회용 초대 링크. 링크 원문은 이 응답에서만 보인다(서버엔 해시만)."""
-    key, inv = access.store.create_invite(payload.get("name") or "", payload.get("role") or "view")
-    return {**inv, "url": _invite_url(request, key)}
-
-
-@app.delete("/api/admin/invites/{iid}")
-def admin_invite_cancel(iid: str):
+@app.post("/api/admin/links")
+def admin_link_create(request: Request, payload: dict = Body(default={})):
+    """{label, password, role?} — 여러 사람이 같이 쓰는 접속 링크. 들어올 때 이름과 비밀번호를 넣는다."""
     try:
-        access.store.cancel_invite(iid)
+        ln = access.store.create_link(payload.get("label") or "", payload.get("password") or "",
+                                      payload.get("role") or "view")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {**ln, "url": _link_url(request, ln["code"])}
+
+
+@app.patch("/api/admin/links/{lid}")
+def admin_link_update(request: Request, lid: str, payload: dict = Body(...)):
+    """{label?, password?, role?}  role 은 앞으로 이 링크로 등록할 기기에만 적용된다."""
+    try:
+        ln = access.store.update_link(lid, payload.get("label"), payload.get("password"), payload.get("role"))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     except KeyError:
-        raise HTTPException(404, "그 초대를 찾을 수 없습니다 (이미 쓰였거나 만료).")
+        raise HTTPException(404, "그 링크를 찾을 수 없습니다.")
+    return {**ln, "url": _link_url(request, ln["code"])}
+
+
+@app.delete("/api/admin/links/{lid}")
+def admin_link_delete(lid: str):
+    try:
+        access.store.delete_link(lid)
+    except KeyError:
+        raise HTTPException(404, "그 링크를 찾을 수 없습니다.")
     return {"ok": True}
 
 
@@ -130,7 +150,7 @@ def admin_device_update(did: str, payload: dict = Body(...)):
 
 @app.delete("/api/admin/devices/{did}")
 def admin_device_delete(did: str):
-    """등록 해제 — 그 기기는 초대 링크로 다시 등록해야 들어온다."""
+    """등록 해제 — 그 기기는 접속 링크로 다시 등록해야 들어온다."""
     try:
         access.store.delete(did)
     except KeyError:

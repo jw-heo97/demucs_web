@@ -67,14 +67,21 @@ export interface AccessDevice {
   last: number;
   last_ip: string;
   blocked: boolean;
+  /** 등록에 쓴 접속 링크 id (예전 1회용 초대로 등록했으면 없음) */
+  link?: string;
 }
 
-export interface AccessInvite {
+export interface AccessLink {
   id: string;
-  name: string;
+  code: string;
+  url: string;
+  label: string;
   role: AccessRole;
   created: number;
-  expires: number;
+  /** 이 링크로 등록한 횟수 */
+  uses: number;
+  /** 지금 이 링크로 등록되어 있는 기기 수 */
+  devices: number;
 }
 
 export interface AccessClient {
@@ -100,15 +107,16 @@ export const api = {
   access: () =>
     get<{
       devices: AccessDevice[];
-      invites: AccessInvite[];
+      links: AccessLink[];
       clients: AccessClient[];
       allow_users: string[];
-      invite_days: number;
     }>("/api/admin/access"),
-  /** 1회용 초대 링크. url 은 이 응답에서만 받을 수 있다 (서버엔 해시만 남는다). */
-  createInvite: (name: string, role: AccessRole) =>
-    post<AccessInvite & { url: string }>("/api/admin/invites", { name, role }),
-  cancelInvite: (id: string) => del(`/api/admin/invites/${id}`),
+  /** 접속 링크 (여러 사람이 같이 쓴다). 들어올 때 이름과 비밀번호를 넣는다 */
+  createLink: (label: string, password: string, role: AccessRole) =>
+    post<AccessLink>("/api/admin/links", { label, password, role }),
+  updateLink: (id: string, body: { label?: string; password?: string; role?: AccessRole }) =>
+    patch<AccessLink>(`/api/admin/links/${id}`, body),
+  deleteLink: (id: string) => del(`/api/admin/links/${id}`),
   updateDevice: (id: string, body: { name?: string; blocked?: boolean; role?: AccessRole }) =>
     patch<AccessDevice>(`/api/admin/devices/${id}`, body),
   deleteDevice: (id: string) => del(`/api/admin/devices/${id}`),
