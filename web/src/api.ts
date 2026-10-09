@@ -122,7 +122,14 @@ export const api = {
   // --- 믹스다운 ---
   mixdown: (
     id: string,
-    body: { stems: string[]; gains?: Record<string, number>; format?: string; count_in?: number },
+    body: {
+      stems: string[];
+      gains?: Record<string, number>;
+      format?: string;
+      count_in?: number;
+      /** 1 = 4비트, 2 = 8비트(메트로놈 박 사이 클릭 포함) */
+      subdiv?: 1 | 2;
+    },
   ) =>
     post<{ file: { name: string; url: string; size: number }; normalized: boolean; count_in: number }>(
       `/api/jobs/${id}/mixdown`,

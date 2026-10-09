@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { audioCtx, scheduleClick } from "../lib/audioCtx";
 import { beatsFromBars } from "../lib/songmap";
 import type { Bar } from "../types";
@@ -9,7 +9,39 @@ type Engine = ReturnType<typeof useAudioEngine>;
 interface ClickEvent {
   /** 곡 시각(초) */
   t: number;
-  accent: boolean;
+  /** 마디 첫 박 / 나머지 박 / 박 사이(8비트) */
+  kind: "accent" | "beat" | "sub";
+}
+
+const SOUND: Record<ClickEvent["kind"], { freq: number; peak: number; length: number }> = {
+  accent: { freq: 1500, peak: 0.35, length: 0.07 },
+  beat: { freq: 1000, peak: 0.35, length: 0.07 },
+  // 박과 헷갈리지 않게 더 높고 짧고 작게 (서버 믹스다운의 8비트와 같은 소리)
+  sub: { freq: 2200, peak: 0.16, length: 0.04 },
+};
+
+const LS_SUBDIV = "metronome.subdiv";
+
+/**
+ * 메트로놈 4비트(1) / 8비트(2). 곡마다가 아니라 연습 방식이라 브라우저에 하나로 기억한다.
+ */
+export function useSubdiv(): [1 | 2, (n: 1 | 2) => void] {
+  const [v, setV] = useState<1 | 2>(() => {
+    try {
+      return localStorage.getItem(LS_SUBDIV) === "2" ? 2 : 1;
+    } catch {
+      return 1;
+    }
+  });
+  const set = useCallback((n: 1 | 2) => {
+    setV(n);
+    try {
+      localStorage.setItem(LS_SUBDIV, String(n));
+    } catch {
+      /* 기억만 못 할 뿐 */
+    }
+  }, []);
+  return [v, set];
 }
 
 /** 이만큼 앞까지 미리 예약한다(곡 시간 기준, 초) */
@@ -42,7 +74,7 @@ function lowerBound(ev: ClickEvent[], t: number) {
  * 클릭을 예약한다. 실제 위치와 조금 어긋나면 기준점을 살짝 당기고, 크게 어긋나면
  * (탐색·구간 반복·버퍼링) 다시 잡는다.
  */
-export function useLiveMetronome(engine: Engine, bars: Bar[]) {
+export function useLiveMetronome(engine: Engine, bars: Bar[], subdiv: 1 | 2 = 1) {
   const { tracks, rate, duration } = engine;
   const ci = tracks.findIndex((t) => t.virtual);
   const mix = ci >= 0 ? engine.mixOf(ci) : { on: false, vol: 0 };
@@ -51,10 +83,16 @@ export function useLiveMetronome(engine: Engine, bars: Bar[]) {
     const { beats, accents, sounds } = beatsFromBars(bars, duration > 0 ? duration : 1e9);
     const out: ClickEvent[] = [];
     beats.forEach((t, i) => {
-      if (sounds[i]) out.push({ t, accent: accents[i] });
+      if (!sounds[i]) return;
+      out.push({ t, kind: accents[i] ? "accent" : "beat" });
+      // 8비트: 소리 나는 박마다 다음 박과의 한가운데. 마지막 박은 직전 간격을 쓴다.
+      if (subdiv === 2 && beats.length >= 2) {
+        const gap = i + 1 < beats.length ? beats[i + 1] - t : t - beats[i - 1];
+        out.push({ t: t + gap / 2, kind: "sub" });
+      }
     });
-    return out;
-  }, [bars, duration]);
+    return out.sort((a, b) => a.t - b.t);
+  }, [bars, duration, subdiv]);
 
   const eventsRef = useRef(events);
   const dirtyRef = useRef(false);
@@ -173,7 +211,8 @@ export function useLiveMetronome(engine: Engine, bars: Bar[]) {
         // 시작하며 살짝 지나친 박은 바로 울린다 (그 밖에 지난 박은 위에서 이미 걸러졌다)
         if (when < now - 0.15) continue;
         when = Math.max(when, now);
-        live.push({ osc: scheduleClick(ctx, when, e.accent ? 1500 : 1000, out), when });
+        const s = SOUND[e.kind];
+        live.push({ osc: scheduleClick(ctx, when, s.freq, out, s), when });
       }
       // 끝난 것은 놓아준다
       while (live.length && live[0].when < now - 0.5) live.shift();

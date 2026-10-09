@@ -288,9 +288,13 @@ def mixdown(job_id: str, payload: dict = Body(...)):
     if not (0 <= count_in <= 16):
         raise HTTPException(400, "count_in 은 0~16 사이여야 합니다.")
 
+    subdiv = payload.get("subdiv", 1)
+    if subdiv not in (1, 2):
+        raise HTTPException(400, "subdiv 는 1(4비트) 또는 2(8비트)여야 합니다.")
+
     try:
         result = store.mixdown(job, stems, fmt=payload.get("format", "mp3"),
-                               gains=gains, count_in=count_in)
+                               gains=gains, count_in=count_in, subdiv=subdiv)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     return result

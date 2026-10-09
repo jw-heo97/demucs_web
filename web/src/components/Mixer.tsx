@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { useAudioEngine } from "../hooks/useAudioEngine";
-import { useLiveMetronome } from "../hooks/useLiveMetronome";
+import { useLiveMetronome, useSubdiv } from "../hooks/useLiveMetronome";
 import { audioCtx, scheduleClick } from "../lib/audioCtx";
 import type { Bar } from "../types";
 import { barAtTime, stepOf } from "../lib/songmap";
@@ -41,7 +41,9 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, countIn, onCou
   const [mixing, setMixing] = useState(false);
   const timers = useRef<{ t?: number; i?: number; oscs: OscillatorNode[] }>({ oscs: [] });
   // 메트로놈 트랙은 파일이 아니라 송 맵에서 즉석으로 울린다 (편집이 바로 들린다)
-  useLiveMetronome(engine, bars);
+  const [subdiv, setSubdiv] = useSubdiv();
+  const hasMetronome = tracks.some((t) => t.virtual);
+  useLiveMetronome(engine, bars, subdiv);
 
   /**
    * 지금 들리는 트랙(음소거·솔로·볼륨 반영)만 서버에서 합쳐 한 파일로 받는다.
@@ -60,7 +62,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, countIn, onCou
     setHint("");
     setNote("믹스 만드는 중…");
     try {
-      const r = await api.mixdown(jobId, { stems, gains, format: "mp3", count_in: countIn });
+      const r = await api.mixdown(jobId, { stems, gains, format: "mp3", count_in: countIn, subdiv });
       if (!r.file) throw new Error("믹스 파일을 만들지 못했습니다.");
       const a = document.createElement("a");
       a.href = api.fileUrl(r.file.url, true);
@@ -254,6 +256,17 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, countIn, onCou
           <option value="4">예비박 4박</option>
           <option value="8">예비박 8박</option>
         </select>
+        {hasMetronome && (
+          <select
+            style={{ width: 104 }}
+            value={String(subdiv)}
+            onChange={(e) => setSubdiv(Number(e.target.value) as 1 | 2)}
+            title="메트로놈 클릭 간격. 8비트는 박 사이에 작은 클릭이 들어갑니다. 재생 중에도 바로 바뀝니다."
+          >
+            <option value="1">클릭 4비트</option>
+            <option value="2">클릭 8비트</option>
+          </select>
+        )}
         <button
           className="ghost"
           onClick={downloadMix}
