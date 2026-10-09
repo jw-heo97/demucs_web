@@ -361,6 +361,19 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     let alive = true;
     const abort = new AbortController();
     const swapTo: (string | null)[] = real.map(() => null);
+    // 확정 메트로놈은 4비트·8비트 파일이 따로라, 저장할 때 안 쓰는 쪽도 받아 둔다 (바꿔도 다시 안 받게)
+    const prefetchAltClick = async () => {
+      if (!j) return;
+      const mine = real.find((t) => t.key === "click")?.url;
+      const other = tracksOf(j, subdivRef.current === 2 ? 1 : 2).find((t) => t.key === "click" && !t.virtual);
+      if (!other || other.url === mine || !alive) return;
+      if (await cachedUrl(other.url)) return;
+      try {
+        await download(other.url, undefined, abort.signal, "low");
+      } catch {
+        /* 다음에 다시 */
+      }
+    };
     const trySwap = () => {
       if (!alive || swapTo.some((u) => !u)) return;
       if (created.some((a) => !a.paused)) return; // 재생 중이면 다음에 멈출 때
@@ -385,6 +398,7 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
       });
       if (hits.every(Boolean)) {
         setCache({ state: "cached", pct: 100 });
+        void prefetchAltClick();
         return;
       }
       hits.forEach((h, i) => {
@@ -431,7 +445,10 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
               cur = null;
             }
           }
-          if (alive && !queue.length) trySwap();
+          if (alive && !queue.length) {
+            trySwap();
+            void prefetchAltClick();
+          }
         } catch {
           // 받기에 실패해도 스트리밍으로는 계속 들을 수 있다 — 버튼으로 다시 시도할 수 있게
           if (alive) setCache({ state: "stream", pct: 0 });
@@ -466,6 +483,9 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
         else show(0); // 재생 중이면 멈춘 뒤에 받는다
       };
       setCache({ state: "none", pct: Math.floor((doneCount / n) * 100) });
+      // 이미 일부를 저장해 둔 곡이면(예: 확정 메트로놈이 파일 트랙이 되면서 한 개가 새로 생겼다)
+      // 버튼을 다시 누르지 않아도 빠진 것만 이어 받는다 — 예전엔 80% 저장됨에 머물렀다
+      if (hits.some(Boolean)) saveRef.current?.();
     })().catch(() => {
       if (alive) setCache({ state: "stream", pct: 0 });
     });
@@ -888,7 +908,12 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     saveToDevice: () => saveRef.current?.(),
     /** 지금 곡의 기기 저장을 지운다. 재생 위치는 그대로 두고 스트리밍으로 돌아간다. */
     removeFromDevice: async () => {
-      const urls = tracks.filter((t) => !t.virtual).map((t) => t.url);
+      // 지금 트랙 + 확정 메트로놈의 다른 쪽(4/8비트) 파일까지
+      const urls = [
+        ...new Set(
+          [...(job ? [...tracksOf(job, 1), ...tracksOf(job, 2)] : tracks)].filter((t) => !t.virtual).map((t) => t.url),
+        ),
+      ];
       audiosRef.current.forEach((a) => a.pause());
       setPlaying(false);
       await removeFromDevice(urls);
