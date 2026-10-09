@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { useAudioEngine } from "../hooks/useAudioEngine";
 import { useLiveMetronome, useSubdiv } from "../hooks/useLiveMetronome";
+import { useSectionVoice } from "../hooks/useSectionVoice";
 import { audioCtx, scheduleClick } from "../lib/audioCtx";
 import type { Bar } from "../types";
 import { barAtTime, stepOf } from "../lib/songmap";
@@ -44,6 +45,8 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, countIn, onCou
   const [subdiv, setSubdiv] = useSubdiv();
   const hasMetronome = tracks.some((t) => t.virtual);
   useLiveMetronome(engine, bars, subdiv);
+  // 구간 이름을 한 마디 전에 읽어 준다 (음성 합성)
+  const voice = useSectionVoice(engine, bars);
 
   /**
    * 지금 들리는 트랙(음소거·솔로·볼륨 반영)만 서버에서 합쳐 한 파일로 받는다.
@@ -151,6 +154,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, countIn, onCou
       engine.pause();
       return;
     }
+    voice.prime();
     const pos = time;
     // 예비박은 곡 처음부터 재생할 때만. 중간에서 매번 붙으면 방해가 된다.
     if (!countIn || pos > 0.25) {
@@ -185,6 +189,9 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, countIn, onCou
     const margin = 0.15;
     const toBeat = (nextBeat - pos) / (rate || 1); // 재생 속도를 반영한 실제 시간
     const tBeat = ctx.currentTime + margin + Math.max(countIn * step, toBeat);
+
+    // 곧 시작하는 구간(곡 맨 앞 Intro 등)은 예비박 동안 미리 읽는다
+    voice.cueAt(pos, Math.max(countIn * stepRaw, nextBeat - pos) + 0.1);
 
     timers.current.oscs = [];
     for (let k = countIn; k >= 1; k--) {
@@ -256,6 +263,15 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, countIn, onCou
           <option value="4">예비박 4박</option>
           <option value="8">예비박 8박</option>
         </select>
+        {voice.available && (
+          <button
+            className={`ghost${voice.enabled ? " on" : ""}`}
+            onClick={() => voice.setEnabled(!voice.enabled)}
+            title="송 맵의 구간 이름을 그 구간이 오기 한 마디 전에 소리 내어 읽습니다."
+          >
+            구간 안내
+          </button>
+        )}
         {hasMetronome && (
           <select
             style={{ width: 104 }}
