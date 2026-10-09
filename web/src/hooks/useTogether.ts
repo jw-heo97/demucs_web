@@ -54,7 +54,7 @@ export function roomPosition(s: RoomState, serverMs: number) {
 export function useTogether(
   jobId: string,
   onState: (s: RoomState, fresh: boolean) => void,
-  onBeep?: (at: number, n: number, by: string) => void,
+  onBeep?: (at: number | null, by: string) => void,
 ) {
   const [joined, setJoined] = useState(false);
   const [connected, setConnected] = useState(false);
@@ -162,6 +162,8 @@ export function useTogether(
       } else if (msg.t === "hello") {
         setMe(msg.you);
         setMembers(msg.members);
+        // 들어왔을 때 이미 맞춤 확인 중이면 같이 클릭한다
+        if (msg.beep != null) onBeepRef.current?.(msg.beep, "");
         if (!name) setNameState(msg.name);
         stateRef.current = msg.state;
         // 들어오자마자 서버 시각으로 대략 맞춰 둔다 (정확한 값은 pong 이 채운다)
@@ -171,7 +173,7 @@ export function useTogether(
         stateRef.current = msg.state;
         onStateRef.current(msg.state, false);
       } else if (msg.t === "beep") {
-        onBeepRef.current?.(msg.at, msg.n, msg.by);
+        onBeepRef.current?.(msg.at ?? null, msg.by);
       } else if (msg.t === "members") {
         setMembers(msg.members);
       }

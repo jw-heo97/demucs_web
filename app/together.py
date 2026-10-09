@@ -57,6 +57,8 @@ class Room:
         # 반복 구간을 다시 시작할 때 쓸 예비박 수와 여유 — 마지막 재생 요청의 것을 따른다
         self.loop_count_in = 0
         self.loop_lead = GO_LEAD
+        # 소리로 맞춤 확인 중이면 첫 클릭의 서버 시각(ms). 그때부터 1초마다 모두 클릭한다
+        self.beep_at: Optional[float] = None
 
     def cancel_prepare(self) -> None:
         if self._prep_task and not self._prep_task.done():
@@ -212,7 +214,8 @@ async def handle(ws: WebSocket, job_id: str) -> None:
     room.members[mid] = {"ws": ws, "name": name}
     print(f"[together] {job_id} 입장 {name} ({who['via']} {who['ip']}) — {len(room.members)}명", flush=True)
     await room.send(mid, {"t": "hello", "you": mid, "name": name, "state": room.state,
-                          "server": now_ms(), "members": room.members_view()})
+                          "server": now_ms(), "members": room.members_view(),
+                          "beep": room.beep_at})
     await room.push_members()
 
     try:
@@ -223,6 +226,9 @@ async def handle(ws: WebSocket, job_id: str) -> None:
                 # 받은 즉시 서버 시각을 돌려준다 (기기가 왕복 시간으로 시계 차이를 잰다)
                 await room.send(mid, {"t": "pong", "c": msg.get("c"), "s": now_ms()})
             elif t == "play":
+                if room.beep_at is not None:      # 음악을 틀면 확인 클릭은 끈다
+                    room.beep_at = None
+                    await room.broadcast({"t": "beep", "at": None, "by": name})
                 # 바로 시작하지 않고 '맞추고 시작' — 모두 그 위치를 받아 둔 뒤 같이 들어간다
                 room.state.update(rate=_num(msg.get("rate"), room.state["rate"], 0.5, 1.5),
                                   loop=_clamp_loop(msg.get("loop")))
@@ -269,7 +275,9 @@ async def handle(ws: WebSocket, job_id: str) -> None:
             elif t == "beep":
                 # 소리로 맞춤 확인: 모두가 같은 서버 시각들에 클릭을 낸다. 한 번 '딱' 으로 들리면 맞은 것,
                 # '따닥' 으로 갈라지면 어긋난 것 — 각자 '내 기기 지연' 을 조정한다
-                await room.broadcast({"t": "beep", "at": now_ms() + 1500, "n": 8, "by": name})
+                # 한 번 누르면 켜지고(멈출 때까지 1초마다), 다시 누르면 꺼진다
+                room.beep_at = (now_ms() + 1000) if msg.get("on", True) else None
+                await room.broadcast({"t": "beep", "at": room.beep_at, "by": name})
             elif t == "report":
                 # 기기가 잰 자기 상태(서버 기준 어긋남 ms, 왕복 시간) — 참여자 목록에 보인다
                 m = room.members.get(mid)
