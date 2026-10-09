@@ -356,6 +356,12 @@ def lock_version(job_id: str, vid: str, request: Request, payload: dict = Body(.
         else:
             v["pin_hash"] = None
         v["locked"] = True
+        # 잠근 기기의 클릭 보정(ms) — 잠긴 동안 모든 기기가 이 값으로 클릭을 내 잠근 기기에서 들린 대로
+        try:
+            off = float(payload.get("click_offset_ms"))
+            v["click_offset_ms"] = int(max(-300.0, min(300.0, off))) if off == off else None
+        except (TypeError, ValueError):
+            v["click_offset_ms"] = None
     else:
         if v.get("pin_hash"):
             _check_pin(job_id, v, str(payload.get("pin") or ""), access.owner_key(who, dv))

@@ -944,7 +944,8 @@ class JobStore:
         """화면에 내려보내는 버전 정보 (구성표 내용·PIN 해시는 뺀다)."""
         return {"id": v["id"], "name": v["name"], "updated": v.get("updated"),
                 "owner": v.get("owner"), "owner_name": v.get("owner_name"),
-                "locked": bool(v.get("locked")), "has_pin": bool(v.get("pin_hash"))}
+                "locked": bool(v.get("locked")), "has_pin": bool(v.get("pin_hash")),
+                "click_offset_ms": v.get("click_offset_ms")}
 
     def _active_locked(self, job: Job) -> bool:
         v = self._active_version(job)

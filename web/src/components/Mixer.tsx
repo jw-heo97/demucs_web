@@ -238,7 +238,12 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
   const metroIdx = tracks.findIndex((t) => t.virtual);
   const metroVol = metroIdx >= 0 ? (vol[metroIdx] ?? 1) : 1;
   const hasMetronome = tracks.some((t) => t.virtual);
-  const [clickOffset, setClickOffset] = useClickOffset();
+  const [localOffset, setClickOffset] = useClickOffset();
+  // 활성 송 맵 버전이 잠겨 있고 잠근 기기의 보정이 저장돼 있으면 그 값을 쓴다 (잠근 기기에서 들린 대로)
+  const activeVer = engine.job?.map_versions?.find((v) => v.id === engine.job?.map_active);
+  const lockedOffset =
+    activeVer?.locked && typeof activeVer.click_offset_ms === "number" ? activeVer.click_offset_ms : null;
+  const clickOffset = lockedOffset ?? localOffset;
   const metro = useLiveMetronome(engine, bars, subdiv, clickOffset);
   // 구간 이름을 한 마디 전에 읽어 준다 (음성 합성)
   const voice = useSectionVoice(engine, bars);
@@ -816,15 +821,17 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
           <label
             className="meta nudge"
             title={
-              "클릭 지연 보정 (이 기기에만 저장). 클릭이 음악보다 늦게 들리면 −, 빠르게 들리면 + 로. " +
-              "블루투스 이어폰·폰은 수십~수백 ms 차이가 날 수 있습니다. 재생 중에 바꿔도 바로 들립니다."
+              lockedOffset != null
+                ? `잠긴 송 맵 — 잠근 기기에서 맞춘 클릭 보정(${lockedOffset}ms)을 모든 기기가 그대로 씁니다. 바꾸려면 잠금을 푸세요.`
+                : "클릭 지연 보정 (이 기기에만 저장). 클릭이 음악보다 늦게 들리면 −, 빠르게 들리면 + 로. " +
+                  "재생 중에 바꿔도 바로 들립니다. 잠그면 이 값이 송 맵과 함께 저장됩니다."
             }
           >
-            클릭
+            {lockedOffset != null ? "🔒 클릭" : "클릭"}
             <button
               className="ghost"
               onClick={() => setClickOffset(clickOffset - 5)}
-              disabled={clickOffset <= -OFFSET_LIMIT}
+              disabled={lockedOffset != null || clickOffset <= -OFFSET_LIMIT}
               aria-label="클릭 5ms 앞당기기"
             >
               −
@@ -836,12 +843,13 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
               max={OFFSET_LIMIT}
               step={5}
               value={clickOffset}
+              disabled={lockedOffset != null}
               onChange={(e) => setClickOffset(Number(e.target.value))}
             />
             <button
               className="ghost"
               onClick={() => setClickOffset(clickOffset + 5)}
-              disabled={clickOffset >= OFFSET_LIMIT}
+              disabled={lockedOffset != null || clickOffset >= OFFSET_LIMIT}
               aria-label="클릭 5ms 늦추기"
             >
               +
