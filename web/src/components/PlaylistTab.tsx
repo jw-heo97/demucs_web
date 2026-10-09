@@ -304,6 +304,15 @@ export function PlaylistTab({ jobs, onChanged }: Props) {
                       {j?.duration ? <span className="chip">{clock(j.duration)}</span> : null}
                     </span>
                     <span className="rowbtns" onClick={(e) => e.stopPropagation()}>
+                      {/* 터치에선 두 번 탭이 어색하다 — 바로 재생하는 버튼을 따로 둔다 */}
+                      <button
+                        className={`ghost${i === cur && engine.playing ? " on" : ""}`}
+                        onClick={() => jump(i, true)}
+                        disabled={!ok}
+                        title="이 곡 재생 (예비박부터)"
+                      >
+                        ▶
+                      </button>
                       <button className="ghost" onClick={() => move(i, -1)} disabled={i === 0} title="위로">▲</button>
                       <button className="ghost" onClick={() => move(i, 1)} disabled={i === items.length - 1} title="아래로">▼</button>
                       <button className="ghost" onClick={() => remove(i)} title="플레이리스트에서 빼기">✕</button>
@@ -327,7 +336,7 @@ export function PlaylistTab({ jobs, onChanged }: Props) {
             <button onClick={add} disabled={!addId}>추가</button>
           </div>
           <div className="meta" style={{ marginTop: 6 }}>
-            곡을 누르면 선택, 두 번 누르면 바로 재생합니다. 음소거·볼륨은 곡이 바뀌어도 이어집니다.
+            곡을 누르면 선택, ▶ 를 누르면(또는 두 번 누르면) 바로 재생합니다. 음소거·볼륨은 곡이 바뀌어도 이어집니다.
           </div>
         </>
       )}

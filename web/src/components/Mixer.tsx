@@ -542,9 +542,20 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
 
   const pct = duration ? (time / duration) * 1000 : 0;
 
+  // 재생 줄이 화면에서 벗어났는지 — 벗어나면 아래 미니 바를 띄운다
+  const transportRef = useRef<HTMLDivElement | null>(null);
+  const [transportHidden, setTransportHidden] = useState(false);
+  useEffect(() => {
+    const el = transportRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(([en]) => setTransportHidden(!en.isIntersecting), { threshold: 0 });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+
   return (
     <div className="mixer">
-      <div className="transport">
+      <div className="transport" ref={transportRef}>
         <button className="playbtn" onClick={() => void handlePlay()}>
           {counting ? counting : preparing ? "…" : playing ? "❚❚" : "▶"}
         </button>
@@ -568,6 +579,91 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
         <span className="time">
           {clock(time)} / {clock(duration)}
         </span>
+        {showRate && bars[0]?.bpm ? (
+          <BpmControl base={bars[0].bpm} rate={rate} onRate={setRateShared} />
+        ) : null}
+        {hint && <span className="err">{hint}</span>}
+        {!hint && note && <span className="meta">{note}</span>}
+      </div>
+
+      <div className="transport-opts">
+        <select
+          style={{ width: 128 }}
+          value={String(countIn)}
+          onChange={(e) => onCountInChange(Number(e.target.value))}
+        >
+          <option value="0">예비박 없음</option>
+          <option value="2">예비박 2박</option>
+          <option value="4">예비박 4박</option>
+          <option value="8">예비박 8박</option>
+        </select>
+        {hasMetronome && (
+          <select
+            style={{ width: 118 }}
+            value={String(subdiv)}
+            onChange={(e) => setSubdiv(Number(e.target.value) as 1 | 2)}
+            title="메트로놈 클릭 간격. 8비트는 박 사이에 작은 클릭이 들어갑니다. 재생 중에도 바로 바뀝니다."
+          >
+            <option value="1">클릭 4비트</option>
+            <option value="2">클릭 8비트</option>
+          </select>
+        )}
+        {(hasMetronome || countIn > 0) && (
+          <label
+            className="meta nudge"
+            title={
+              "클릭 지연 보정 (이 기기에만 저장). 클릭이 음악보다 늦게 들리면 −, 빠르게 들리면 + 로. " +
+              "블루투스 이어폰·폰은 수십~수백 ms 차이가 날 수 있습니다. 재생 중에 바꿔도 바로 들립니다."
+            }
+          >
+            클릭
+            <button
+              className="ghost"
+              onClick={() => setClickOffset(clickOffset - 5)}
+              disabled={clickOffset <= -OFFSET_LIMIT}
+              aria-label="클릭 5ms 앞당기기"
+            >
+              −
+            </button>
+            <input
+              type="number"
+              inputMode="numeric"
+              min={-OFFSET_LIMIT}
+              max={OFFSET_LIMIT}
+              step={5}
+              value={clickOffset}
+              onChange={(e) => setClickOffset(Number(e.target.value))}
+            />
+            <button
+              className="ghost"
+              onClick={() => setClickOffset(clickOffset + 5)}
+              disabled={clickOffset >= OFFSET_LIMIT}
+              aria-label="클릭 5ms 늦추기"
+            >
+              +
+            </button>
+            ms
+          </label>
+        )}
+        {voice.available && (
+          <button
+            className={`ghost${voice.enabled ? " on" : ""}`}
+            onClick={() => voice.setEnabled(!voice.enabled)}
+            title="송 맵의 구간 이름을 그 구간이 오기 한 마디 전에 소리 내어 읽습니다."
+          >
+            구간 안내
+          </button>
+        )}
+        {TOGETHER_ENABLED && (
+          <button
+            className={`ghost${tg.joined ? " on" : ""}`}
+            onClick={() => (tg.joined ? tg.leave() : joinTogether())}
+            title="같은 곡을 연 다른 기기들과 같은 순간에 재생합니다. 누가 재생·멈춤·이동해도 모두 따라갑니다. 볼륨·음소거는 각자 따로입니다."
+          >
+            {tg.joined ? "함께 연습 중" : "함께 연습"}
+          </button>
+        )}
+        <span style={{ flex: 1 }} />
         {(engine.cache.state === "none" || engine.cache.state === "stream") && (
           <button
             className="ghost"
@@ -604,70 +700,6 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
             </button>
           </>
         )}
-        {showRate && bars[0]?.bpm ? (
-          <BpmControl base={bars[0].bpm} rate={rate} onRate={setRateShared} />
-        ) : null}
-        {TOGETHER_ENABLED && (
-        <button
-          className={`ghost${tg.joined ? " on" : ""}`}
-          onClick={() => (tg.joined ? tg.leave() : joinTogether())}
-          title="같은 곡을 연 다른 기기들과 같은 순간에 재생합니다. 누가 재생·멈춤·이동해도 모두 따라갑니다. 볼륨·음소거는 각자 따로입니다."
-        >
-          {tg.joined ? "함께 연습 중" : "함께 연습"}
-        </button>
-        )}
-        <select
-          style={{ width: 112 }}
-          value={String(countIn)}
-          onChange={(e) => onCountInChange(Number(e.target.value))}
-        >
-          <option value="0">예비박 없음</option>
-          <option value="2">예비박 2박</option>
-          <option value="4">예비박 4박</option>
-          <option value="8">예비박 8박</option>
-        </select>
-        {voice.available && (
-          <button
-            className={`ghost${voice.enabled ? " on" : ""}`}
-            onClick={() => voice.setEnabled(!voice.enabled)}
-            title="송 맵의 구간 이름을 그 구간이 오기 한 마디 전에 소리 내어 읽습니다."
-          >
-            구간 안내
-          </button>
-        )}
-        {hasMetronome && (
-          <select
-            style={{ width: 104 }}
-            value={String(subdiv)}
-            onChange={(e) => setSubdiv(Number(e.target.value) as 1 | 2)}
-            title="메트로놈 클릭 간격. 8비트는 박 사이에 작은 클릭이 들어갑니다. 재생 중에도 바로 바뀝니다."
-          >
-            <option value="1">클릭 4비트</option>
-            <option value="2">클릭 8비트</option>
-          </select>
-        )}
-        {(hasMetronome || countIn > 0) && (
-          <label
-            className="meta"
-            style={{ display: "inline-flex", alignItems: "center", gap: 4, margin: 0 }}
-            title={
-              "클릭 지연 보정 (이 기기에만 저장). 클릭이 음악보다 늦게 들리면 −, 빠르게 들리면 + 로. " +
-              "블루투스 이어폰·폰은 수십~수백 ms 차이가 날 수 있습니다. 재생 중에 바꿔도 바로 들립니다."
-            }
-          >
-            클릭
-            <input
-              type="number"
-              style={{ width: 72 }}
-              min={-OFFSET_LIMIT}
-              max={OFFSET_LIMIT}
-              step={5}
-              value={clickOffset}
-              onChange={(e) => setClickOffset(Number(e.target.value))}
-            />
-            ms
-          </label>
-        )}
         <button
           className="ghost"
           onClick={downloadMix}
@@ -676,9 +708,38 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
         >
           {mixing ? "믹스 만드는 중…" : "믹스 받기"}
         </button>
-        {hint && <span className="err">{hint}</span>}
-        {!hint && note && <span className="meta">{note}</span>}
       </div>
+
+      {/* 재생 줄이 화면 밖(위)으로 나가면 아래에 붙는 미니 바 — 긴 구성표·악보를 보면서 재생/멈춤 */}
+      {transportHidden && tracks.length > 0 && (
+        <div className="minibar">
+          <button className="playbtn" onClick={() => void handlePlay()}>
+            {counting ? counting : preparing ? "…" : playing ? "❚❚" : "▶"}
+          </button>
+          <span className="nowsec">
+            {cur ? `${cur.bar}마디 · ${beatOf(cur, time)}박${cur.name ? ` · ${cur.name}` : ""}` : "1마디 전"}
+          </span>
+          <input
+            className="seek"
+            type="range"
+            min={0}
+            max={1000}
+            value={Math.round(pct)}
+            onChange={(e) => duration && seekTo((Number(e.target.value) / 1000) * duration)}
+          />
+          <span className="time">
+            {clock(time)} / {clock(duration)}
+          </span>
+          <button
+            className="ghost"
+            onClick={() => transportRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })}
+            title="재생 조작으로 올라가기"
+            aria-label="재생 조작으로 올라가기"
+          >
+            ▲
+          </button>
+        </div>
+      )}
 
       {(tg.joined || tg.error) && (
         <div className="together">

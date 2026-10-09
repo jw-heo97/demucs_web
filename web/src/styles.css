@@ -11,6 +11,9 @@
   }
 }
 * { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+/* 터치: 탭 300ms 지연·더블탭 확대를 끈다 (파형은 자체 제스처라 touch-action: none) */
+button, a, label, select, input, summary, .summary, .tab, .score-bar { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 body {
   margin: 0; background: var(--bg); color: var(--text); line-height: 1.55;
   font-family: system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
@@ -78,8 +81,28 @@ button.ghost.on { background: var(--accent); color: #fff; border-color: var(--ac
 /* 믹서 */
 .mixer { margin-top: 10px; border: 1px solid var(--border); border-radius: 9px; padding: 12px; background: var(--bg); }
 .transport { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.transport-opts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.transport-opts label.meta { display: inline-flex; align-items: center; gap: 4px; margin: 0; }
+.nudge { display: inline-flex; align-items: center; gap: 2px; }
+.nudge input { width: 64px; text-align: center; }
+.nudge button { padding: 4px 9px; font-size: .8rem; }
+/* 재생 조작이 화면 밖으로 나가면 아래에 붙는 미니 바 (긴 구성표·악보를 보면서 재생/멈춤) */
+.minibar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: flex; align-items: center; gap: 10px;
+  padding: 8px max(12px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  background: var(--panel); border-top: 1px solid var(--border); box-shadow: 0 -4px 16px rgba(0,0,0,.18); }
+.minibar .time { min-width: 0; }
+.minibar .nowsec { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; font-size: .85rem; }
+.minibar .seek { min-width: 80px; flex: 2; }
 .playbtn { width: 38px; height: 38px; border-radius: 50%; padding: 0; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-.seek { flex: 1; min-width: 120px; accent-color: var(--accent); height: 4px; }
+.seek { flex: 1; min-width: 120px; }
+/* 슬라이더: 가는 트랙 + 큰 썸. 손가락으로 잡히게 썸 20px, 터치에선 24px */
+input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 28px; margin: 0; background: transparent; cursor: pointer; }
+input[type=range]:focus { outline: none; }
+input[type=range]::-webkit-slider-runnable-track { height: 5px; border-radius: 999px; background: var(--track); }
+input[type=range]::-moz-range-track { height: 5px; border-radius: 999px; background: var(--track); }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; margin-top: -7.5px; border-radius: 50%; background: var(--accent); border: 2px solid var(--panel); box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+input[type=range]::-moz-range-thumb { width: 20px; height: 20px; border-radius: 50%; background: var(--accent); border: 2px solid var(--panel); box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+input[type=range]:focus-visible::-webkit-slider-thumb { outline: 2px solid var(--accent); outline-offset: 2px; }
 .time { font-size: .76rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 98px; text-align: right; }
 .bpmctl { display: flex; align-items: center; gap: 4px; }
 .bpmctl input { width: 64px; text-align: center; padding: 5px 4px; }
@@ -90,7 +113,7 @@ button.ghost.on { background: var(--accent); color: #fff; border-color: var(--ac
 .trk .nm { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .trk .tog { display: flex; gap: 4px; }
 .trk .tog button { padding: 3px 8px; font-size: .71rem; }
-.trk input[type=range] { width: 100%; accent-color: var(--accent); height: 4px; }
+.trk input[type=range] { width: 100%; }
 .pct { font-size: .72rem; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
 
 /* 파형 */
@@ -106,6 +129,8 @@ button.ghost.on { background: var(--accent); color: #fff; border-color: var(--ac
 .wavebox.mode-loop { cursor: ew-resize; }
 .wavehint { position: absolute; left: 9px; top: 6px; font-size: .72rem; color: var(--muted); pointer-events: none; }
 .wavezoom { position: absolute; right: 9px; top: 6px; font-size: .72rem; color: var(--muted); pointer-events: none; font-variant-numeric: tabular-nums; }
+.wavectl { position: absolute; right: 6px; bottom: 6px; display: flex; gap: 4px; }
+.wavectl button { width: 34px; height: 34px; padding: 0; font-size: 1rem; line-height: 1; background: color-mix(in srgb, var(--panel) 85%, transparent); backdrop-filter: blur(4px); }
 .modebar { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; margin-bottom: 9px; }
 
 /* 표 */
@@ -177,3 +202,79 @@ table.grid input, table.grid select { padding: 5px 7px; font-size: .82rem; }
 .together .ok { color: var(--ok); }
 .together .warn { color: #c98a00; }
 .together .err { color: var(--err); }
+
+/* ---------------- 터치(태블릿·폰) ----------------
+ * 손가락 기준: 누르는 곳은 40px 이상, 입력란 글자는 16px 이상(iOS 가 포커스할 때 확대하지 않게).
+ */
+@media (pointer: coarse) {
+  body { padding-bottom: 72px; }                      /* 미니 바 자리 */
+  .sub, .meta { font-size: .84rem; }
+  input[type=text], input[type=password], input[type=number], input:not([type]), select {
+    font-size: 16px; min-height: 44px; padding: 8px 12px; }
+  button { min-height: 44px; padding: 10px 18px; font-size: .95rem; }
+  button.ghost { min-height: 40px; padding: 8px 14px; font-size: .88rem; }
+  .tab { padding: 12px 18px; font-size: .95rem; min-height: 46px; }
+  .tabs { gap: 2px; }
+  .check { font-size: .95rem; min-height: 40px; }
+  .check input { width: 22px; height: 22px; }
+  .vertab { padding: 9px 16px; font-size: .9rem; min-height: 40px; }
+  .summary { padding: 14px 14px; gap: 12px; min-height: 52px; }
+  .job-title { font-size: .95rem; }
+  .chip { font-size: .8rem; }
+  .files a { padding: 11px 12px; font-size: .88rem; min-height: 44px; align-items: center; }
+  /* 믹서 */
+  .playbtn { width: 52px; height: 52px; font-size: 1.1rem; }
+  .time { font-size: .86rem; }
+  .sectbar { font-size: .9rem; min-height: 28px; }
+  .trk { grid-template-columns: 74px auto 1fr 46px; gap: 10px; padding: 4px 0; font-size: .9rem; }
+  .trk .tog button { padding: 0 12px; min-height: 40px; font-size: .85rem; }
+  .pct { font-size: .82rem; }
+  input[type=range] { height: 40px; }
+  input[type=range]::-webkit-slider-runnable-track { height: 6px; }
+  input[type=range]::-moz-range-track { height: 6px; }
+  input[type=range]::-webkit-slider-thumb { width: 26px; height: 26px; margin-top: -10px; }
+  input[type=range]::-moz-range-thumb { width: 26px; height: 26px; }
+  .bpmctl input { width: 76px; }
+  .bpmctl button, .nudge button { min-height: 40px; padding: 0 12px; font-size: .9rem; }
+  .nudge input { width: 76px; }
+  /* 파형 */
+  .wavebox canvas { height: clamp(150px, 26vh, 300px); }
+  .wavehint { font-size: .8rem; }
+  .wavectl button { width: 44px; height: 44px; font-size: 1.15rem; }
+  .modebar { gap: 6px; }
+  /* 표 */
+  table.grid { font-size: .9rem; }
+  table.grid th { font-size: .8rem; padding: 9px 10px; }
+  table.grid td { padding: 7px 8px; }
+  table.grid input, table.grid select { min-height: 40px; padding: 6px 9px; font-size: 16px; }
+  .sig select { width: 60px; }
+  .rowbtns { gap: 6px; }
+  .rowbtns button { min-height: 40px; padding: 0 12px; font-size: .85rem; }
+  .beatsel { gap: 5px; }
+  .beatsel button { width: 36px; height: 36px; font-size: .85rem; }
+  .plnum { width: 28px; font-size: .9rem; }
+  .score-nav button { min-height: 44px; padding: 0 22px; font-size: 1.3rem; }
+  .score-bar { min-height: 0; }
+  .minibar { padding-top: 10px; }
+  .minibar .playbtn { width: 48px; height: 48px; }
+  .together .member { padding: 6px 12px; }
+  .card .body button { min-height: 44px; }
+}
+
+/* 좁은 터치 화면: 탐색 슬라이더를 한 줄 통째로 (손가락으로 잡을 폭) */
+@media (pointer: coarse) and (max-width: 900px) {
+  .transport .seek { flex: 1 1 100%; order: 10; }
+  .transport .time { margin-left: auto; }
+}
+
+/* 1마디 1박: 시각 입력 + 버튼들. 입력이 100% 로 늘어나 버튼이 세로로 깨지지 않게 */
+.anchorrow { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.anchorrow input { width: 128px; flex: 0 0 auto; }
+.anchorrow button { white-space: nowrap; }
+@media (pointer: coarse) {
+  /* 구성표: 칸을 줄이지 말고 옆으로 밀어 보게 한다 (tblwrap 이 가로 스크롤) */
+  table.grid { min-width: 1040px; }
+  table.grid input[type=number] { min-width: 76px; }
+  .beatsel { flex-wrap: nowrap; }
+  .anchorrow input { width: 150px; }
+}

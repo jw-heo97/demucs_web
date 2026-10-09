@@ -4,6 +4,9 @@ import type { Bar } from "../types";
 
 export type WaveMode = "seek" | "tap" | "drag" | "loop";
 
+/** 손가락으로 쓰는 기기인가 — 마디선을 잡는 범위와 안내 문구가 달라진다 */
+const COARSE = typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)").matches;
+
 export interface LoopRegion {
   start: number;
   end: number;
@@ -66,6 +69,9 @@ export function Waveform({
     moved?: boolean;
   } | null>(null);
   const [hoverBar, setHoverBar] = useState<number | null>(null);
+  // 두 손가락 제스처(핀치 확대·이동). 손가락 둘의 위치와 그때의 보기 창을 기억한다.
+  const pointers = useRef(new Map<number, number>());
+  const pinch = useRef<{ x1: number; x2: number; vs0: number; ve0: number } | null>(null);
 
   const v = view ?? { start: 0, end: duration || 1 };
   const span = Math.max(1e-6, v.end - v.start);
@@ -96,10 +102,10 @@ export function Waveform({
     [v.start, span],
   );
 
-  /** 커서 근처(6px)의 마디선 */
+  /** 커서 근처(마우스 6px, 손가락 16px)의 마디선 */
   const barNear = useCallback(
     (t: number, w: number) => {
-      const tol = (6 / Math.max(1, w)) * span;
+      const tol = ((COARSE ? 16 : 6) / Math.max(1, w)) * span;
       let best: Bar | null = null;
       let bd = Infinity;
       for (const b of bars) {
@@ -272,6 +278,19 @@ export function Waveform({
     const w = box.getBoundingClientRect().width;
     const t = timeAt(e.clientX);
 
+    if (e.pointerType === "touch") {
+      pointers.current.set(e.pointerId, e.clientX);
+      if (pointers.current.size === 2) {
+        // 두 번째 손가락: 하던 끌기는 버리고 핀치로 전환한다 (이동 모드의 탭/끌기 판정도 취소)
+        const [x1, x2] = [...pointers.current.values()];
+        pinch.current = { x1, x2, vs0: v.start, ve0: v.end };
+        if (drag.current?.kind === "loop") onLoopChange(null);
+        drag.current = null;
+        return;
+      }
+      if (pointers.current.size > 2) return;
+    }
+
     if (mode === "tap") {
       onTapDownbeat(t);
       return;
@@ -316,6 +335,22 @@ export function Waveform({
     const w = box.getBoundingClientRect().width;
     const t = timeAt(e.clientX);
 
+    if (pinch.current && pointers.current.has(e.pointerId)) {
+      pointers.current.set(e.pointerId, e.clientX);
+      const [a, b] = [...pointers.current.values()];
+      const p = pinch.current;
+      const r = box.getBoundingClientRect();
+      const d0 = Math.max(8, Math.abs(p.x2 - p.x1));
+      const d1 = Math.max(8, Math.abs(b - a));
+      const sp0 = p.ve0 - p.vs0;
+      const ns = sp0 * (d0 / d1);                              // 손가락이 벌어지면 확대
+      // 처음 두 손가락의 가운데가 가리키던 시각이 지금 가운데에 오게 한다
+      const t0 = p.vs0 + (((p.x1 + p.x2) / 2 - r.left) / r.width) * sp0;
+      const fracNow = ((a + b) / 2 - r.left) / r.width;
+      clampView(t0 - ns * fracNow, t0 - ns * fracNow + ns);
+      return;
+    }
+
     if (!drag.current) {
       if (mode === "drag") {
         const b = barNear(t, w);
@@ -345,6 +380,19 @@ export function Waveform({
   };
 
   const endDrag = (e: React.PointerEvent) => {
+    if (e.pointerType === "touch") {
+      pointers.current.delete(e.pointerId);
+      if (pinch.current) {
+        // 한 손가락을 떼면 핀치 끝. 남은 손가락으로 새로 끌기 시작하지는 않는다 (튀지 않게)
+        if (pointers.current.size === 0) pinch.current = null;
+        try {
+          boxRef.current?.releasePointerCapture(e.pointerId);
+        } catch {
+          /* noop */
+        }
+        return;
+      }
+    }
     if (drag.current?.kind === "seek" && !drag.current.moved) {
       onSeek(snap(timeAt(e.clientX), e.shiftKey));
     }
@@ -426,12 +474,25 @@ export function Waveform({
         <div className="wavehint">
           {peaks ? `${stemLabel ?? ""} 파형` : "파형 불러오는 중…"}
           {peaks ? " · " : ""}
-          {mode === "seek" && "클릭 이동 · 끌면 좌우 이동 · 휠 확대"}
-          {mode === "tap" && "클릭한 자리에 마디를 고정합니다"}
+          {mode === "seek" && (COARSE ? "탭 이동 · 끌면 좌우 이동 · 두 손가락 확대" : "클릭 이동 · 끌면 좌우 이동 · 휠 확대")}
+          {mode === "tap" && (COARSE ? "탭한 자리에 마디를 고정합니다" : "클릭한 자리에 마디를 고정합니다")}
           {mode === "drag" && "마디선을 잡아 끌어 미세 조정"}
-          {mode === "loop" && "드래그로 반복 구간 · 클릭하면 해제"}
+          {mode === "loop" && (COARSE ? "끌어서 반복 구간 · 탭하면 해제" : "드래그로 반복 구간 · 클릭하면 해제")}
         </div>
         <div className="wavezoom">{zoomLabel}</div>
+        <div className="wavectl" onPointerDown={(e) => e.stopPropagation()}>
+          <button className="ghost" title="축소" aria-label="축소" onClick={() => clampView(currentTime - span, currentTime + span)}>
+            −
+          </button>
+          <button className="ghost" title="확대" aria-label="확대" onClick={() => clampView(currentTime - span / 3, currentTime + span / 3)}>
+            +
+          </button>
+          {view && (
+            <button className="ghost" title="전체 보기" aria-label="전체 보기" onClick={() => setView(null)}>
+              ⤢
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
