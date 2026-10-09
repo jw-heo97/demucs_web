@@ -160,6 +160,7 @@ def api_info():
         "max_duration_sec": MAX_DURATION_SEC,
         "max_title_len": MAX_TITLE_LEN,
         "queue": store.queue_depth(),
+        "build": _build_id(),
     }
 
 
@@ -702,12 +703,34 @@ def index():
 
 
 # React 앱은 클라이언트 라우팅을 쓰므로, 정적 파일이 아니면 index.html 을 돌려준다.
+#
+# 캐시: index.html 은 매번 서버에 확인(no-cache) — 예전엔 캐시 지시가 없어 Safari 가
+# 예전 페이지를 재사용했고, 배포해도 예전 화면 코드가 돌았다. 파일 이름에 해시가 붙은
+# assets/* 는 내용이 바뀌면 이름이 바뀌므로 오래 캐시해도 된다.
 class SPAStatic(StaticFiles):
     async def get_response(self, path, scope):
         try:
-            return await super().get_response(path, scope)
+            resp = await super().get_response(path, scope)
         except Exception:
-            return await super().get_response("index.html", scope)
+            resp = await super().get_response("index.html", scope)
+            path = "index.html"
+        if path.startswith("assets/"):
+            resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
+def _build_id() -> str:
+    """지금 배포된 화면의 빌드 id (index.html 이 부르는 해시 붙은 js 이름). 화면이 자기 것과 비교해
+    다르면 '새 버전이 있습니다' 를 띄운다."""
+    try:
+        import re as _re
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        m = _re.search(r"assets/(index-[\w-]+\.js)", html)
+        return m.group(1) if m else ""
+    except OSError:
+        return ""
 
 
 app.mount("/ui", SPAStatic(directory=STATIC_DIR, html=True), name="ui")

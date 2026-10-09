@@ -123,6 +123,7 @@ export const api = {
       samplerate: number;
       max_duration_sec: number;
       queue: number;
+      build?: string;
     }>("/api/info"),
 
   // --- 작업 ---

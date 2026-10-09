@@ -406,6 +406,9 @@ async def middleware(request: Request, call_next):
         resp = await call_next(request)
         status = resp.status_code
 
+    # API 응답은 캐시하지 않는다 (목록·송 맵·잠금 상태가 늘 최신이어야 한다). 파일·악보 그림은 제외
+    if path.startswith("/api/") and "/files/" not in path and "/score/pages/" not in path:
+        resp.headers.setdefault("Cache-Control", "no-store")
     if device and not reason:
         store.touch(device, who["ip"])
     _remember(who, device, method, path, status, bool(reason))
