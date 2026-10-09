@@ -278,9 +278,10 @@ export function ScorePanel({
 }
 
 /**
- * 연주용 악보 보기(플레이리스트): 페이지를 세로로 이어 붙이고, 지금 마디가 있는 쪽으로
- * 넘긴다. 쪽의 마지막 마디에 들어서면 다음 쪽으로 미리 넘긴다 — 넘기는 순간 첫 마디를
- * 이미 읽고 있어야 하기 때문이다. 한 쪽이 화면 높이에 들어오게 폭을 맞춘다.
+ * 연주용 악보 보기(플레이리스트): 한 쪽씩 보여주고 좌우로 넘긴다. 지금 마디가 있는
+ * 쪽으로 자동으로 넘기되, 쪽의 마지막 마디에 들어서면 다음 쪽으로 미리 넘긴다 —
+ * 넘기는 순간 첫 마디를 이미 읽고 있어야 하기 때문이다. 손으로 밀어 넘길 수도 있고,
+ * 그래도 연주가 다음 쪽으로 가면 다시 따라간다. 한 쪽이 화면 높이에 들어오게 폭을 맞춘다.
  */
 export function ScorePages({
   score,
@@ -310,45 +311,70 @@ export function ScorePages({
     return out;
   }, [score]);
 
-  const refs = useRef<(HTMLDivElement | null)[]>([]);
-  const shown = useRef<number | null>(null);
+  const track = useRef<HTMLDivElement | null>(null);
+  const [view, setView] = useState(page); // 지금 화면에 보이는 쪽 (손으로 넘기면 바뀐다)
+  const go = (p: number, smooth = true) => {
+    const el = track.current;
+    if (!el) return;
+    const q = Math.max(0, Math.min(score.pages.length - 1, p));
+    el.scrollTo({ left: q * el.clientWidth, behavior: smooth ? "smooth" : "auto" });
+  };
+  // 연주 위치의 쪽이 바뀌면 그 쪽으로
+  const followed = useRef<number | null>(null);
   useEffect(() => {
-    if (shown.current === page) return;
-    shown.current = page;
-    refs.current[page]?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [page]);
+    if (followed.current === page) return;
+    go(page, followed.current !== null);
+    followed.current = page;
+  });
+  // 손으로 밀었을 때 쪽 표시를 맞춘다
+  const onScroll = () => {
+    const el = track.current;
+    if (el && el.clientWidth) setView(Math.round(el.scrollLeft / el.clientWidth));
+  };
+  const ratio = Math.min(...score.pages.map((pg) => pg.w / pg.h));
 
   return (
-    <div className="score-pages">
-      {score.pages.map((pg, pi) => (
-        <div
-          key={pi}
-          ref={(el) => {
-            refs.current[pi] = el;
-          }}
-          className="score-page"
-          style={{ maxWidth: `calc((100vh - 16px) * ${pg.w / pg.h})` }}
+    <div className="score-slider" style={{ maxWidth: `calc((100vh - 60px) * ${ratio})` }}>
+      <div className="score-track" ref={track} onScroll={onScroll}>
+        {score.pages.map((pg, pi) => (
+          <div key={pi} className="score-page" style={{ aspectRatio: `${pg.w} / ${pg.h}` }}>
+            <img src={api.fileUrl(score.page_urls[pi])} alt={`${pi + 1}쪽`} draggable={false} />
+            {score.measures.map((ms, mi) =>
+              ms.page !== pi ? null : (
+                <button
+                  key={mi}
+                  type="button"
+                  className={`score-bar${mi === k ? " on" : ""}`}
+                  title={firstBarOf.has(mi) ? `${firstBarOf.get(mi)}마디로 이동` : undefined}
+                  onClick={() => firstBarOf.has(mi) && onPickBar?.(firstBarOf.get(mi)!)}
+                  style={{
+                    left: `${(ms.x0 / pg.w) * 100}%`,
+                    width: `${((ms.x1 - ms.x0) / pg.w) * 100}%`,
+                    top: `${((ms.top - (ms.bot - ms.top) * 0.9) / pg.h) * 100}%`,
+                    height: `${(((ms.bot - ms.top) * 2.8) / pg.h) * 100}%`,
+                  }}
+                />
+              ),
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="score-nav">
+        <button className="ghost" onClick={() => go(view - 1)} disabled={view <= 0} aria-label="이전 쪽">
+          ‹
+        </button>
+        <span className="meta">
+          {view + 1} / {score.pages.length}
+        </span>
+        <button
+          className="ghost"
+          onClick={() => go(view + 1)}
+          disabled={view >= score.pages.length - 1}
+          aria-label="다음 쪽"
         >
-          <img src={api.fileUrl(score.page_urls[pi])} alt={`${pi + 1}쪽`} />
-          {score.measures.map((ms, mi) =>
-            ms.page !== pi ? null : (
-              <button
-                key={mi}
-                type="button"
-                className={`score-bar${mi === k ? " on" : ""}`}
-                title={firstBarOf.has(mi) ? `${firstBarOf.get(mi)}마디로 이동` : undefined}
-                onClick={() => firstBarOf.has(mi) && onPickBar?.(firstBarOf.get(mi)!)}
-                style={{
-                  left: `${(ms.x0 / pg.w) * 100}%`,
-                  width: `${((ms.x1 - ms.x0) / pg.w) * 100}%`,
-                  top: `${((ms.top - (ms.bot - ms.top) * 0.9) / pg.h) * 100}%`,
-                  height: `${(((ms.bot - ms.top) * 2.8) / pg.h) * 100}%`,
-                }}
-              />
-            ),
-          )}
-        </div>
-      ))}
+          ›
+        </button>
+      </div>
     </div>
   );
 }
