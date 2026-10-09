@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Body, FastAPI, HTTPException, Request
+from fastapi import Body, FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -19,6 +19,7 @@ import access
 import downloader
 import scores
 import separator
+import together
 from config import CORS_ORIGINS, MAX_DURATION_SEC, METRONOME_DEFAULT, OUTPUT_DIR, WORK_DIR
 from downloader import DownloadError
 from jobs import FORMATS, MAX_TITLE_LEN, STEMS, store
@@ -127,6 +128,15 @@ def admin_device_delete(did: str):
     except KeyError:
         raise HTTPException(404, "그 기기를 찾을 수 없습니다.")
     return {"ok": True}
+
+
+@app.websocket("/api/together/{job_id}")
+async def together_ws(ws: WebSocket, job_id: str):
+    """함께 연습 — 같은 곡을 여러 기기에서 같은 순간에 재생한다 (app/together.py)."""
+    if store.get(job_id) is None:
+        await ws.close(code=4404)
+        return
+    await together.handle(ws, job_id)
 
 
 @app.get("/api/info")

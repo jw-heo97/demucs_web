@@ -283,19 +283,25 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     // 한 트랙이 실패해도(파일 404, 브라우저의 자동재생 차단) 나머지는 재생한다.
     // 예전엔 Promise.all 이 바로 던져서 playing 이 false 로 남았고, 그러면 ▶ 표시가
     // 그대로인 채 소리는 나고 드리프트 보정·구간 반복도 돌지 않았다.
-    const results = await Promise.allSettled(as.map((a) => a.play()));
-    const failed = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
-    if (failed.length === as.length) {
+    const ps = as.map((a) => a.play());
+    // 한 트랙이라도 시작되면 재생 중이다. 전부를 기다리면 아직 받는 중인 트랙 하나(느린 회선,
+    // 연결 수 한도) 때문에 ▶ 표시·반복·보정이 그 트랙이 올 때까지 멈춰 있었다.
+    try {
+      await Promise.any(ps);
+    } catch (e) {
       setPlaying(false);
-      const reason = failed[0].reason as { name?: string; message?: string } | undefined;
+      const reason = ((e as AggregateError).errors?.[0] ?? e) as { name?: string; message?: string };
       throw new Error(
         reason?.name === "NotAllowedError"
           ? "브라우저가 재생을 막았습니다. 재생 버튼을 다시 눌러 주세요."
           : `재생할 수 없습니다: ${reason?.message ?? String(reason)}`,
       );
     }
-    if (failed.length) console.warn("일부 트랙 재생 실패", failed.map((f) => f.reason));
     setPlaying(true);
+    void Promise.allSettled(ps).then((rs) => {
+      const failed = rs.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+      if (failed.length) console.warn("일부 트랙 재생 실패", failed.map((f) => f.reason));
+    });
   }, []);
 
   /**
