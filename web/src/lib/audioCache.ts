@@ -69,11 +69,14 @@ export async function download(
   if (hasCache()) {
     try {
       const cache = await caches.open(CACHE_NAME);
-      // 같은 파일의 예전 버전 정리 (주소에서 ?v= 만 다른 것)
-      const path = new URL(url, location.href).pathname;
+      // 같은 트랙의 예전 사본 정리 — ?v= 만 다른 것, 그리고 wav↔mp3 로 바뀐 것
+      // (재생용 mp3 가 새로 생기면 예전에 받아 둔 wav 는 더 안 쓴다)
+      const trackOf = (u: string) =>
+        new URL(u, location.href).pathname.replace(/\/(wav|mp3)\//i, "/").replace(/\.(wav|mp3)$/i, "");
+      const me = trackOf(url);
+      const href = new URL(url, location.href).href;
       for (const req of await cache.keys()) {
-        if (new URL(req.url).pathname === path && req.url !== new URL(url, location.href).href)
-          await cache.delete(req);
+        if (trackOf(req.url) === me && req.url !== href) await cache.delete(req);
       }
       await cache.put(
         url,
