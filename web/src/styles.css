@@ -278,3 +278,7 @@ table.grid input, table.grid select { padding: 5px 7px; font-size: .82rem; }
   .beatsel { flex-wrap: nowrap; }
   .anchorrow input { width: 150px; }
 }
+
+/* 보기 전용 기기 안내 띠 */
+.viewonly { margin: 10px 0 2px; padding: 8px 12px; border-radius: 8px; font-size: .84rem;
+  background: color-mix(in srgb, #c98a00 14%, transparent); color: #c98a00; border: 1px solid color-mix(in srgb, #c98a00 35%, transparent); }

@@ -4,6 +4,7 @@ import { useAudioEngine } from "../hooks/useAudioEngine";
 import { barsFromMap } from "../lib/songmap";
 import { fmtDate, fmtSize, clock } from "../lib/time";
 import type { Job } from "../types";
+import { useMe } from "../lib/me";
 import { Mixer } from "./Mixer";
 
 const LABEL: Record<string, string> = {
@@ -15,15 +16,31 @@ const LABEL: Record<string, string> = {
   error: "실패",
 };
 
-/** 작업 한 줄. 펼치면 진행 상황(진행 중) 또는 믹서·파일(완료)이 보인다. */
-export function JobRow({ job, open, onToggle, onChanged }: { job: Job; open: boolean; onToggle: () => void; onChanged: () => void }) {
+/**
+ * 작업 한 줄. 펼치면 진행 상황(진행 중) 또는 믹서·파일(완료)이 보인다.
+ * onOpen 을 주면(보관함) 줄을 누를 때 그리로 가고(송 맵), 믹서 대신 ⋯ 버튼으로 파일·삭제만 연다.
+ */
+export function JobRow({
+  job,
+  open,
+  onToggle,
+  onChanged,
+  onOpen,
+}: {
+  job: Job;
+  open: boolean;
+  onToggle: () => void;
+  onChanged: () => void;
+  onOpen?: () => void;
+}) {
+  const { canEdit } = useMe();
   const done = ["done", "error"].includes(job.status);
   const pct = Math.round((job.progress || 0) * 100);
   const name = job.folder ?? job.title_override ?? job.title ?? job.url;
   const size = (job.files ?? []).reduce((a, f) => a + (f.size || 0), 0);
   const [countIn, setCountIn] = useState(4);
 
-  const engine = useAudioEngine(open && job.status === "done" ? job : null);
+  const engine = useAudioEngine(open && job.status === "done" && !onOpen ? job : null);
   const bars = useMemo(
     () => barsFromMap((job.songmap as never) ?? null, job.duration),
     [job.songmap, job.duration],
@@ -31,8 +48,8 @@ export function JobRow({ job, open, onToggle, onChanged }: { job: Job; open: boo
 
   return (
     <div className={`job${open ? " open" : ""}`}>
-      <div className="summary" onClick={onToggle}>
-        <span className="caret">▶</span>
+      <div className="summary" onClick={onOpen ?? onToggle}>
+        {onOpen ? <span className="caret" style={{ transform: "none" }}>♪</span> : <span className="caret">▶</span>}
         <span className="job-title" title={name}>{name}</span>
         <span className="chips">
           {job.bpm ? <span className="chip">♩={job.bpm}</span> : null}
@@ -42,6 +59,19 @@ export function JobRow({ job, open, onToggle, onChanged }: { job: Job; open: boo
           <span className={`badge${job.status === "done" ? " done" : job.status === "error" ? " error" : ""}`}>
             {done ? LABEL[job.status] : `${pct}%`}
           </span>
+          {onOpen && (
+            <button
+              className={`ghost${open ? " on" : ""}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggle();
+              }}
+              title="파일 다운로드 · 삭제"
+              aria-label="파일 다운로드 · 삭제"
+            >
+              ⋯
+            </button>
+          )}
         </span>
       </div>
 
@@ -56,7 +86,7 @@ export function JobRow({ job, open, onToggle, onChanged }: { job: Job; open: boo
           )}
           {job.error && <div className="err" style={{ marginTop: 8 }}>{job.error}</div>}
 
-          {job.status === "done" && (
+          {job.status === "done" && !onOpen && (
             <Mixer
               engine={engine}
               bars={bars}
@@ -88,7 +118,7 @@ export function JobRow({ job, open, onToggle, onChanged }: { job: Job; open: boo
               </a>
             )}
             <span style={{ flex: 1 }} />
-            {done && (
+            {done && canEdit && (
               <button
                 className="ghost"
                 onClick={async () => {

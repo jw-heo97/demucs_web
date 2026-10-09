@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import type { Job } from "../types";
+import { useMe } from "../lib/me";
 import { JobRow } from "./JobRow";
 
 interface Props {
@@ -11,6 +12,7 @@ interface Props {
 }
 
 export function WorkTab({ jobs, onChanged, picked, onPickedUsed }: Props) {
+  const { canEdit } = useMe();
   const [url, setUrl] = useState("");
   const [title, setTitle] = useState("");
   const [format, setFormat] = useState("both");
@@ -115,7 +117,9 @@ export function WorkTab({ jobs, onChanged, picked, onPickedUsed }: Props) {
         </label>
 
         <div className="actions">
-          <button onClick={submit}>분리 시작</button>
+          <button onClick={submit} disabled={!canEdit} title={canEdit ? undefined : "보기 전용 기기에서는 분리를 등록할 수 없습니다"}>
+            분리 시작
+          </button>
           <span className="meta">{hint}</span>
         </div>
       </div>

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
+import { MeContext, type Me } from "./lib/me";
 import { AccessTab } from "./components/AccessTab";
 import { LibraryTab } from "./components/LibraryTab";
 import { PlaylistTab } from "./components/PlaylistTab";
@@ -11,12 +12,16 @@ import type { Job } from "./types";
 type TabKey = "work" | "library" | "playlist" | "map" | "tube" | "access";
 
 export function App() {
-  const [tab, setTab] = useState<TabKey>("work");
+  // 홈은 보관함 — 곡을 고르면 송 맵으로 간다
+  const [tab, setTab] = useState<TabKey>("library");
+  // 보관함에서 고른 곡 (n 은 같은 곡을 다시 골라도 송 맵이 알아채게)
+  const [mapPick, setMapPick] = useState<{ id: string; n: number } | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [info, setInfo] = useState<string>("");
   const [pick, setPick] = useState<{ videoId: string; title: string } | null>(null);
-  // 접속자 관리 탭은 내 Tailscale 계정 기기(와 이 PC)에서만 보인다 (서버도 /api/admin/* 를 막는다)
-  const [admin, setAdmin] = useState(false);
+  // 내 권한: 접속자 관리 탭(관리자)·수정 가능 여부. 서버가 정하고 여기선 보여 주기만 한다.
+  const [me, setMe] = useState<Me>({ admin: false, canEdit: true });
+  const admin = me.admin;
   const timer = useRef<number | undefined>(undefined);
 
   const refresh = useCallback(async () => {
@@ -45,15 +50,21 @@ export function App() {
       .catch(() => setInfo(""));
     api
       .me()
-      .then((d) => setAdmin(d.admin))
-      .catch(() => setAdmin(false));
+      .then((d) => setMe({ admin: d.admin, canEdit: d.can_edit !== false }))
+      .catch(() => setMe({ admin: false, canEdit: true }));
     return () => window.clearTimeout(timer.current);
   }, [refresh]);
 
   return (
+    <MeContext.Provider value={me}>
     <div className="wrap">
       <h1>Demucs Web</h1>
       <div className="sub">{info}</div>
+      {!me.canEdit && (
+        <div className="viewonly" title="이 기기는 보기 전용으로 등록되어 있습니다. 수정 권한은 관리자가 접속자 관리에서 줍니다.">
+          보기 전용 기기 — 재생·믹스 받기·다운로드만 할 수 있습니다
+        </div>
+      )}
 
       <div className="tabs" role="tablist">
         {(
@@ -81,9 +92,18 @@ export function App() {
       {tab === "work" && (
         <WorkTab jobs={jobs} onChanged={refresh} picked={pick} onPickedUsed={() => setPick(null)} />
       )}
-      {tab === "library" && <LibraryTab jobs={jobs} onChanged={refresh} />}
+      {tab === "library" && (
+        <LibraryTab
+          jobs={jobs}
+          onChanged={refresh}
+          onOpen={(id) => {
+            setMapPick((p) => ({ id, n: (p?.n ?? 0) + 1 }));
+            setTab("map");
+          }}
+        />
+      )}
       {tab === "playlist" && <PlaylistTab jobs={jobs} onChanged={refresh} />}
-      {tab === "map" && <SongMapTab jobs={jobs} onChanged={refresh} />}
+      {tab === "map" && <SongMapTab jobs={jobs} onChanged={refresh} pick={mapPick} />}
       {tab === "access" && admin && <AccessTab />}
       {tab === "tube" && (
         <SearchTab
@@ -94,5 +114,6 @@ export function App() {
         />
       )}
     </div>
+    </MeContext.Provider>
   );
 }

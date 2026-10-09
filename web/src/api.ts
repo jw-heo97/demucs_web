@@ -55,9 +55,13 @@ const patch = <T,>(p: string, body: unknown) =>
   request<T>(p, { method: "PATCH", body: JSON.stringify(body) });
 const del = <T,>(p: string) => request<T>(p, { method: "DELETE" });
 
+/** 등록 기기의 권한: 보기만(재생·다운로드) / 수정 가능 */
+export type AccessRole = "view" | "edit";
+
 export interface AccessDevice {
   id: string;
   name: string;
+  role: AccessRole;
   ua: string;
   created: number;
   last: number;
@@ -68,6 +72,7 @@ export interface AccessDevice {
 export interface AccessInvite {
   id: string;
   name: string;
+  role: AccessRole;
   created: number;
   expires: number;
 }
@@ -90,7 +95,8 @@ export interface AccessClient {
 
 export const api = {
   // --- 접속자 관리 ---
-  me: () => get<{ via: string; login: string; admin: boolean; device: string | null }>("/api/me"),
+  me: () =>
+    get<{ via: string; login: string; admin: boolean; can_edit: boolean; device: string | null }>("/api/me"),
   access: () =>
     get<{
       devices: AccessDevice[];
@@ -100,9 +106,10 @@ export const api = {
       invite_days: number;
     }>("/api/admin/access"),
   /** 1회용 초대 링크. url 은 이 응답에서만 받을 수 있다 (서버엔 해시만 남는다). */
-  createInvite: (name: string) => post<AccessInvite & { url: string }>("/api/admin/invites", { name }),
+  createInvite: (name: string, role: AccessRole) =>
+    post<AccessInvite & { url: string }>("/api/admin/invites", { name, role }),
   cancelInvite: (id: string) => del(`/api/admin/invites/${id}`),
-  updateDevice: (id: string, body: { name?: string; blocked?: boolean }) =>
+  updateDevice: (id: string, body: { name?: string; blocked?: boolean; role?: AccessRole }) =>
     patch<AccessDevice>(`/api/admin/devices/${id}`, body),
   deleteDevice: (id: string) => del(`/api/admin/devices/${id}`),
 
