@@ -271,6 +271,18 @@ export function useLiveMetronome(engine: Engine, bars: Bar[], subdiv: 1 | 2 = 1)
           return;
         }
       }
+      // 탐색 중(파형 클릭 등)에는 위치가 새 자리에 멈춘 채 버퍼링한다. 그동안 맞추면 매 tick
+      // 다시 맞추느라 박이 빠지므로, 멈춰 있을 때처럼 두었다가 소리가 다시 움직이면 새로 센다.
+      if (a.seeking) {
+        if (anchor || startPos !== null) {
+          anchor = null;
+          startPos = null;
+          cancelFuture();
+        }
+        lastSounded = -Infinity;
+        restPos = a.currentTime;
+        return;
+      }
       const actual = a.currentTime;
       const ev = eventsRef.current;
       if (measure && now >= measure.at) {
@@ -299,6 +311,9 @@ export function useLiveMetronome(engine: Engine, bars: Bar[], subdiv: 1 | 2 = 1)
         // 울렸으면 바로 울리고, 이미 울린 박은 다시 울리지 않는다.
         const drift = !!anchor && Math.abs(err) < 0.3 && anchor.rate === r;
         cancelFuture();
+        // 탐색(특히 뒤로 되감기)이면 예전에 울린 박 기록은 의미가 없다. 남겨 두면 다음
+        // 작은 재맞춤에서 "이미 울린 박 이후" 로 건너뛰어 원래 자리까지 클릭이 안 났다.
+        if (!drift) lastSounded = -Infinity;
         if (drift) from = Math.max(actual - 0.12, lastSounded + 0.005);
         anchor = { ctx: now, song: actual, rate: r };
         pred = actual;
