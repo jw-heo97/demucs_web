@@ -326,58 +326,28 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
     if (prepRef.current === id) tg.send({ t: "ready", id });
   }
 
-  // 재생 중 미세 보정 + 내 상태 알리기.
-  // 위치를 옮기면 소리가 끊기므로, 작은 어긋남은 재생 속도를 살짝(최대 ±5%, 음정 유지)
-  // 바꿔 1초 남짓에 걸쳐 따라잡고, 크게(0.3초 넘게) 벌어졌을 때만 위치를 옮긴다.
-  // 재생 위치 값은 몇 ms 씩 흔들리므로 최근 5번의 가운데 값으로 판단한다.
+  // 내 상태 알리기 (어긋남 표시만). 재생 중에는 보정하지 않는다 — 시작만 같은 순간에 맞추고
+  // 그다음은 각 기기가 그대로 재생한다. 예전엔 어긋나면 속도를 바꾸거나(±3~5%) 위치를 옮겨
+  // 따라잡았는데, 그게 오히려 소리를 널뛰게 해서 같이 듣기가 안 됐다.
   const { send, serverNow, state: roomRef } = tg;
   const rttRef = useRef(tg.rtt);
   rttRef.current = tg.rtt;
   useEffect(() => {
     if (!tg.joined) return;
-    let tick = 0;
     let win: number[] = [];
-    let nudged = false;
-    const setSpeed = (r: number) => engine.audios.current.forEach((a) => (a.playbackRate = r));
-    const restore = (s: RoomState | null) => {
-      if (nudged && s) setSpeed(s.rate);
-      nudged = false;
-    };
     const id = window.setInterval(() => {
       const s = roomRef.current;
       const a = engine.audios.current[0];
       if (!s) return;
       let med: number | null = null;
       if (s.playing && !s.prepare && a && !a.paused && !a.seeking && !countingRef.current) {
-        const expected = roomPosition(s, serverNow() + deviceMsRef.current);
-        win.push(a.currentTime - expected);
+        win.push(a.currentTime - roomPosition(s, serverNow() + deviceMsRef.current));
         if (win.length > 5) win.shift();
-        if (win.length >= 3) {
-          med = [...win].sort((x, y) => x - y)[Math.floor(win.length / 2)];
-          if (Math.abs(med) > 0.3) {
-            restore(s);
-            engine.seek(expected);
-            win = [];
-          } else if (Math.abs(med) > 0.015) {
-            // 앞서 있으면(+) 느리게, 뒤처지면(-) 빠르게. 1초에 어긋남만큼 따라잡는 정도.
-            // 15ms 아래는 건드리지 않는다 — 몇 ms 차이까지 속도로 맞추려 하면 속도를 계속 바꿔
-            // 오히려 ±15ms 로 흔들렸다(실측). 예약 시작만으로 기기 안에서는 ±7ms 안에 들어간다.
-            const k = Math.max(-0.03, Math.min(0.03, -med / 1.0));
-            setSpeed(s.rate * (1 + k));
-            nudged = true;
-          } else restore(s);
-        }
-      } else {
-        win = [];
-        restore(s);
-      }
-      if (++tick % 10 === 0)
-        send({ t: "report", err: med == null ? null : Math.round(med * 1000), rtt: rttRef.current, ready: !!a && a.readyState >= 3 });
-    }, 200);
-    return () => {
-      window.clearInterval(id);
-      restore(roomRef.current);
-    };
+        if (win.length >= 3) med = [...win].sort((x, y) => x - y)[Math.floor(win.length / 2)];
+      } else win = [];
+      send({ t: "report", err: med == null ? null : Math.round(med * 1000), rtt: rttRef.current, ready: !!a && a.readyState >= 3 });
+    }, 2000);
+    return () => window.clearInterval(id);
     // tg 는 매 렌더 새 객체라 의존성에 두면 타이머가 계속 다시 걸린다 — 쓰는 것은 모두 안정적이다
   }, [tg.joined, engine.audios, send, serverNow, roomRef]);
 
