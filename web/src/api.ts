@@ -3,7 +3,7 @@
  *
  * 인증은 없다 — 접근 제어는 Tailscale 이 맡는다 (README 참고).
  */
-import type { Job, MapPayload, SearchItem, SongMap } from "./types";
+import type { Job, MapPayload, Playlist, ScoreData, SearchItem, SongMap } from "./types";
 
 /** 앱에서는 다른 오리진의 서버를 봐야 하므로 베이스 URL 을 바꿀 수 있게 한다. */
 export const BASE =
@@ -122,12 +122,37 @@ export const api = {
   // --- 믹스다운 ---
   mixdown: (
     id: string,
-    body: { stems: string[]; gains?: Record<string, number>; format?: string; count_in?: number },
+    body: {
+      stems: string[];
+      gains?: Record<string, number>;
+      format?: string;
+      count_in?: number;
+      /** 1 = 4비트, 2 = 8비트(메트로놈 박 사이 클릭 포함) */
+      subdiv?: 1 | 2;
+    },
   ) =>
     post<{ file: { name: string; url: string; size: number }; normalized: boolean; count_in: number }>(
       `/api/jobs/${id}/mixdown`,
       body,
     ),
+
+  // --- 악보 ---
+  score: (id: string) => get<ScoreData>(`/api/jobs/${id}/score`),
+  uploadScore: (id: string, pdf: Blob) =>
+    request<ScoreData>(`/api/jobs/${id}/score`, {
+      method: "PUT",
+      body: pdf,
+      headers: { "Content-Type": "application/pdf" },
+    }),
+  deleteScore: (id: string) => del(`/api/jobs/${id}/score`),
+
+  // --- 플레이리스트 ---
+  playlists: () => get<{ playlists: Playlist[] }>("/api/playlists"),
+  createPlaylist: (name: string, items: string[] = []) =>
+    post<Playlist>("/api/playlists", { name, items }),
+  updatePlaylist: (id: string, body: { name?: string; items?: string[] }) =>
+    put<Playlist>(`/api/playlists/${id}`, body),
+  deletePlaylist: (id: string) => del(`/api/playlists/${id}`),
 
   fileUrl: (u: string, download = false) => BASE + u + (download ? "?download=1" : ""),
 };

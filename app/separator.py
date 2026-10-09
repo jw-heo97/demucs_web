@@ -275,6 +275,26 @@ def render_metronome(beat_times: np.ndarray, sample_rate: int, n_samples: int,
     return np.stack([mono, mono]).astype(np.float32)
 
 
+def render_offbeats(times: np.ndarray, sample_rate: int, n_samples: int,
+                    level: float = 0.3) -> np.ndarray:
+    """박 사이(8비트의 '앤')에만 클릭을 찍은 (2, n) 트랙. 찍을 곳이 없으면 무음.
+
+    박과 헷갈리지 않게 더 높고(2200Hz) 짧고 작게 찍는다 — 브라우저의 실시간
+    메트로놈(useLiveMetronome)과 같은 소리.
+    """
+    import librosa
+
+    times = np.asarray(times, dtype=np.float64)
+    times = times[(times >= 0) & (times * sample_rate < n_samples)]
+    if times.size == 0 or n_samples <= 0:
+        return np.zeros((2, max(0, n_samples)), dtype=np.float32)
+    mono = librosa.clicks(times=times, sr=sample_rate, length=n_samples,
+                          click_freq=2200.0, click_duration=0.03)
+    peak = float(np.max(np.abs(mono))) or 1.0
+    mono = mono / peak * float(level)
+    return np.stack([mono, mono]).astype(np.float32)
+
+
 # --------------------------------------------------------------------------
 # 곡 구성표(song map)
 # --------------------------------------------------------------------------

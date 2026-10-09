@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { colorOf, sectionColors } from "../lib/sectionColors";
 import type { Bar } from "../types";
 
 export type WaveMode = "seek" | "tap" | "drag" | "loop";
@@ -149,14 +150,23 @@ export function Waveform({
       g.globalAlpha = 1;
     }
 
-    // 파형
+    // 파형 — 구간마다 색을 달리한다 (같은 이름은 같은 색). 이름 없는 곳은 회색.
+    const colors = sectionColors(bars);
     if (peaks && peaks.length && duration) {
       const n = peaks.length;
       g.fillStyle = cMuted;
-      g.globalAlpha = 0.55;
+      g.globalAlpha = 0.6;
+      let bi = -1; // 지금 열이 속한 마디 (x 가 커지면 앞으로만 간다)
+      let fill = cMuted;
       for (let x = 0; x < w; x++) {
         const t0 = v.start + (x / w) * span;
         const t1 = v.start + ((x + 1) / w) * span;
+        while (bi + 1 < bars.length && bars[bi + 1].start <= t0) bi++;
+        const c = (bi >= 0 && colorOf(colors, bars[bi].name)) || cMuted;
+        if (c !== fill) {
+          fill = c;
+          g.fillStyle = c;
+        }
         let i0 = Math.max(0, Math.min(n - 1, Math.floor((t0 / duration) * n)));
         const i1 = Math.max(i0 + 1, Math.min(n, Math.ceil((t1 / duration) * n)));
         let val = 0;
@@ -207,7 +217,7 @@ export function Waveform({
         const x = xOf(b.start, w);
         lastName = b.name;
         if (x < -80 || x > w + 80) continue;
-        g.fillStyle = cAccent;
+        g.fillStyle = colorOf(colors, b.name) ?? cAccent;
         g.globalAlpha = 0.95;
         g.fillText(b.name, x + 4, h - 6);
         g.globalAlpha = 1;

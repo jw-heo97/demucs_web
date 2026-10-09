@@ -1,11 +1,46 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { useAudioEngine } from "../hooks/useAudioEngine";
+import { useLiveMetronome, useSubdiv } from "../hooks/useLiveMetronome";
+import { useSectionVoice } from "../hooks/useSectionVoice";
+import { audioCtx, scheduleClick } from "../lib/audioCtx";
 import type { Bar } from "../types";
 import { barAtTime, stepOf } from "../lib/songmap";
 import { clock } from "../lib/time";
 
 type Engine = ReturnType<typeof useAudioEngine>;
+
+type Region = { start: number; end: number };
+
+/** 바깥(송 맵 구성표)에서 '여기서부터 재생'을 시킬 때 쓴다. 클릭 처리 안에서 바로 불러야 iOS 가 재생을 허락한다. */
+export interface MixerControl {
+  /** pos 에서 예비박부터 재생한다(재생 중이었으면 멈추고 다시). loop 를 주면 그 반복 시작에서. */
+  playFrom: (pos: number, loop?: Region | null) => void;
+}
+
+/**
+ * play() 를 부른 뒤 소리가 실제로 나기까지 걸리는 시간(초). 예비박 뒤 음악을 이만큼
+ * 미리 시작해야 1마디 1박이 예비박 박자 그대로 들어온다. 기기마다 달라서 재생할
+ * 때마다 재서 고쳐 가고 브라우저에 기억한다.
+ */
+const LS_LATENCY = "audio.startLatency";
+let startLatency = (() => {
+  try {
+    const v = Number(localStorage.getItem(LS_LATENCY));
+    return Number.isFinite(v) && v > 0 && v < 0.4 ? v : 0.06;
+  } catch {
+    return 0.06;
+  }
+})();
+function learnLatency(lag: number) {
+  // 한 번에 다 믿지 않는다 — 측정값도 몇 ms 씩 흔들린다
+  startLatency = Math.min(0.4, Math.max(0, startLatency + lag * 0.7));
+  try {
+    localStorage.setItem(LS_LATENCY, startLatency.toFixed(4));
+  } catch {
+    /* 기억만 못 할 뿐 */
+  }
+}
 
 interface Props {
   engine: Engine;
@@ -14,14 +49,27 @@ interface Props {
   jobId: string;
   /** 믹스 파일이 생기면 작업 목록을 다시 받아오게 한다 */
   onChanged?: () => void;
-  /** 속도 조절 노출 여부 (송 맵에서만) */
+  /** BPM 으로 재생 속도를 고르는 칸을 보일지 */
   showRate?: boolean;
+  /**
+   * 재생 버튼 옆 '구간 반복' (송 맵에서만). on 이면 누를 때 해제한다.
+   * region 이 있으면 재생을 누를 때 반복 시작으로 가서 예비박부터 시작한다.
+   */
+  loopButton?: {
+    on: boolean;
+    title: string;
+    onToggle: () => void;
+    region: Region | null;
+  };
+  control?: { current: MixerControl | null };
   countIn: number;
   onCountInChange: (n: number) => void;
+  /**
+   * 값이 바뀌면 이 곡을 재생 버튼을 누른 것처럼 시작한다(예비박 포함).
+   * 플레이리스트가 다음 곡으로 넘어갈 때 쓴다.
+   */
+  autoStart?: number;
 }
-
-let sharedCtx: AudioContext | null = null;
-const audioCtx = () => (sharedCtx ??= new AudioContext());
 
 /**
  * 트랜스포트 + 트랙 볼륨/음소거/솔로 + 예비박.
@@ -29,13 +77,19 @@ const audioCtx = () => (sharedCtx ??= new AudioContext());
  * 예비박은 파일에 굽지 않고 Web Audio 로 즉석에서 만든다. 파일에 넣으려면 모든 스템 앞에
  * 같은 길이의 무음을 붙여 전부 재인코딩해야 하고, 곡 중간부터 연습할 때는 쓸 수 없다.
  */
-export function Mixer({ engine, bars, jobId, onChanged, showRate, countIn, onCountInChange }: Props) {
+export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, control, countIn, onCountInChange, autoStart }: Props) {
   const { tracks, playing, time, duration, rate, muted, solo, vol } = engine;
   const [counting, setCounting] = useState(0);
   const [hint, setHint] = useState("");
   const [note, setNote] = useState("");
   const [mixing, setMixing] = useState(false);
   const timers = useRef<{ t?: number; i?: number; oscs: OscillatorNode[] }>({ oscs: [] });
+  // 메트로놈 트랙은 파일이 아니라 송 맵에서 즉석으로 울린다 (편집이 바로 들린다)
+  const [subdiv, setSubdiv] = useSubdiv();
+  const hasMetronome = tracks.some((t) => t.virtual);
+  const metro = useLiveMetronome(engine, bars, subdiv);
+  // 구간 이름을 한 마디 전에 읽어 준다 (음성 합성)
+  const voice = useSectionVoice(engine, bars);
 
   /**
    * 지금 들리는 트랙(음소거·솔로·볼륨 반영)만 서버에서 합쳐 한 파일로 받는다.
@@ -54,7 +108,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, countIn, onCou
     setHint("");
     setNote("믹스 만드는 중…");
     try {
-      const r = await api.mixdown(jobId, { stems, gains, format: "mp3", count_in: countIn });
+      const r = await api.mixdown(jobId, { stems, gains, format: "mp3", count_in: countIn, subdiv });
       if (!r.file) throw new Error("믹스 파일을 만들지 못했습니다.");
       const a = document.createElement("a");
       a.href = api.fileUrl(r.file.url, true);
@@ -87,6 +141,24 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, countIn, onCou
   }
 
   useEffect(() => () => cancelCount(), []);
+  // 곡이 바뀌면 원곡 속도로 (목표 BPM 은 곡마다 다르다)
+  const setRate = engine.setRate;
+  useEffect(() => {
+    if (showRate) setRate(1);
+  }, [jobId, showRate, setRate]);
+
+  // 곡이 바뀌면 진행 중이던 예비박을 버린다 (안 그러면 타이머가 새 곡을 엉뚱한 위치에서 튼다)
+  useEffect(() => cancelCount(), [jobId]);
+
+  // 다음 곡 자동 시작. 새 곡의 트랙이 실제로 올라온 뒤에만 누른다.
+  const startedFor = useRef(autoStart);
+  useEffect(() => {
+    if (autoStart === undefined || autoStart === startedFor.current) return;
+    if (engine.loadedId !== jobId || !tracks.length) return;
+    startedFor.current = autoStart;
+    void handlePlay({ force: true });
+    // handlePlay 는 매 렌더 새로 만들어지지만 여기서는 시작 신호만 보면 된다
+  }, [autoStart, engine.loadedId, jobId, tracks]);
 
   // 스페이스바 = 재생/일시정지. 입력칸에 있을 때는 원래 동작(공백 입력)을 살린다.
   useEffect(() => {
@@ -113,25 +185,45 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, countIn, onCou
       }
     });
     timers.current = { oscs: [] };
+    metro.cancel();
     setCounting(0);
   }
 
   const cur = barAtTime(bars, time);
   const next = cur ? bars.find((b) => b.bar === cur.bar + 1) : bars[0];
 
-  async function handlePlay() {
+  if (control) control.current = { playFrom: (pos, loop) => void handlePlay({ force: true, from: pos, loop }) };
+
+  /**
+   * force: 재생 중이어도 멈추지 않고 처음부터 다시 시작하며, 위치와 상관없이 예비박을 넣는다.
+   * from/loop: 시작 위치와 반복 구간 (안 주면 지금 위치·지금 반복 구간).
+   */
+  async function handlePlay(opts: { force?: boolean; from?: number; loop?: Region | null } = {}) {
+    // iOS 는 사용자 제스처 안에서만 AudioContext 를 깨울 수 있다. 메트로놈·예비박 모두 여기에 의존한다.
+    try {
+      void audioCtx().resume();
+    } catch {
+      /* Web Audio 미지원 — 음악만 재생된다 */
+    }
     if (playing || counting) {
       cancelCount();
       engine.pause();
-      return;
+      if (!opts.force) return;
     }
-    const pos = time;
-    // 예비박은 곡 처음부터 재생할 때만. 중간에서 매번 붙으면 방해가 된다.
-    if (!countIn || pos > 0.25) {
+    voice.prime();
+    let pos = opts.from ?? time;
+    // 구간 반복 중이면 반복 시작(구간 2마디 전)으로 가서 예비박부터 들어간다.
+    // 반복이 한 바퀴 돌아 처음으로 돌아갈 때는 예비박 없이 바로 이어진다.
+    const lp = opts.loop !== undefined ? opts.loop : loopButton?.region ?? null;
+    if (lp) pos = lp.start;
+    if (lp || opts.from !== undefined) engine.seek(pos);
+    // 예비박은 곡 처음·반복 시작·구성표에서 고른 구간에서 시작할 때만.
+    // 중간에서 이어 들을 때마다 붙으면 방해가 된다.
+    if (!countIn || (pos > 0.25 && !lp && !opts.force)) {
       await startPlay();
       return;
     }
-    const b = cur ?? bars[0];
+    const b = barAtTime(bars, pos) ?? bars[0];
     const stepRaw = b ? stepOf(b.bpm, b.beat_unit) : 0.5;
     const step = stepRaw / (rate || 1);
     const bpb = b?.beats_per_bar ?? 4;
@@ -160,12 +252,21 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, countIn, onCou
     const toBeat = (nextBeat - pos) / (rate || 1); // 재생 속도를 반영한 실제 시간
     const tBeat = ctx.currentTime + margin + Math.max(countIn * step, toBeat);
 
+    // 곧 시작하는 구간(곡 맨 앞 Intro 등)은 예비박 동안 미리 읽는다
+    voice.cueAt(pos, Math.max(countIn * stepRaw, nextBeat - pos) + 0.1);
+
     timers.current.oscs = [];
     for (let k = countIn; k >= 1; k--) {
-      click(ctx, tBeat - k * step, (countIn - k) % bpb === 0 ? 1500 : 1000, timers.current.oscs);
+      timers.current.oscs.push(
+        scheduleClick(ctx, tBeat - k * step, (countIn - k) % bpb === 0 ? 1500 : 1000, ctx.destination),
+      );
     }
 
     const startAt = tBeat - toBeat; // >= ctx.currentTime + margin
+    // 메트로놈이 예비박과 같은 시계로 이어 세게 한다 — 마지막 예비박과 1마디 1박 사이가 정확히 한 박
+    metro.expect(startAt, pos, learnLatency);
+    // 음악은 시작 지연만큼 미리 재생을 건다 (그래야 startAt 에 실제로 소리가 난다)
+    const playAt = startAt - startLatency;
     setCounting(countIn);
     timers.current.i = window.setInterval(() => {
       const left = Math.ceil((tBeat - ctx.currentTime) / step);
@@ -175,11 +276,12 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, countIn, onCou
       async () => {
         if (timers.current.i) clearInterval(timers.current.i);
         setCounting(0);
-        const late = Math.max(0, ctx.currentTime - startAt) * (rate || 1);
+        // 타이머가 늦게 깼으면 그만큼 앞에서 시작해 박을 맞춘다
+        const late = Math.max(0, ctx.currentTime - playAt) * (rate || 1);
         engine.seek(pos + late);
         await startPlay();
       },
-      Math.max(0, (startAt - ctx.currentTime) * 1000),
+      Math.max(0, (playAt - ctx.currentTime) * 1000),
     );
   }
 
@@ -188,9 +290,18 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, countIn, onCou
   return (
     <div className="mixer">
       <div className="transport">
-        <button className="playbtn" onClick={handlePlay}>
+        <button className="playbtn" onClick={() => void handlePlay()}>
           {counting ? counting : playing ? "❚❚" : "▶"}
         </button>
+        {loopButton && (
+          <button
+            className={`ghost${loopButton.on ? " on" : ""}`}
+            onClick={loopButton.onToggle}
+            title={loopButton.title}
+          >
+            구간 반복
+          </button>
+        )}
         <input
           className="seek"
           type="range"
@@ -202,22 +313,9 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, countIn, onCou
         <span className="time">
           {clock(time)} / {clock(duration)}
         </span>
-        {showRate && (
-          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span className="meta">속도</span>
-            <select
-              style={{ width: 82 }}
-              value={String(rate)}
-              onChange={(e) => engine.setRate(Number(e.target.value))}
-            >
-              {[0.5, 0.6, 0.75, 0.85, 1, 1.15, 1.25].map((r) => (
-                <option key={r} value={r}>
-                  {r}×
-                </option>
-              ))}
-            </select>
-          </span>
-        )}
+        {showRate && bars[0]?.bpm ? (
+          <BpmControl base={bars[0].bpm} rate={rate} onRate={engine.setRate} />
+        ) : null}
         <select
           style={{ width: 112 }}
           value={String(countIn)}
@@ -228,6 +326,26 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, countIn, onCou
           <option value="4">예비박 4박</option>
           <option value="8">예비박 8박</option>
         </select>
+        {voice.available && (
+          <button
+            className={`ghost${voice.enabled ? " on" : ""}`}
+            onClick={() => voice.setEnabled(!voice.enabled)}
+            title="송 맵의 구간 이름을 그 구간이 오기 한 마디 전에 소리 내어 읽습니다."
+          >
+            구간 안내
+          </button>
+        )}
+        {hasMetronome && (
+          <select
+            style={{ width: 104 }}
+            value={String(subdiv)}
+            onChange={(e) => setSubdiv(Number(e.target.value) as 1 | 2)}
+            title="메트로놈 클릭 간격. 8비트는 박 사이에 작은 클릭이 들어갑니다. 재생 중에도 바로 바뀝니다."
+          >
+            <option value="1">클릭 4비트</option>
+            <option value="2">클릭 8비트</option>
+          </select>
+        )}
         <button
           className="ghost"
           onClick={downloadMix}
@@ -305,16 +423,48 @@ function nextBeatAfter(bars: Bar[], pos: number) {
   return pos;
 }
 
-function click(ctx: AudioContext, when: number, freq: number, sink: OscillatorNode[]) {
-  const osc = ctx.createOscillator();
-  const g = ctx.createGain();
-  osc.type = "sine";
-  osc.frequency.value = freq;
-  g.gain.setValueAtTime(0.0001, when);
-  g.gain.exponentialRampToValueAtTime(0.35, when + 0.003);
-  g.gain.exponentialRampToValueAtTime(0.0001, when + 0.07);
-  osc.connect(g).connect(ctx.destination);
-  osc.start(when);
-  osc.stop(when + 0.09);
-  sink.push(osc);
+/** 재생 속도가 이 범위를 벗어나면 음질이 크게 나빠진다 */
+const MIN_RATE = 0.5;
+const MAX_RATE = 1.5;
+
+/**
+ * 재생 속도를 BPM 으로 고른다. 연습은 120 → 130 → 140 처럼 템포로 올려가므로 배수보다
+ * 목표 BPM 이 자연스럽다. 속도 = 목표 / 원곡(송 맵 기본 BPM). 음정은 유지된다.
+ */
+function BpmControl({ base, rate, onRate }: { base: number; rate: number; onRate: (r: number) => void }) {
+  const cur = Math.round(base * rate);
+  const [draft, setDraft] = useState(String(cur));
+  useEffect(() => setDraft(String(cur)), [cur]);
+  const apply = (bpm: number) => {
+    if (!Number.isFinite(bpm) || bpm <= 0) return setDraft(String(cur));
+    const r = Math.min(MAX_RATE, Math.max(MIN_RATE, bpm / base));
+    onRate(Math.abs(r - 1) < 0.002 ? 1 : r);
+    setDraft(String(Math.round(base * r)));
+  };
+  // 5 단위로 맞춰 올리고 내린다 (143 에서 +5 → 145)
+  const step = (d: number) => apply(d > 0 ? Math.floor(cur / 5) * 5 + 5 : Math.ceil(cur / 5) * 5 - 5);
+  const off = Math.abs(rate - 1) >= 0.002;
+  return (
+    <span className="bpmctl" title={`원곡 ♩=${Math.round(base * 100) / 100} 기준. 음정은 그대로입니다.`}>
+      <span className="meta">♩</span>
+      <button className="ghost" onClick={() => step(-1)} disabled={rate <= MIN_RATE + 1e-3}>
+        −5
+      </button>
+      <input
+        type="number"
+        inputMode="numeric"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => apply(Number(draft))}
+        onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+      />
+      <button className="ghost" onClick={() => step(1)} disabled={rate >= MAX_RATE - 1e-3}>
+        +5
+      </button>
+      <button className={`ghost${off ? "" : " on"}`} onClick={() => onRate(1)} title="원곡 속도로">
+        원곡
+      </button>
+      {off && <span className="meta">{Math.round(rate * 100)}%</span>}
+    </span>
+  );
 }

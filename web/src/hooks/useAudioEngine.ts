@@ -9,6 +9,12 @@ export interface Track {
   url: string;
   rel: string;
   mtime: number;
+  /**
+   * 오디오 파일이 없는 트랙. 메트로놈은 파일을 재생하지 않고 useLiveMetronome 이 송 맵에서
+   * 즉석으로 클릭을 만든다 — 맵을 고칠 때마다 파일을 다시 굽지 않아도 바로 들린다.
+   * 음소거·솔로·볼륨은 다른 트랙과 똑같이 엔진이 들고 있다. 항상 목록 맨 끝에 둔다.
+   */
+  virtual?: boolean;
 }
 
 const LABEL: Record<string, string> = {
@@ -28,21 +34,26 @@ export function tracksOf(job: Job): Track[] {
   const best = stemFilesOf(job);
   // 원본은 믹서에 올리지 않는다 — 스템과 겹쳐 소리가 두 배가 된다 (파형 표시용으로만 쓴다)
   const plain = ["drums", "bass", "vocals", "other"].filter((k) => best.has(k));
-  let keys =
+  const keys =
     plain.length >= 2 ? plain : [...best.keys()].filter((k) => k !== "click" && k !== "original");
-  if (best.has("click")) keys = [...keys, "click"];
-  return keys.map((k) => {
+  const tracks: Track[] = keys.map((k) => {
     const f = best.get(k)!;
     return {
       key: k,
       label: LABEL[k] ?? k,
-      // 메트로놈은 송 맵을 저장할 때마다 같은 이름으로 다시 구워진다. URL 이 같으면
-      // <audio> 가 이미 받아둔 옛 데이터를 그대로 들려주므로 수정 시각을 붙여 구별한다.
+      // 같은 이름으로 다시 구워진 파일(예전 메트로놈처럼)을 <audio> 가 옛 데이터로
+      // 들려주지 않게 수정 시각을 붙여 구별한다.
       url: `${BASE}${f.url}?v=${f.mtime ?? 0}`,
       rel: f.rel,
       mtime: f.mtime ?? 0,
     };
   });
+  // 메트로놈은 송 맵이 있으면 언제나 쓸 수 있다 (클릭 파일은 다운로드·믹스 받기용)
+  const hasMap = !!(job.songmap as { ranges?: unknown[] } | undefined)?.ranges?.length;
+  if (hasMap || best.has("click")) {
+    tracks.push({ key: "click", label: LABEL.click, url: "", rel: "", mtime: 0, virtual: true });
+  }
+  return tracks;
 }
 
 /**
@@ -55,7 +66,18 @@ const liveEngines = new Set<{ stop: () => void }>();
  * 첫 트랙을 마스터 시계로 삼고, 0.15초 이상 벌어진 트랙만 맞춘다
  * (매 프레임 맞추면 오히려 소리가 튄다).
  */
-export function useAudioEngine(job: Job | null) {
+export interface EngineOptions {
+  /** 곡 끝까지 재생됐을 때 (플레이리스트의 자동 다음 곡) */
+  onEnded?: () => void;
+  /**
+   * 곡이 바뀌어도 음소거·솔로·볼륨을 트랙 이름(드럼, 베이스…)별로 이어간다.
+   * 플레이리스트에서 드럼을 끄고 연습하는데 곡마다 다시 끄지 않아도 되게.
+   * 같은 곡의 파일만 바뀐 경우(메트로놈 재생성)에는 이 값과 상관없이 항상 이어간다.
+   */
+  carryMix?: boolean;
+}
+
+export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
   /**
    * 작업 목록은 1~8초마다 폴링돼 **매번 새 객체**로 온다.
    * `job` 을 그대로 의존성에 두면 폴링할 때마다 오디오 요소를 파괴하고 다시 만들어
@@ -71,6 +93,9 @@ export function useAudioEngine(job: Job | null) {
   const prevJobId = useRef<string | null>(null);
   const lastTime = useRef(0);
   const [tracks, setTracks] = useState<Track[]>([]);
+  // tracks 가 어느 곡의 것인지. 곡을 바꾼 직후 한 번은 이전 곡 트랙이 남아 있어서,
+  // 자동 재생이 엉뚱한 곡을 틀지 않도록 확인하는 데 쓴다.
+  const [loadedId, setLoadedId] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -78,6 +103,13 @@ export function useAudioEngine(job: Job | null) {
   const [muted, setMuted] = useState<boolean[]>([]);
   const [solo, setSolo] = useState<boolean[]>([]);
   const [vol, setVol] = useState<number[]>([]);
+  const onEndedRef = useRef(opts.onEnded);
+  onEndedRef.current = opts.onEnded;
+  const carryRef = useRef(!!opts.carryMix);
+  carryRef.current = !!opts.carryMix;
+  // 트랙이 바뀌는 순간 직전 믹스 상태를 읽기 위한 사본
+  const mixRef = useRef({ tracks, muted, solo, vol });
+  mixRef.current = { tracks, muted, solo, vol };
   const audiosRef = useRef<HTMLAudioElement[]>([]);
   const selfRef = useRef<{ stop: () => void }>({ stop: () => {} });
   selfRef.current.stop = () => {
@@ -103,7 +135,15 @@ export function useAudioEngine(job: Job | null) {
     const j = jobRef.current;
     // 같은 곡인데 파일만 바뀐 경우(송 맵 저장 → 메트로놈 재생성)에는 듣던 자리를 유지한다.
     // 곡이 바뀌면 처음부터.
-    const resumeAt = j && prevJobId.current === j.id ? lastTime.current : 0;
+    const sameJob = !!j && prevJobId.current === j.id;
+    const resumeAt = sameJob ? lastTime.current : 0;
+    const prevMix = new Map<string, { muted: boolean; solo: boolean; vol: number }>();
+    if (sameJob || carryRef.current) {
+      const m = mixRef.current;
+      m.tracks.forEach((t, i) =>
+        prevMix.set(t.key, { muted: !!m.muted[i], solo: !!m.solo[i], vol: m.vol[i] ?? 1 }),
+      );
+    }
     prevJobId.current = j?.id ?? null;
     audiosRef.current.forEach((a) => {
       a.pause();
@@ -116,14 +156,17 @@ export function useAudioEngine(job: Job | null) {
 
     const ts = j ? tracksOf(j) : [];
     setTracks(ts);
-    setMuted(ts.map(() => false));
-    setSolo(ts.map(() => false));
-    setVol(ts.map(() => 1));
-    if (!ts.length) {
+    setLoadedId(j?.id ?? null);
+    setMuted(ts.map((t) => prevMix.get(t.key)?.muted ?? false));
+    setSolo(ts.map((t) => prevMix.get(t.key)?.solo ?? false));
+    setVol(ts.map((t) => prevMix.get(t.key)?.vol ?? 1));
+    const real = ts.filter((t) => !t.virtual);
+    if (!real.length) {
       setDuration(j?.duration ?? 0);
       return;
     }
-    audiosRef.current = ts.map((t) => {
+    // 가상 트랙은 맨 끝이라 audiosRef 의 인덱스는 tracks 의 인덱스와 같다
+    audiosRef.current = real.map((t) => {
       const a = new Audio();
       a.preload = "auto"; // 예비박이 끝나는 순간 바로 소리가 나야 한다
       // 같은 오리진일 때 crossOrigin 을 켜면 불필요하게 CORS 모드로 요청된다.
@@ -140,6 +183,7 @@ export function useAudioEngine(job: Job | null) {
     const onEnded = () => {
       audiosRef.current.forEach((a) => a.pause());
       setPlaying(false);
+      onEndedRef.current?.();
     };
     m.addEventListener("loadedmetadata", onMeta);
     m.addEventListener("ended", onEnded);
@@ -160,13 +204,22 @@ export function useAudioEngine(job: Job | null) {
     };
   }, [key]);
 
+  /** 트랙 i 가 지금 들리는지(음소거·솔로 반영)와 볼륨. 가상 트랙(메트로놈)도 같은 규칙. */
+  const mixOf = useCallback(
+    (i: number) => {
+      const anySolo = solo.some(Boolean);
+      return { on: anySolo ? !!solo[i] : !muted[i], vol: vol[i] ?? 1 };
+    },
+    [muted, solo, vol],
+  );
+
   const applyGains = useCallback(() => {
-    const anySolo = solo.some(Boolean);
     audiosRef.current.forEach((a, i) => {
-      a.muted = anySolo ? !solo[i] : muted[i];
-      a.volume = vol[i] ?? 1;
+      const m = mixOf(i);
+      a.muted = !m.on;
+      a.volume = m.vol;
     });
-  }, [muted, solo, vol]);
+  }, [mixOf]);
   useEffect(applyGains, [applyGains]);
 
   useEffect(() => {
@@ -270,15 +323,12 @@ export function useAudioEngine(job: Job | null) {
   const setVolume = (i: number, v2: number) => setVol((a) => a.map((x, k) => (k === i ? v2 : x)));
 
   /** 지금 들리는 트랙 인덱스 (믹스다운에 쓴다) */
-  const audibleIndexes = () => {
-    const anySolo = solo.some(Boolean);
-    return tracks
-      .map((_, i) => ((anySolo ? solo[i] : !muted[i]) && (vol[i] ?? 1) > 0 ? i : -1))
-      .filter((i) => i >= 0);
-  };
+  const audibleIndexes = () =>
+    tracks.map((_, i) => (mixOf(i).on && mixOf(i).vol > 0 ? i : -1)).filter((i) => i >= 0);
 
   return {
     tracks,
+    loadedId,
     playing,
     time,
     duration,
@@ -296,6 +346,7 @@ export function useAudioEngine(job: Job | null) {
     toggleSolo,
     setVolume,
     audibleIndexes,
+    mixOf,
     audios: audiosRef,
   };
 }

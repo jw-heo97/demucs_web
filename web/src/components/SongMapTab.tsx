@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { useAudioEngine } from "../hooks/useAudioEngine";
-import { barsFromMap, emptyRange, nearestBar, stepOf } from "../lib/songmap";
+import { sectionAt } from "../lib/sectionColors";
+import { barAtTime, barsFromMap, emptyRange, nearestBar, stepOf } from "../lib/songmap";
 import { stemFilesOf } from "../lib/stems";
 import { showTime } from "../lib/time";
-import type { Job, MapPayload, MapVersion, SongMap } from "../types";
-import { Mixer } from "./Mixer";
+import type { Job, MapPayload, MapRange, MapVersion, ScoreData, SongMap } from "../types";
+import { Mixer, type MixerControl } from "./Mixer";
+import { ScorePanel } from "./ScoreView";
 import { TimeInput } from "./TimeInput";
 import { Waveform, type LoopRegion, type WaveMode } from "./Waveform";
 
@@ -37,6 +39,7 @@ export function SongMapTab({ jobs, onChanged }: Props) {
   const [mode, setMode] = useState<WaveMode>("seek");
   const [loop, setLoopRegion] = useState<LoopRegion | null>(null);
   const [countIn, setCountIn] = useState(4);
+  const mixer = useRef<MixerControl | null>(null);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [addBar, setAddBar] = useState("");
@@ -54,6 +57,24 @@ export function SongMapTab({ jobs, onChanged }: Props) {
 
   // 편집 중인 구성표에서 즉시 마디를 계산한다 (저장 전에도 파형에 반영)
   const bars = useMemo(() => barsFromMap(map, duration), [map, duration]);
+
+  /**
+   * fromBar~toBar 구간을 연습할 반복 범위: 2마디 전부터 다음 구간 첫 마디 끝까지
+   * (Verse A 13~18 → 11~19마디). 들어가는 흐름과 넘어가는 첫 마디까지 연습하려고.
+   */
+  const loopFor = (fromBar: number, toBar: number) => {
+    if (!bars.length) return null;
+    const first = bars[0].bar;
+    const last = bars[bars.length - 1].bar;
+    const a = Math.max(first, fromBar - 2);
+    const b = Math.min(last, toBar + 1);
+    const start = bars.find((x) => x.bar === a)?.start;
+    const end = bars.find((x) => x.bar === b + 1)?.start ?? duration;
+    if (start == null || end - start < 0.3) return null;
+    return { start, end, fromBar: a, toBar: b };
+  };
+  const sameLoop = (x: LoopRegion | null, y: LoopRegion | null) =>
+    !!x && !!y && Math.abs(x.start - y.start) < 0.002 && Math.abs(x.end - y.end) < 0.002;
 
   const load = useCallback(async (id: string) => {
     const d = await api.map(id);
@@ -189,7 +210,7 @@ export function SongMapTab({ jobs, onChanged }: Props) {
   const save = async () => {
     if (!job || !map) return;
     setBusy(true);
-    setMsg("저장하고 메트로놈을 다시 굽는 중…");
+    setMsg("저장 중… (다운로드용 클릭 파일도 함께 만듭니다)");
     try {
       const r = await api.saveMap(job.id, map);
       setMsg(`저장 완료 — ♩=${r.bpm} · ${r.bars}마디 · 박자 ${r.beats}개`);
@@ -216,6 +237,49 @@ export function SongMapTab({ jobs, onChanged }: Props) {
     } finally {
       setBusy(false);
     }
+  };
+
+  /**
+   * 악보의 구간 표시·템포로 송 맵을 만들어 새 버전 '악보'로 저장한다 (지금 버전은 남는다).
+   * 1마디 1박 위치는 지금 값(자동 추론 또는 손으로 잡은 값)을 쓴다 — 악보는 음원 어디서
+   * 시작하는지 모른다. 반복으로 같은 구간이 연달아 나오면 한 구간으로 합친다.
+   */
+  const mapFromScore = (sc: ScoreData): SongMap | null => {
+    if (!map) return null;
+    const n = sc.order ? sc.order.length : sc.measures.length;
+    const markAt = new Map(sc.marks.map((m) => [m.measure, m.text]));
+    const base = map.ranges[0];
+    const ranges: MapRange[] = [];
+    for (let b = 1; b <= n; b++) {
+      const name = markAt.get(sc.order ? sc.order[b - 1] : b);
+      if (!name) continue;
+      if (ranges.length && ranges[ranges.length - 1].name === name) continue;
+      ranges.push({ ...emptyRange(b, base), name, click_beats: null });
+    }
+    if (!ranges.length || ranges[0].from_bar !== 1) ranges.unshift({ ...emptyRange(1, base), click_beats: null });
+    return { anchor: map.anchor, bpm: sc.tempo ?? map.bpm, ranges };
+  };
+
+  const [scoreData, setScoreData] = useState<ScoreData | null>(null);
+  const buildFromScore = () => {
+    if (!job || !scoreData) return;
+    const m = mapFromScore(scoreData);
+    if (!m) return;
+    const names = new Set(versions.map((v) => v.name));
+    let name = "악보";
+    for (let k = 2; names.has(name); k++) name = `악보 ${k}`;
+    if (
+      !confirm(
+        `악보로 송 맵을 만들어 새 버전에 저장합니다: ${name} (지금 버전은 그대로 남습니다)
+` +
+          `구간 ${m.ranges.length}개 · ♩=${m.bpm} · 1마디 1박은 지금 값(${showTime(m.anchor)})을 씁니다.`,
+      )
+    )
+      return;
+    void verAction(
+      () => api.createVersion(job.id, name, m),
+      `새 버전 ${name} 을 만들었습니다 — 1마디 1박 위치가 맞는지 확인하세요.`,
+    );
   };
 
   const verAction = async (fn: () => Promise<unknown>, note: string) => {
@@ -320,10 +384,41 @@ export function SongMapTab({ jobs, onChanged }: Props) {
               jobId={job.id}
               onChanged={onChanged}
               showRate
+              loopButton={{
+                on: !!loop,
+                region: loop,
+                title: loop
+                  ? `반복 해제 (${showTime(loop.start)}~${showTime(loop.end)})`
+                  : "지금 재생 위치가 속한 구간(같은 이름이 이어지는 마디들)을 반복합니다",
+                onToggle: () => {
+                  if (loop) return setLoopRegion(null);
+                  const s = sectionAt(bars, engine.time, duration);
+                  const lp = s && loopFor(s.fromBar, s.toBar);
+                  if (!s || !lp) return;
+                  setLoopRegion({ start: lp.start, end: lp.end });
+                  setMsg(`${s.name || `${s.fromBar}마디`} 반복 — ${lp.fromBar}~${lp.toBar}마디`);
+                },
+              }}
+              control={mixer}
               countIn={countIn}
               onCountInChange={setCountIn}
             />
           </div>
+
+          {/* 악보: 지금 마디부터 8마디. 마디를 누르면 그 마디로 이동 */}
+          <ScorePanel
+            jobId={job.id}
+            onScore={setScoreData}
+            bar={barAtTime(bars, engine.time)?.bar ?? 1}
+            onPickBar={(b) => {
+              const t = bars.find((x) => x.bar === b)?.start;
+              if (t != null) engine.seek(t);
+            }}
+          >
+            <button className="ghost" disabled={busy || !scoreData?.marks.length} onClick={buildFromScore}>
+              악보로 송 맵 만들기
+            </button>
+          </ScorePanel>
 
           <div className="panel">
             <div className="vertabs">
@@ -448,7 +543,7 @@ export function SongMapTab({ jobs, onChanged }: Props) {
                     <th style={{ width: 86 }}>BPM</th>
                     <th style={{ width: 150 }}>클릭할 박</th>
                     <th style={{ width: 120 }}>적용 범위</th>
-                    <th style={{ width: 108 }} />
+                    <th style={{ width: 200 }} />
                   </tr>
                 </thead>
                 <tbody>
@@ -551,22 +646,64 @@ export function SongMapTab({ jobs, onChanged }: Props) {
                           <div className="rowbtns">
                             <button
                               className="ghost"
-                              onClick={() => t != null && engine.seek(t)}
-                              title="이 마디로 이동"
+                              onClick={() => {
+                                if (t == null) return;
+                                setLoopRegion(null);
+                                // 듣고 있으면 그 자리로 옮겨 계속, 멈춰 있으면 예비박부터
+                                if (engine.playing) engine.seek(t);
+                                else mixer.current?.playFrom(t, null);
+                              }}
+                              title="이 구간 첫 마디부터 재생 (멈춰 있으면 예비박부터)"
                             >
                               ▶
                             </button>
+                            {(() => {
+                              const toBar = map.ranges[i + 1]
+                                ? map.ranges[i + 1].from_bar - 1
+                                : bars[bars.length - 1]?.bar ?? r.from_bar;
+                              const lp = loopFor(r.from_bar, toBar);
+                              const on = sameLoop(loop, lp);
+                              return (
+                                <button
+                                  className={`ghost${on ? " on" : ""}`}
+                                  disabled={!lp}
+                                  onClick={() => {
+                                    if (!lp) return;
+                                    if (on) return setLoopRegion(null);
+                                    const region = { start: lp.start, end: lp.end };
+                                    setLoopRegion(region);
+                                    setMsg(`${r.name || `${r.from_bar}마디`} 반복 — ${lp.fromBar}~${lp.toBar}마디`);
+                                    mixer.current?.playFrom(region.start, region);
+                                  }}
+                                  title={
+                                    lp
+                                      ? `${lp.fromBar}~${lp.toBar}마디 반복 재생 (구간 2마디 전부터 다음 구간 첫 마디까지, 예비박부터)`
+                                      : ""
+                                  }
+                                >
+                                  반복
+                                </button>
+                              );
+                            })()}
                             <button
                               className="ghost"
                               onClick={() =>
                                 patchRange(i, { anchor: r.anchor != null ? null : +engine.time.toFixed(3) })
                               }
-                              title="현재 재생 위치에 고정 / 해제"
+                              title={
+                                r.anchor != null
+                                  ? "고정 해제 — 다시 1마디 1박과 BPM 으로 이어서 계산합니다"
+                                  : "이 구간 첫 마디를 지금 재생 위치에 못 박습니다. 연주 템포가 흔들려 뒤로 갈수록 마디선이 밀릴 때, 첫 박이 들리는 자리에서 멈추고 누르세요."
+                              }
                             >
                               {r.anchor != null ? "해제" : "고정"}
                             </button>
                             {i > 0 && (
-                              <button className="ghost" onClick={() => removeRange(i)}>
+                              <button
+                                className="ghost"
+                                onClick={() => removeRange(i)}
+                                title="이 구간 줄을 지웁니다. 그 마디들은 앞 구간 설정(이름·박자·BPM·클릭)을 이어받습니다. 저장해야 남습니다."
+                              >
                                 삭제
                               </button>
                             )}
@@ -612,8 +749,12 @@ export function SongMapTab({ jobs, onChanged }: Props) {
                   {[...dupBars].sort((a, b) => a - b).join(", ")}마디가 중복됩니다
                 </span>
               )}
-              <button onClick={save} disabled={busy || dupBars.size > 0}>
-                저장 · 메트로놈 재생성
+              <button
+                onClick={save}
+                disabled={busy || dupBars.size > 0}
+                title="메트로놈은 저장하지 않아도 편집한 대로 바로 들립니다. 저장하면 맵이 남고 다운로드용 클릭 파일이 갱신됩니다."
+              >
+                저장
               </button>
             </div>
             {msg && <div className="meta" style={{ marginTop: 8 }}>{msg}</div>}

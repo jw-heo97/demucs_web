@@ -354,7 +354,10 @@ class JobStore:
     def _scan_files(job: Job, d: Path) -> list[dict]:
         out = []
         for p in sorted(d.rglob("*")):
-            if not p.is_file() or p.name in (META_FILE, MAP_HISTORY_FILE, PEAKS_FILE):
+            if not p.is_file() or p.name in (META_FILE, MAP_HISTORY_FILE, PEAKS_FILE, "_score.json"):
+                continue
+            # 악보 분석 결과(페이지 이미지)는 내려받을 파일이 아니다
+            if "_score" in p.relative_to(d).parts[:-1]:
                 continue
             out.append(JobStore._file_entry(job, d, p))
         return out
@@ -1168,9 +1171,21 @@ class JobStore:
         info = {"count_in": int(times.size), "pre_roll": round(pre, 3)}
         return mix, info
 
+    @staticmethod
+    def _offbeat_times(job: Job) -> np.ndarray:
+        """소리 나는 박마다 다음 박과의 한가운데. 마지막 박은 직전 간격을 쓴다."""
+        beats = np.asarray(job.beats, dtype=np.float64)
+        if beats.size < 2:
+            return np.zeros(0)
+        gaps = np.append(np.diff(beats), beats[-1] - beats[-2])
+        mids = beats + gaps / 2
+        if job.sounds and len(job.sounds) == beats.size:
+            mids = mids[np.asarray(job.sounds, dtype=bool)]
+        return mids
+
     def mixdown(self, job: Job, keys: list[str], fmt: str = "mp3",
                 gains: Optional[dict] = None, count_in: int = 0,
-                beats_per_bar: int = BEATS_PER_BAR) -> dict:
+                beats_per_bar: int = BEATS_PER_BAR, subdiv: int = 1) -> dict:
         """지정한 스템들을 합쳐 한 파일로 만든다.
 
         믹서에서 '들리는 트랙만' 받아쓰기 위한 것. 합성은 서버에서 한다 —
@@ -1212,6 +1227,14 @@ class JobStore:
         if mix is None:
             raise ValueError("선택한 트랙의 파일을 찾지 못했습니다.")
 
+        # 8비트: 메트로놈을 넣었으면 박 사이 클릭을 메트로놈 볼륨으로 얹는다.
+        # 파일로 따로 굽지 않는다 — 브라우저에서는 실시간으로 울리고, 여기서만 필요하다.
+        eight = subdiv == 2 and "click" in used and len(job.beats) >= 2
+        if eight:
+            off = separator.render_offbeats(self._offbeat_times(job), sr, mix.shape[-1],
+                                            level=CLICK_LEVEL * 0.45)
+            mix = mix + off * float(gains.get("click", 1.0))
+
         mix, ci = self._prepend_count_in(job, mix, sr, count_in, beats_per_bar)
 
         # 합치면 1.0 을 넘길 수 있다. 잘라내면 왜곡되므로 전체 레벨을 낮춘다.
@@ -1221,7 +1244,7 @@ class JobStore:
             mix = mix / peak * 0.99
 
         base = job.folder or job.id
-        suffix = f"_count{ci['count_in']}" if ci["count_in"] else ""
+        suffix = ("_8beat" if eight else "") + (f"_count{ci['count_in']}" if ci["count_in"] else "")
         name = f"{base}_mix_{'+'.join(used)}{suffix}"[:120]
         path = out_dir / "mix" / f"{name}.{fmt}"
         if fmt == "wav":
