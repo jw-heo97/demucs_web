@@ -552,6 +552,15 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
         <span className="time">
           {clock(time)} / {clock(duration)}
         </span>
+        {(engine.cache.state === "none" || engine.cache.state === "stream") && (
+          <button
+            className="ghost"
+            onClick={engine.saveToDevice}
+            title="이 곡의 스템을 이 기기에 저장합니다. 저장하면 정지·이동·재생 때 서버에서 다시 받지 않아 끊김이 줄어듭니다. 재생 중에는 쉬었다가 멈추면 이어서 받습니다. 메트로놈은 저장과 상관없이 송 맵대로 바로 울립니다."
+          >
+            {engine.cache.state === "stream" ? "기기에 저장 (다시 시도)" : engine.cache.pct > 0 ? `기기에 저장 (${engine.cache.pct}%)` : "기기에 저장"}
+          </button>
+        )}
         {engine.cache.state === "downloading" && (
           <span className="meta" title="다 받으면 이 기기에 저장해 두고, 이후로는 정지·이동·재생 때 서버에서 다시 받지 않습니다.">
             기기에 저장 중 {engine.cache.pct}%
