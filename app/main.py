@@ -77,9 +77,7 @@ def api_me(request: Request):
 
 
 # --- 접속자 관리 (허용 계정의 tailnet 기기·이 PC 만 — 미들웨어가 /api/admin/* 를 막는다) ---
-def _invite_url(request: Request, key) -> Optional[str]:
-    if not key:
-        return None
+def _invite_url(request: Request, key: str) -> str:
     host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
     # tailnet 으로 들어왔으면 그 주소(…ts.net)가 funnel 주소와 같다. 이 PC 에서 직접이면 모른다.
     if not host or host.startswith(("127.0.0.1", "localhost")):
@@ -88,18 +86,27 @@ def _invite_url(request: Request, key) -> Optional[str]:
 
 
 @app.get("/api/admin/access")
-def admin_access(request: Request):
-    key = access.store.invite_key()
-    return {"devices": access.store.devices(), "clients": access.recent_clients(),
-            "invite_url": _invite_url(request, key), "invite_enabled": bool(key),
-            "allow_users": sorted(access.TAILSCALE_ALLOW_USERS)}
+def admin_access():
+    return {"devices": access.store.devices(), "invites": access.store.invites(),
+            "clients": access.recent_clients(),
+            "allow_users": sorted(access.TAILSCALE_ALLOW_USERS),
+            "invite_days": access.INVITE_DAYS}
 
 
-@app.post("/api/admin/invite")
-def admin_invite(request: Request, payload: dict = Body(default={})):
-    """{enabled} — 새 초대 링크를 만들거나(이전 링크는 무효) 초대를 끈다. 등록된 기기는 그대로."""
-    key = access.store.set_invite(bool(payload.get("enabled", True)))
-    return {"invite_url": _invite_url(request, key), "invite_enabled": bool(key)}
+@app.post("/api/admin/invites")
+def admin_invite_create(request: Request, payload: dict = Body(default={})):
+    """{name} — 1회용 초대 링크. 링크 원문은 이 응답에서만 보인다(서버엔 해시만)."""
+    key, inv = access.store.create_invite(payload.get("name") or "")
+    return {**inv, "url": _invite_url(request, key)}
+
+
+@app.delete("/api/admin/invites/{iid}")
+def admin_invite_cancel(iid: str):
+    try:
+        access.store.cancel_invite(iid)
+    except KeyError:
+        raise HTTPException(404, "그 초대를 찾을 수 없습니다 (이미 쓰였거나 만료).")
+    return {"ok": True}
 
 
 @app.patch("/api/admin/devices/{did}")

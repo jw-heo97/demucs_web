@@ -15,9 +15,10 @@ Tailscale 은 이 헤더들을 바깥에서 보낸 값이 있어도 지우고 �
 규칙:
   - funnel 접속은 '등록된 기기' 만 받는다. funnel 로는 Tailscale 계정을 알 수 없어서
     (내 계정 기기도 Tailscale 에 안 붙어 있으면 그냥 인터넷 접속이다) 초대 링크로 등록한다:
-    초대 키가 든 링크(`/?key=...`)를 열면 그 브라우저에 **기기별 토큰**을 발급해 1년짜리
-    HttpOnly 쿠키로 남긴다. 기기마다 토큰이 달라서 하나씩 끊을 수 있다(접속자 관리 탭).
-    초대 키를 바꿔도 이미 등록된 기기는 그대로다 — 링크가 새어 나갔을 때 새 등록만 막는다.
+    접속자 관리 탭에서 사람 이름을 넣어 **1회용** 링크(`/?key=...`)를 만들고, 그 링크를 연
+    브라우저에 기기별 토큰을 발급해 1년짜리 HttpOnly 쿠키로 남긴다. 링크는 한 번 쓰면
+    사라지고(친구가 남에게 넘겨도 소용없다), INVITE_DAYS 일 안에 안 쓰면 만료된다.
+    기기마다 토큰이 달라서 하나씩 끊을 수 있다.
   - TAILSCALE_ALLOW_USERS 가 있으면 그 계정의 tailnet 기기만 허용한다
     (다른 계정에 기기를 공유했을 때 그 사람을 막는다).
   - 헤더가 없는 요청(이 PC 에서 직접, 또는 태그 기기)은 허용한다.
@@ -43,10 +44,12 @@ from urllib.parse import urlencode
 from fastapi import Request
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 
-from config import ACCESS_KEY, ALLOW_FUNNEL, OUTPUT_DIR, TAILSCALE_ALLOW_USERS
+from config import ALLOW_FUNNEL, OUTPUT_DIR, TAILSCALE_ALLOW_USERS
 
 DEVICE_COOKIE = "dw_device"
 DEVICE_MAX_AGE = 365 * 24 * 3600
+# 1회용 초대 링크 유효 기간
+INVITE_DAYS = 7
 # 보관함과 같은 폴더라 함께 백업된다 (_playlists.json 처럼)
 STATE_FILE = "_access.json"
 
@@ -88,8 +91,8 @@ class _Store:
             except (OSError, ValueError):
                 d = {}
             d.setdefault("devices", [])
-            # 초대 키: 화면에서 바꾼 값이 있으면 그것, 없으면 .env 의 ACCESS_KEY
-            d.setdefault("invite_key", ACCESS_KEY or None)
+            d.setdefault("invites", [])
+            d.pop("invite_key", None)      # 예전 여러 번 쓰는 초대 키 — 1회용으로 바뀌었다
             self._data = d
         return self._data
 
@@ -98,25 +101,54 @@ class _Store:
         tmp.write_text(json.dumps(self._data, ensure_ascii=False, indent=1), encoding="utf-8")
         os.replace(tmp, self.path)
 
-    def invite_key(self) -> Optional[str]:
-        with self._lock:
-            return self._load().get("invite_key")
+    # --- 1회용 초대 ---
+    @staticmethod
+    def _prune(d: dict) -> None:
+        now = time.time()
+        d["invites"] = [x for x in d["invites"] if x["expires"] > now]
 
-    def set_invite(self, enabled: bool) -> Optional[str]:
-        """새 초대 키를 만든다(enabled) 또는 초대를 끈다. 등록된 기기는 그대로다."""
+    def invites(self) -> list[dict]:
         with self._lock:
             d = self._load()
-            d["invite_key"] = secrets.token_urlsafe(18) if enabled else None
+            self._prune(d)
+            return [_public(x) for x in d["invites"]]
+
+    def create_invite(self, name: str) -> tuple[str, dict]:
+        """이름을 붙인 1회용 초대 키. 원문은 돌려주기만 하고 해시만 저장한다."""
+        key = secrets.token_urlsafe(18)
+        now = time.time()
+        inv = {"id": uuid.uuid4().hex[:8], "hash": _hash(key),
+               "name": (str(name or "").strip() or "이름 없음")[:40],
+               "created": round(now, 3), "expires": round(now + INVITE_DAYS * 86400, 3)}
+        with self._lock:
+            d = self._load()
+            self._prune(d)
+            d["invites"].append(inv)
             self._save()
-            return d["invite_key"]
+        return key, _public(inv)
 
-    def register(self, who: dict) -> tuple[str, dict]:
-        token = secrets.token_urlsafe(32)
-        now = round(time.time(), 3)
+    def cancel_invite(self, iid: str) -> None:
         with self._lock:
             d = self._load()
-            dv = {"id": uuid.uuid4().hex[:8], "hash": _hash(token),
-                  "name": _guess_name(who["ua"]) or f"기기 {len(d['devices']) + 1}",
+            before = len(d["invites"])
+            d["invites"] = [x for x in d["invites"] if x["id"] != iid]
+            if len(d["invites"]) == before:
+                raise KeyError(iid)
+            self._save()
+
+    def redeem(self, key: str, who: dict) -> Optional[tuple[str, dict]]:
+        """초대 키가 맞으면 그 초대를 지우고(1회용) 기기를 등록한다. 기기 이름 = 초대 이름."""
+        h = _hash(key)
+        with self._lock:
+            d = self._load()
+            self._prune(d)
+            inv = next((x for x in d["invites"] if hmac.compare_digest(x["hash"], h)), None)
+            if inv is None:
+                return None
+            d["invites"].remove(inv)
+            token = secrets.token_urlsafe(32)
+            now = round(time.time(), 3)
+            dv = {"id": uuid.uuid4().hex[:8], "hash": _hash(token), "name": inv["name"],
                   "ua": who["ua"], "created": now, "last": now,
                   "last_ip": who["ip"], "blocked": False}
             d["devices"].append(dv)
@@ -169,17 +201,6 @@ class _Store:
 
 
 store = _Store()
-
-
-def _guess_name(ua: str) -> str:
-    """User-Agent 로 대충 이름을 붙인다 (관리 화면에서 바꿀 수 있다)."""
-    u = ua.lower()
-    dev = ("iPad" if "ipad" in u else "iPhone" if "iphone" in u else
-           "Android" if "android" in u else "Mac" if "macintosh" in u else
-           "Windows" if "windows" in u else "")
-    br = ("Edge" if "edg/" in u else "Chrome" if "chrome/" in u or "crios/" in u else
-          "Firefox" if "firefox/" in u else "Safari" if "safari/" in u else "")
-    return " · ".join(x for x in (dev, br) if x)
 
 
 # --------------------------------------------------------------------------
@@ -245,7 +266,7 @@ _MESSAGES = {
     "unregistered": "등록되지 않은 기기입니다. 받은 접속 링크로 한 번 열어 주세요.",
     "blocked": "이 기기는 접속이 차단되었습니다.",
     "user": "허용된 Tailscale 계정의 기기에서만 열 수 있습니다.",
-    "badkey": "접속 링크가 만료되었거나 올바르지 않습니다.",
+    "badkey": "이미 사용했거나 만료된 접속 링크입니다. 링크를 다시 받아 주세요.",
 }
 
 
@@ -281,23 +302,26 @@ async def middleware(request: Request, call_next):
     method, path = request.method, request.url.path
     device = store.device_for(request.cookies.get(DEVICE_COOKIE, ""))
 
-    # 기기 등록: 초대 키가 맞으면 기기 토큰을 쿠키로 남기고 키를 뺀 주소로 보낸다
-    # (주소창·방문 기록에 키가 남지 않게). 이미 등록된 브라우저는 다시 만들지 않는다.
+    # 기기 등록: 1회용 초대 키가 맞으면 기기 토큰을 쿠키로 남기고 키를 뺀 주소로 보낸다
+    # (주소창·방문 기록에 키가 남지 않게). 이미 등록된 브라우저가 열면 초대를 쓰지 않는다
+    # — 내가 링크를 시험 삼아 열어도 친구 몫이 사라지지 않게.
     key = request.query_params.get("key")
     if key is not None:
-        invite = store.invite_key()
-        if invite and hmac.compare_digest(key, invite):
-            rest = [(k, v) for k, v in request.query_params.multi_items() if k != "key"]
-            resp = RedirectResponse(path + ("?" + urlencode(rest) if rest else ""), status_code=303)
-            if device is None:
-                token, device = store.register(who)
-                resp.set_cookie(DEVICE_COOKIE, token, max_age=DEVICE_MAX_AGE, httponly=True,
-                                secure=who["via"] != "direct", samesite="lax")
-                _log(who, device, "기기 등록")
+        rest = [(k, v) for k, v in request.query_params.multi_items() if k != "key"]
+        clean = path + ("?" + urlencode(rest) if rest else "")
+        if device is not None:
+            return RedirectResponse(clean, status_code=303)
+        got = store.redeem(key, who)
+        if got:
+            token, device = got
+            resp = RedirectResponse(clean, status_code=303)
+            resp.set_cookie(DEVICE_COOKIE, token, max_age=DEVICE_MAX_AGE, httponly=True,
+                            secure=who["via"] != "direct", samesite="lax")
+            _log(who, device, "기기 등록 (초대 사용)")
             _remember(who, device, method, path, 303, False)
             return resp
-        _log(who, device, "기기 등록 실패(키 불일치)")
-        if who["via"] == "funnel" and device is None:
+        _log(who, device, "기기 등록 실패(없거나 이미 쓴 초대)")
+        if who["via"] == "funnel":
             _remember(who, device, method, path, 403, True)
             return PlainTextResponse(_MESSAGES["badkey"], status_code=403)
 

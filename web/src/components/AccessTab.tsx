@@ -34,8 +34,8 @@ function shortUa(ua: string) {
  * 접속자 관리. 내 Tailscale 계정 기기(와 이 PC)에서만 탭이 보이고, 서버도 /api/admin/* 를
  * 그 밖의 접속에는 403 으로 막는다.
  *
- * - 초대 링크: funnel(공개 주소)로 들어올 기기를 등록하는 링크. 새로 만들면 이전 링크는 무효,
- *   이미 등록된 기기는 그대로.
+ * - 초대 링크: funnel(공개 주소)로 들어올 기기를 등록하는 1회용 링크. 사람마다 이름을 붙여 만들고,
+ *   처음 연 기기 한 대가 그 이름으로 등록되면 사라진다.
  * - 등록 기기: 링크로 등록한 브라우저들. 이름 변경·차단·등록 해제.
  * - 최근 접속: 서버가 켜진 뒤 들어온 접속 (Tailscale 계정·공개 링크 기기·이 PC).
  */
@@ -71,12 +71,38 @@ export function AccessTab() {
     }
   };
 
+  // 방금 만든 초대 링크 — 서버엔 해시만 남아서 지금만 볼 수 있다
+  const [fresh, setFresh] = useState<{ name: string; url: string } | null>(null);
+  const [inviteName, setInviteName] = useState("");
+
   const copy = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text);
       setMsg("초대 링크를 복사했습니다. 등록할 기기의 브라우저에서 한 번 열면 됩니다.");
     } catch {
       setMsg("복사하지 못했습니다. 링크를 직접 선택해 복사해 주세요.");
+    }
+  };
+
+  const createInvite = async () => {
+    const name = inviteName.trim();
+    if (!name) {
+      setMsg("누구에게 보낼 링크인지 이름을 넣어 주세요.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await api.createInvite(name);
+      // 이 PC 에서 직접 열었으면 서버가 공개 주소를 모르므로 지금 주소를 붙인다
+      const url = r.url.startsWith("/") ? location.origin + r.url : r.url;
+      setFresh({ name: r.name, url });
+      setInviteName("");
+      setMsg("");
+      await load();
+    } catch (e) {
+      setMsg((e as Error).message);
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -93,47 +119,56 @@ export function AccessTab() {
       <div className="panel">
         <h2 style={{ marginTop: 0 }}>초대 링크 (공개 주소로 들어올 기기 등록)</h2>
         <p className="meta" style={{ marginTop: 0 }}>
-          Tailscale 을 쓰지 않는 기기는 이 링크를 브라우저에서 <b>한 번</b> 열면 등록되고, 그 뒤로는
-          공개 주소(funnel)로 들어올 수 있습니다. 링크는 비밀번호와 같으니 들일 사람에게만 보내세요.
-          새 링크를 만들면 이전 링크로는 더 등록할 수 없고, 이미 등록된 기기는 그대로입니다.
+          사람마다 <b>1회용</b> 링크를 만들어 보내세요. 그 링크를 브라우저에서 처음 연 기기 한 대가 그 이름으로
+          등록되고 링크는 사라집니다 — 남에게 넘겨도 다시 쓸 수 없습니다. {data.invite_days}일 안에 안 쓰면
+          만료됩니다. 폰과 노트북처럼 기기가 여러 대면 링크도 여러 개 만드세요.
         </p>
-        {data.invite_enabled && data.invite_url ? (
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-            <input readOnly value={data.invite_url} style={{ flex: 1, minWidth: 220 }} onFocus={(e) => e.target.select()} />
-            <button className="ghost" onClick={() => void copy(data.invite_url!)}>
-              복사
-            </button>
-            <button
-              className="ghost"
-              disabled={busy}
-              onClick={() => {
-                if (confirm("새 초대 링크를 만들까요? 지금 링크로는 더 이상 등록할 수 없습니다."))
-                  void act(() => api.setInvite(true), "새 초대 링크를 만들었습니다.");
-              }}
-            >
-              새 링크
-            </button>
-            <button
-              className="ghost"
-              disabled={busy}
-              onClick={() => void act(() => api.setInvite(false), "초대를 껐습니다. 등록된 기기는 그대로입니다.")}
-            >
-              초대 끄기
-            </button>
-          </div>
-        ) : (
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <span className="meta">초대가 꺼져 있습니다 — 새 기기를 등록할 수 없습니다.</span>
-            <button className="ghost" disabled={busy} onClick={() => void act(() => api.setInvite(true), "초대 링크를 만들었습니다.")}>
-              초대 링크 만들기
-            </button>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          <input
+            placeholder="누구에게? (예: 철수 폰)"
+            value={inviteName}
+            maxLength={40}
+            style={{ flex: 1, minWidth: 180 }}
+            onChange={(e) => setInviteName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && void createInvite()}
+          />
+          <button disabled={busy} onClick={() => void createInvite()}>
+            링크 만들기
+          </button>
+        </div>
+        {fresh && (
+          <div style={{ marginTop: 10 }}>
+            <label>{fresh.name} 에게 보낼 링크 — 지금만 볼 수 있습니다 (잃어버리면 취소하고 새로 만드세요)</label>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <input readOnly value={fresh.url} style={{ flex: 1, minWidth: 220 }} onFocus={(e) => e.target.select()} />
+              <button className="ghost" onClick={() => void copy(fresh.url)}>
+                복사
+              </button>
+              <button className="ghost" onClick={() => setFresh(null)}>
+                닫기
+              </button>
+            </div>
           </div>
         )}
-        {data.invite_url?.startsWith("/") && (
-          <p className="meta">
-            이 PC 에서 직접 열어서 공개 주소를 모릅니다. 실제 링크는 <code>https://&lt;기기&gt;.&lt;tailnet&gt;.ts.net</code> 뒤에
-            위 경로를 붙인 것입니다.
-          </p>
+        {data.invites.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <label>아직 안 쓴 초대 {data.invites.length}개</label>
+            {data.invites.map((iv) => (
+              <div key={iv.id} style={{ display: "flex", gap: 8, alignItems: "center", padding: "3px 0" }}>
+                <span>{iv.name}</span>
+                <span className="meta">
+                  {when(iv.created)} 만듦 · {when(iv.expires)} 만료
+                </span>
+                <button
+                  className="ghost"
+                  disabled={busy}
+                  onClick={() => void act(() => api.cancelInvite(iv.id), `${iv.name} 초대를 취소했습니다.`)}
+                >
+                  취소
+                </button>
+              </div>
+            ))}
+          </div>
         )}
         {msg && <p className="meta">{msg}</p>}
       </div>

@@ -65,6 +65,13 @@ export interface AccessDevice {
   blocked: boolean;
 }
 
+export interface AccessInvite {
+  id: string;
+  name: string;
+  created: number;
+  expires: number;
+}
+
 export interface AccessClient {
   via: "funnel" | "tailnet" | "proxy" | "direct";
   ip: string;
@@ -87,13 +94,14 @@ export const api = {
   access: () =>
     get<{
       devices: AccessDevice[];
+      invites: AccessInvite[];
       clients: AccessClient[];
-      invite_url: string | null;
-      invite_enabled: boolean;
       allow_users: string[];
+      invite_days: number;
     }>("/api/admin/access"),
-  setInvite: (enabled: boolean) =>
-    post<{ invite_url: string | null; invite_enabled: boolean }>("/api/admin/invite", { enabled }),
+  /** 1회용 초대 링크. url 은 이 응답에서만 받을 수 있다 (서버엔 해시만 남는다). */
+  createInvite: (name: string) => post<AccessInvite & { url: string }>("/api/admin/invites", { name }),
+  cancelInvite: (id: string) => del(`/api/admin/invites/${id}`),
   updateDevice: (id: string, body: { name?: string; blocked?: boolean }) =>
     patch<AccessDevice>(`/api/admin/devices/${id}`, body),
   deleteDevice: (id: string) => del(`/api/admin/devices/${id}`),
