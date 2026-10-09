@@ -3,7 +3,7 @@
  *
  * 인증은 없다 — 접근 제어는 Tailscale 이 맡는다 (README 참고).
  */
-import type { Job, MapPayload, Playlist, ScoreData, SearchItem, SongMap } from "./types";
+import type { Job, JobTrack, MapPayload, Playlist, ScoreData, SearchItem, SongMap } from "./types";
 
 /** 앱에서는 다른 오리진의 서버를 봐야 하므로 베이스 URL 을 바꿀 수 있게 한다. */
 export const BASE =
@@ -208,6 +208,16 @@ export const api = {
       headers: { "Content-Type": "application/pdf" },
     }),
   deleteScore: (id: string) => del(`/api/jobs/${id}/score`),
+
+  // --- 사용자 트랙 (녹음·반주) ---
+  uploadTrack: (id: string, audio: Blob, name: string, offsetMs: number) =>
+    request<{ track: JobTrack; job: Job }>(
+      `/api/jobs/${id}/tracks?name=${encodeURIComponent(name)}&offset_ms=${Math.round(offsetMs)}`,
+      { method: "POST", body: audio, headers: { "Content-Type": audio.type || "application/octet-stream" } },
+    ),
+  updateTrack: (id: string, tid: string, body: { name?: string; offset_ms?: number }) =>
+    patch<{ track: JobTrack; job: Job }>(`/api/jobs/${id}/tracks/${tid}`, body),
+  deleteTrack: (id: string, tid: string) => del<{ job: Job }>(`/api/jobs/${id}/tracks/${tid}`),
 
   // --- 플레이리스트 ---
   playlists: () => get<{ playlists: Playlist[] }>("/api/playlists"),

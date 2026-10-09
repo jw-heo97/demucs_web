@@ -16,6 +16,8 @@ export interface Track {
    * 음소거·솔로·볼륨은 다른 트랙과 똑같이 엔진이 들고 있다. 항상 목록 맨 끝에 둔다.
    */
   virtual?: boolean;
+  /** 사용자 트랙(녹음·반주)이면 그 id. 이름 바꾸기·오프셋·삭제에 쓴다 */
+  trackId?: string;
 }
 
 const LABEL: Record<string, string> = {
@@ -49,6 +51,18 @@ export function tracksOf(job: Job): Track[] {
       mtime: f.mtime ?? 0,
     };
   });
+  // 사용자 트랙(녹음·반주)은 스템 뒤에. 오프셋은 여기 넣지 않는다 — 바꿀 때마다 다시 불러오지 않게
+  // 엔진이 job.tracks 에서 그때그때 읽는다.
+  for (const t of job.tracks ?? []) {
+    tracks.push({
+      key: `trk:${t.id}`,
+      label: t.name,
+      url: `${BASE}${t.url}?v=${t.mtime ?? 0}`,
+      rel: t.rel,
+      mtime: t.mtime ?? 0,
+      trackId: t.id,
+    });
+  }
   // 메트로놈은 송 맵이 있으면 언제나 쓸 수 있다 (클릭 파일은 다운로드·믹스 받기용)
   const hasMap = !!(job.songmap as { ranges?: unknown[] } | undefined)?.ranges?.length;
   if (hasMap || best.has("click")) {
@@ -125,6 +139,15 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
   const mixRef = useRef({ tracks, muted, solo, vol });
   mixRef.current = { tracks, muted, solo, vol };
   const audiosRef = useRef<HTMLAudioElement[]>([]);
+  // audiosRef 와 같은 순서의 실제 트랙 (오프셋을 찾는 데 쓴다)
+  const realRef = useRef<Track[]>([]);
+  /** 트랙 i 의 오프셋(초): 트랙의 0초가 곡의 몇 초인지. 스템은 0. job.tracks 에서 그때그때 읽는다 */
+  const offOf = (i: number) => {
+    const id = realRef.current[i]?.trackId;
+    if (!id) return 0;
+    const t = jobRef.current?.tracks?.find((x) => x.id === id);
+    return (t?.offset_ms ?? 0) / 1000;
+  };
   const selfRef = useRef<{ stop: () => void }>({ stop: () => {} });
   selfRef.current.stop = () => {
     audiosRef.current.forEach((a) => a.pause());
@@ -179,6 +202,7 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     // 스템은 50 에서 시작한다 — 4개를 다 켜면 메트로놈 클릭이 묻힌다. 메트로놈은 100.
     setVol(ts.map((t) => prevMix.get(t.key)?.vol ?? (t.virtual ? 1 : DEFAULT_STEM_VOL)));
     const real = ts.filter((t) => !t.virtual);
+    realRef.current = real;
     if (!real.length) {
       setDuration(j?.duration ?? 0);
       return;
@@ -218,7 +242,8 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
       created.forEach((a, i) => {
         a.src = hits[i] ?? real[i].url;
         // 메타데이터가 오기 전에 정해도 브라우저가 기본 시작 위치로 기억해 둔다
-        if (resumeAt > 0) a.currentTime = resumeAt;
+        const at = resumeAt - offOf(i);
+        if (at > 0) a.currentTime = at;
       });
       if (hits.every(Boolean)) {
         setCache({ state: "cached", pct: 100 });
@@ -380,7 +405,17 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
         }
         if (playing) {
           for (let i = 1; i < as.length; i++) {
-            if (Math.abs(as[i].currentTime - t) > 0.15) as[i].currentTime = t;
+            const want = t - offOf(i);
+            const a = as[i];
+            if (want < 0) {
+              // 트랙이 시작되기 전 (녹음을 곡 중간부터 했거나 오프셋이 뒤에 있다)
+              if (!a.paused) a.pause();
+              continue;
+            }
+            if (a.paused && !a.ended) {
+              a.currentTime = want;
+              a.play().catch(() => {});
+            } else if (Math.abs(a.currentTime - want) > 0.15) a.currentTime = want;
           }
           const lp = loopRef.current;
           if (lp && t >= lp.end) {
@@ -401,9 +436,23 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
   }, [playing]);
 
   const seek = useCallback((t: number) => {
-    audiosRef.current.forEach((a) => (a.currentTime = Math.max(0, t)));
+    audiosRef.current.forEach((a, i) => (a.currentTime = Math.max(0, t - offOf(i))));
     setTime(Math.max(0, t));
   }, []);
+
+  // 오프셋을 바꾸면(±10ms) 다시 불러오지 않고 그 자리에서 맞춘다
+  const offsetKey = (job?.tracks ?? []).map((t) => `${t.id}:${t.offset_ms}`).join("|");
+  useEffect(() => {
+    const as = audiosRef.current;
+    if (!as.length) return;
+    const t = as[0].currentTime;
+    as.forEach((a, i) => {
+      if (i === 0) return;
+      const want = t - offOf(i);
+      if (want >= 0) a.currentTime = want;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offsetKey]);
 
   const play = useCallback(async () => {
     const as = audiosRef.current;
@@ -415,13 +464,19 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     // 끝까지 들은 뒤 다시 누르면 처음부터
     if (as[0].ended) as.forEach((a) => (a.currentTime = 0));
     const t = as[0].currentTime;
-    as.forEach((a) => {
-      if (Math.abs(a.currentTime - t) > 0.05) a.currentTime = t;
+    const ps: Promise<void>[] = [];
+    as.forEach((a, i) => {
+      const want = t - offOf(i);
+      if (want < 0) {
+        a.pause(); // 아직 시작 전인 트랙 — 때가 되면 tick 이 튼다
+        return;
+      }
+      if (Math.abs(a.currentTime - want) > 0.05) a.currentTime = want;
+      ps.push(a.play());
     });
     // 한 트랙이 실패해도(파일 404, 브라우저의 자동재생 차단) 나머지는 재생한다.
     // 예전엔 Promise.all 이 바로 던져서 playing 이 false 로 남았고, 그러면 ▶ 표시가
     // 그대로인 채 소리는 나고 드리프트 보정·구간 반복도 돌지 않았다.
-    const ps = as.map((a) => a.play());
     // 한 트랙이라도 시작되면 재생 중이다. 전부를 기다리면 아직 받는 중인 트랙 하나(느린 회선,
     // 연결 수 한도) 때문에 ▶ 표시·반복·보정이 그 트랙이 올 때까지 멈춰 있었다.
     try {
@@ -490,6 +545,8 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     solo,
     vol,
     cache,
+    /** 사용자 트랙 목록 (이름·오프셋). 믹서의 트랙 줄 조작에 쓴다 */
+    jobTracks: job?.tracks ?? [],
     /** 지금 곡의 스템을 기기에 저장 (이후 정지·이동·재생 때 네트워크를 안 탄다) */
     saveToDevice: () => saveRef.current?.(),
     /** 지금 곡의 기기 저장을 지운다. 재생 위치는 그대로 두고 스트리밍으로 돌아간다. */
