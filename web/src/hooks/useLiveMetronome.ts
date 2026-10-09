@@ -122,12 +122,10 @@ function lowerBound(ev: ClickEvent[], t: number) {
  * 기다려야 소리가 바뀌었다. 지금은 화면의 마디 목록에서 바로 박을 계산해 Web Audio 로
  * 예약하므로 저장 전 편집도 다음 박부터 들린다.
  *
- * 시계: 음악은 <audio> 가 재생하고 클릭은 AudioContext 가 울리므로 두 시계를 이어야 한다.
- * 재생 위치를 기준점(anchor)으로 잡고 AudioContext 시각으로 앞으로의 곡 시각을 예측해
- * 클릭을 예약한다. 실제 위치와 조금 어긋나면 기준점을 살짝 당기고, 크게 어긋나면
- * (탐색·구간 반복·버퍼링) 다시 잡는다.
- * 정밀 재생(lib/bufferTransport)이면 재생 위치 자체가 AudioContext 시계에서 나오므로 예측이
- * 그대로 맞는다 — 같은 코드가 돌되 어긋남이 0 에 가깝다.
+ * 시계: 재생 위치를 기준점(anchor)으로 잡고 AudioContext 시각으로 앞으로의 곡 시각을 예측해
+ * 클릭을 예약한다. 재생기(lib/bufferTransport)의 위치는 AudioContext 시계에서 나오므로 예측이
+ * 그대로 맞는다. (예전 <audio> 시절의 '조금 어긋나면 당기고 크게 어긋나면 다시 잡는' 처리는 남겨
+ * 뒀다 — 탐색·구간 반복·속도 변경에서 그 길로 다시 잡는다.)
  */
 export function useLiveMetronome(engine: Engine, bars: Bar[], subdiv: 1 | 2 = 1, offsetMs = 0) {
   const { tracks, rate, duration } = engine;
