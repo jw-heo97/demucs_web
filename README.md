@@ -38,33 +38,34 @@ docker compose up -d --build
 
 | 항목 | 기본값 | 설명 |
 |---|---|---|
-| `WEB_BIND` | `127.0.0.1` | 그대로 둘 것. 로그인이 없어서 `0.0.0.0`으로 열면 같은 네트워크의 누구나 쓸 수 있다 |
+| `WEB_BIND` | `127.0.0.1` | 그대로 둘 것. `0.0.0.0`으로 열면 Tailscale 접근 제한을 건너뛰어 같은 네트워크의 누구나 쓸 수 있다 |
 | `MAX_DURATION_SEC` | `900` | 처리할 곡 길이 상한 |
 | `SHIFTS` | `1` | 올리면 분리 품질↑ 시간↑ |
 | `JOB_RETENTION_SEC` | `0` | 0이면 결과물을 지우지 않는다(보관함). 양수면 그 초가 지난 작업을 자동 삭제 |
 
 ## 외부에서 접속하기 (Tailscale)
 
-이 앱에는 로그인이 없다. 접속할 수 있는 사람은 누구나 내 GPU로 작업을 돌리고
-결과물을 지울 수 있으므로, 포트포워딩이나 `WEB_BIND=0.0.0.0`으로 직접 여는 것은 금물이다.
-외부에서는 **`tailscale serve`만** 쓴다 — 내 tailnet에 로그인한 기기만 접속할 수 있고
-HTTPS가 자동으로 붙는다.
+포트는 `127.0.0.1`에만 열어 두고(`WEB_BIND` 그대로), 바깥 접속은 Windows 의 Tailscale 이 프록시한다.
+프록시가 붙여 주는 헤더로 접속자를 구분하고 접근을 제한한다 ([app/access.py](app/access.py)).
 
 준비: `winget install -e --id Tailscale.Tailscale` → `tailscale up` →
 [관리 콘솔](https://login.tailscale.com/admin/dns)에서 **MagicDNS**와 **HTTPS Certificates** 켜기.
-`.env`는 `WEB_BIND=127.0.0.1` 그대로 둔다.
 
-```bash
-tailscale serve --bg 8080      # 켜기
-tailscale serve status         # 확인
-tailscale serve reset          # 끄기
-```
+| 방식 | 명령 | 누가 들어오나 |
+|---|---|---|
+| `tailscale serve` | `tailscale serve --bg 8080` | 내 tailnet 에 로그인한 기기. `TAILSCALE_ALLOW_USERS` 로 계정을 더 좁힐 수 있다 |
+| `tailscale funnel` | `tailscale funnel --bg 8080` | 인터넷 공개 주소. **접속자 관리 탭에서 만든 초대 링크 + 비밀번호로 등록한 기기만** 들어온다 |
 
-주소는 `https://<기기이름>.<tailnet>.ts.net`.
+주소는 둘 다 `https://<기기이름>.<tailnet>.ts.net`. 상태는 `tailscale serve status` / `tailscale funnel status`.
 
-> ⚠️ `tailscale funnel`은 쓰지 말 것. funnel은 인터넷 전체에 공개하는 기능이라
-> 로그인이 없는 이 앱에서는 아무나 들어온다. 다른 사람과 같이 쓰려면 Tailscale의
-> [기기 공유](https://tailscale.com/kb/1084/sharing)로 그 사람의 tailnet에 내 기기를 공유한다.
+funnel 로 들어온 기기는 초대 링크(`/join/<코드>`)에서 이름과 비밀번호를 넣어 등록하면
+그 브라우저에 1년짜리 기기 토큰(HttpOnly 쿠키)이 남는다. 기기별로 `view`(보기만) / `edit`
+권한을 주고 하나씩 끊을 수 있다. 비밀번호는 IP 별 5회(링크 전체 30회) 틀리면 5분 잠긴다.
+등록한 기기도 접속자 관리 화면은 볼 수 없다 (관리자는 tailnet 허용 계정과 이 PC 직접 접속만).
+
+> `ALLOW_FUNNEL=1` 로 두면 등록 없이 funnel 접속을 전부 받는다. 권하지 않는다.
+> 포트포워딩이나 `WEB_BIND=0.0.0.0` 으로 직접 여는 것은 여전히 금물이다 — Tailscale 헤더가
+> 없어 접근 제한이 전혀 걸리지 않는다.
 
 ## 기술 스택
 
