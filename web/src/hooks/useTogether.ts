@@ -26,6 +26,10 @@ export interface Member {
   ready: boolean;
   /** 시작 준비가 아직 안 끝남 */
   preparing: boolean;
+  /** 그 기기의 자동 측정값(재생 위치가 실제 소리보다 뒤처지는 만큼, ms) */
+  dev?: number | null;
+  /** 그 기기의 '내 기기 지연'(ms) */
+  delay?: number | null;
 }
 
 const LS_NAME = "together.name";
@@ -55,7 +59,15 @@ export function useTogether(
   jobId: string,
   onState: (s: RoomState, fresh: boolean) => void,
   onBeep?: (at: number | null, by: string) => void,
+  more?: {
+    /** 마이크로 자동 맞춤 — 모두 삐를 낸다 (byMe: 내가 누른 것이면 내가 듣는다) */
+    onCalib?: (at: number, order: string[], by: string, byName: string) => void;
+    /** 듣는 기기가 보낸 내 보정값(ms) */
+    onAdjust?: (ms: number, by: string) => void;
+  },
 ) {
+  const moreRef = useRef(more);
+  moreRef.current = more;
   const [joined, setJoined] = useState(false);
   const [connected, setConnected] = useState(false);
   const [members, setMembers] = useState<Member[]>([]);
@@ -172,6 +184,10 @@ export function useTogether(
       } else if (msg.t === "state") {
         stateRef.current = msg.state;
         onStateRef.current(msg.state, false);
+      } else if (msg.t === "calib") {
+        moreRef.current?.onCalib?.(msg.at, msg.order, msg.by, msg.by_name);
+      } else if (msg.t === "adjust") {
+        moreRef.current?.onAdjust?.(msg.ms, msg.by);
       } else if (msg.t === "beep") {
         onBeepRef.current?.(msg.at ?? null, msg.by);
       } else if (msg.t === "members") {
