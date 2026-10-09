@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Job } from "../types";
 import { BASE } from "../api";
-import { cachedUrl, download } from "../lib/audioCache";
+import { cachedUrl, download, removeFromDevice } from "../lib/audioCache";
 import { stemFilesOf } from "../lib/stems";
 
 export interface Track {
@@ -88,8 +88,10 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
    * 재생이 끊긴다. 그래서 실제로 재생할 트랙(파일·수정 시각)이 바뀔 때만 도는 키를 쓴다.
    * 믹스다운 결과처럼 트랙이 아닌 파일이 늘어나는 것은 재생에 영향을 주지 않는다.
    */
+  // 기기 저장을 지우면 이 값을 올려 트랙을 다시 불러온다 (스트리밍으로 돌아간다)
+  const [reloadTick, setReloadTick] = useState(0);
   const key = job
-    ? `${job.id}:${tracksOf(job).map((t) => `${t.rel}@${t.mtime}`).join("|")}`
+    ? `${job.id}:${tracksOf(job).map((t) => `${t.rel}@${t.mtime}`).join("|")}#${reloadTick}`
     : "";
   const jobRef = useRef(job);
   jobRef.current = job;
@@ -490,6 +492,14 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     cache,
     /** 지금 곡의 스템을 기기에 저장 (이후 정지·이동·재생 때 네트워크를 안 탄다) */
     saveToDevice: () => saveRef.current?.(),
+    /** 지금 곡의 기기 저장을 지운다. 재생 위치는 그대로 두고 스트리밍으로 돌아간다. */
+    removeFromDevice: async () => {
+      const urls = tracks.filter((t) => !t.virtual).map((t) => t.url);
+      audiosRef.current.forEach((a) => a.pause());
+      setPlaying(false);
+      await removeFromDevice(urls);
+      setReloadTick((n) => n + 1);
+    },
     setRate,
     play,
     prime,

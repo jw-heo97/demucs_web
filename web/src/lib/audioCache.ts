@@ -105,6 +105,23 @@ export async function download(
   return remember(url, blob);
 }
 
+/** 이 트랙들을 기기에서 지운다 (같은 트랙의 wav/mp3·다른 버전 사본까지) */
+export async function removeFromDevice(urls: string[]) {
+  const trackOf = (u: string) =>
+    new URL(u, location.href).pathname.replace(/\/(wav|mp3)\//i, "/").replace(/\.(wav|mp3)$/i, "");
+  const mine = new Set(urls.map(trackOf));
+  for (const [k, v] of [...objectUrls]) {
+    if (mine.has(trackOf(k))) {
+      objectUrls.delete(k);
+      URL.revokeObjectURL(v);
+    }
+  }
+  for (const u of urls) partials.delete(u);
+  if (!hasCache()) return;
+  const cache = await caches.open(CACHE_NAME);
+  for (const req of await cache.keys()) if (mine.has(trackOf(req.url))) await cache.delete(req);
+}
+
 /** 기기에 받아 둔 오디오 전체 크기(바이트) — 설정·안내용 */
 export async function cachedBytes(): Promise<number> {
   if (!hasCache()) return 0;
