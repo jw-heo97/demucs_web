@@ -631,12 +631,20 @@ export function SongMapTab({ jobs, onChanged }: Props) {
                               onClick={() =>
                                 patchRange(i, { anchor: r.anchor != null ? null : +engine.time.toFixed(3) })
                               }
-                              title="현재 재생 위치에 고정 / 해제"
+                              title={
+                                r.anchor != null
+                                  ? "고정 해제 — 다시 1마디 1박과 BPM 으로 이어서 계산합니다"
+                                  : "이 구간 첫 마디를 지금 재생 위치에 못 박습니다. 연주 템포가 흔들려 뒤로 갈수록 마디선이 밀릴 때, 첫 박이 들리는 자리에서 멈추고 누르세요."
+                              }
                             >
                               {r.anchor != null ? "해제" : "고정"}
                             </button>
                             {i > 0 && (
-                              <button className="ghost" onClick={() => removeRange(i)}>
+                              <button
+                                className="ghost"
+                                onClick={() => removeRange(i)}
+                                title="이 구간 줄을 지웁니다. 그 마디들은 앞 구간 설정(이름·박자·BPM·클릭)을 이어받습니다. 저장해야 남습니다."
+                              >
                                 삭제
                               </button>
                             )}

@@ -116,8 +116,8 @@ table.grid tr.dup td { background: color-mix(in srgb, var(--err) 12%, transparen
 table.grid input, table.grid select { padding: 5px 7px; font-size: .82rem; }
 .sig { display: flex; align-items: center; gap: 3px; }
 .sig select { width: 46px; }
-.rowbtns { display: flex; gap: 4px; }
-.rowbtns button { padding: 4px 7px; font-size: .71rem; }
+.rowbtns { display: flex; gap: 4px; flex-wrap: nowrap; }
+.rowbtns button { padding: 4px 7px; font-size: .71rem; white-space: nowrap; }
 .beatsel { display: flex; gap: 3px; flex-wrap: wrap; }
 .beatsel button { width: 24px; height: 24px; padding: 0; font-size: .71rem; font-weight: 600; border-radius: 5px; }
 .plnum { width: 22px; text-align: center; color: var(--muted); font-size: .78rem; font-variant-numeric: tabular-nums; flex-shrink: 0; }
