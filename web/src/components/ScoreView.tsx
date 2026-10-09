@@ -276,3 +276,79 @@ export function ScorePanel({
     </div>
   );
 }
+
+/**
+ * 연주용 악보 보기(플레이리스트): 페이지를 세로로 이어 붙이고, 지금 마디가 있는 쪽으로
+ * 넘긴다. 쪽의 마지막 마디에 들어서면 다음 쪽으로 미리 넘긴다 — 넘기는 순간 첫 마디를
+ * 이미 읽고 있어야 하기 때문이다. 한 쪽이 화면 높이에 들어오게 폭을 맞춘다.
+ */
+export function ScorePages({
+  score,
+  bar,
+  onPickBar,
+}: {
+  score: ScoreData;
+  bar: number;
+  onPickBar?: (bar: number) => void;
+}) {
+  const k = measureOfBar(score, Math.max(1, bar)) ?? 0;
+  const m = score.measures[k];
+  let page = m?.page ?? 0;
+  const nextK = measureOfBar(score, Math.max(1, bar) + 1);
+  if (m && nextK != null && score.measures[nextK].page !== page) {
+    page = score.measures[nextK].page; // 쪽의 마지막 마디: 미리 넘긴다
+  }
+
+  // 음원 마디 → 악보 마디가 여러 번일 수 있어(반복) 악보 마디마다 처음 나오는 음원 마디를 기억
+  const firstBarOf = useMemo(() => {
+    const out = new Map<number, number>();
+    const n = score.order ? score.order.length : score.measures.length;
+    for (let b = 1; b <= n; b++) {
+      const kk = measureOfBar(score, b);
+      if (kk != null && !out.has(kk)) out.set(kk, b);
+    }
+    return out;
+  }, [score]);
+
+  const refs = useRef<(HTMLDivElement | null)[]>([]);
+  const shown = useRef<number | null>(null);
+  useEffect(() => {
+    if (shown.current === page) return;
+    shown.current = page;
+    refs.current[page]?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [page]);
+
+  return (
+    <div className="score-pages">
+      {score.pages.map((pg, pi) => (
+        <div
+          key={pi}
+          ref={(el) => {
+            refs.current[pi] = el;
+          }}
+          className="score-page"
+          style={{ maxWidth: `calc((100vh - 16px) * ${pg.w / pg.h})` }}
+        >
+          <img src={api.fileUrl(score.page_urls[pi])} alt={`${pi + 1}쪽`} />
+          {score.measures.map((ms, mi) =>
+            ms.page !== pi ? null : (
+              <button
+                key={mi}
+                type="button"
+                className={`score-bar${mi === k ? " on" : ""}`}
+                title={firstBarOf.has(mi) ? `${firstBarOf.get(mi)}마디로 이동` : undefined}
+                onClick={() => firstBarOf.has(mi) && onPickBar?.(firstBarOf.get(mi)!)}
+                style={{
+                  left: `${(ms.x0 / pg.w) * 100}%`,
+                  width: `${((ms.x1 - ms.x0) / pg.w) * 100}%`,
+                  top: `${((ms.top - (ms.bot - ms.top) * 0.9) / pg.h) * 100}%`,
+                  height: `${(((ms.bot - ms.top) * 2.8) / pg.h) * 100}%`,
+                }}
+              />
+            ),
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}

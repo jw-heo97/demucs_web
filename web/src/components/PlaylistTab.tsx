@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { useAudioEngine } from "../hooks/useAudioEngine";
-import { barsFromMap } from "../lib/songmap";
+import { barAtTime, barsFromMap } from "../lib/songmap";
 import { clock } from "../lib/time";
-import type { Job, Playlist } from "../types";
+import type { Job, Playlist, ScoreData } from "../types";
 import { Mixer } from "./Mixer";
+import { ScorePages } from "./ScoreView";
 
 interface Props {
   jobs: Job[];
@@ -13,6 +14,7 @@ interface Props {
 
 const LS_SELECTED = "playlist.selected";
 const LS_AUTONEXT = "playlist.autoNext";
+const LS_SHOWSCORE = "playlist.showScore";
 
 function lsGet(k: string): string | null {
   try {
@@ -93,6 +95,19 @@ export function PlaylistTab({ jobs, onChanged }: Props) {
       setAutoToken((t) => t + 1);
     },
   });
+  // 연결된 악보 (곡이 바뀌면 다시 받는다)
+  const [score, setScore] = useState<ScoreData | null>(null);
+  const [showScore, setShowScore] = useState(() => lsGet(LS_SHOWSCORE) !== "0");
+  const scoreJob = curJob?.files.some((f) => f.rel === "score.pdf") ? curJob.id : null;
+  useEffect(() => {
+    let alive = true;
+    setScore(null);
+    if (scoreJob) api.score(scoreJob).then((s) => alive && setScore(s)).catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [scoreJob]);
+
   const bars = useMemo(
     () => (curJob ? barsFromMap((curJob.songmap as never) ?? null, curJob.duration) : []),
     [curJob],
@@ -224,6 +239,19 @@ export function PlaylistTab({ jobs, onChanged }: Props) {
                 />
                 자동 다음 곡
               </label>
+              {score && (
+                <label className="check" style={{ margin: 0 }}>
+                  <input
+                    type="checkbox"
+                    checked={showScore}
+                    onChange={(e) => {
+                      setShowScore(e.target.checked);
+                      lsSet(LS_SHOWSCORE, e.target.checked ? "1" : "0");
+                    }}
+                  />
+                  악보
+                </label>
+              )}
             </div>
             {curJob ? (
               <Mixer
@@ -237,6 +265,16 @@ export function PlaylistTab({ jobs, onChanged }: Props) {
               />
             ) : (
               <div className="empty">{items.length ? "재생할 수 있는 곡이 없습니다." : "아래에서 보관함 곡을 추가하세요."}</div>
+            )}
+            {curJob && score && showScore && score.measures.length > 0 && (
+              <ScorePages
+                score={score}
+                bar={barAtTime(bars, engine.time)?.bar ?? 1}
+                onPickBar={(b) => {
+                  const t = bars.find((x) => x.bar === b)?.start;
+                  if (t != null) engine.seek(t);
+                }}
+              />
             )}
           </div>
 
