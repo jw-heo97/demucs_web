@@ -778,17 +778,30 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
    * 예비박부터: 곡 위치 pos 앞은 조용하고 예비박 클릭이 들어 있는 파일을 합친 재생으로 튼다.
    * 클릭과 음악이 한 파일이라 기기와 상관없이 마지막 클릭 → 1마디 1박이 정확히 한 박이다.
    */
+  /**
+   * 예비박 파일을 만들어 끼워 두기만 한다 (멈춘 채, 곡 위치 at 에). 함께 연습은 준비 단계에서 이걸
+   * 해 두고, 출발 신호에 맞춰 playRaw 로 튼다. 성공하면 true.
+   */
+  const prepareCountIn = useCallback(
+    async (pos: number, clicks: CountInClick[], peak: number, at: number): Promise<boolean> => {
+      const m = mixRef.current;
+      if (!m || !canMix()) return false;
+      await ensureMix();
+      activate(m);
+      if (!m.data) return false;
+      const url = await makeCountInWav(m.data, pos, clicks, peak);
+      if (m.segUrl) URL.revokeObjectURL(m.segUrl);
+      m.segUrl = url;
+      m.el.pause();
+      switchSrc(m, url, at, true);
+      return true;
+    },
+    [],
+  );
+
   const playCountIn = useCallback(async (pos: number, clicks: CountInClick[], peak: number) => {
-    const m = mixRef.current;
-    if (!m || !canMix()) return startPlaying();
-    await ensureMix();
-    activate(m);
-    if (!m.data) return startPlaying();
-    const url = await makeCountInWav(m.data, pos, clicks, peak);
-    if (m.segUrl) URL.revokeObjectURL(m.segUrl);
-    m.segUrl = url;
     const s0 = Math.min(pos, clicks.length ? clicks[0].t - 0.15 : pos);
-    switchSrc(m, url, s0, true);
+    if (!(await prepareCountIn(pos, clicks, peak, s0))) return startPlaying();
     return startPlaying();
   }, []);
 
@@ -939,5 +952,8 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     mixOn,
     mixBusy,
     playCountIn,
+    prepareCountIn,
+    /** 지금 끼워진 파일 그대로 재생 (예비박 파일을 곡 전체로 바꾸지 않는다) — 함께 연습 출발용 */
+    playRaw: () => startPlaying(),
   };
 }

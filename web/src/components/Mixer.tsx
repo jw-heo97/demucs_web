@@ -64,7 +64,7 @@ const LS_DEVICE = "together.deviceMs";
 /** 반복 구간 끝에서 반복 시작으로 돌아와 예비박을 시작하기 전 쉬는 시간(초) */
 const LOOP_GAP = 0.5;
 /** 함께 연습 버튼 — 아직 다듬는 중이라 숨겨 둔다 (서버도 TOGETHER=1 일 때만 연다) */
-const TOGETHER_ENABLED = false;
+const TOGETHER_ENABLED = true;
 /** 플레이리스트에서 다음 곡으로 넘어가 자동으로 시작하기 전에 쉬는 시간(초) */
 const AUTO_START_DELAY = 1.5;
 function useDeviceDelay(): [number, (ms: number) => void] {
@@ -251,6 +251,8 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
   const userOffset = lockedOffset ?? localOffset;
   const [devLat, setDevLat] = useState<DeviceLatency | null>(readDeviceLatency);
   const clickOffset = userOffset + (devLat?.ms ?? 0);
+  const devLatRef = useRef<number | null>(null);
+  devLatRef.current = devLat?.ms ?? null;
   const measuringRef = useRef(false);
   /** 기기 측정 (제스처 안에서 부른다). 처음 재생할 때 화면에 드러내지 않고 자동으로 —
    *  확정 버전의 메트로놈은 파일이라 필요 없고, 예비박·편집 중 즉석 클릭에만 쓰인다 */
@@ -326,6 +328,65 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
   const [preparing, setPreparing] = useState(false);
   const prepRef = useRef("");
 
+  /** 예비박 클릭 (곡 시각) — 혼자 재생·함께 연습이 같은 규칙 */
+  function countInClicks(pos: number, n: number) {
+    const nb = nextBeatAfter(bars, pos);
+    const bb = barAtTime(bars, pos) ?? bars[0];
+    const st = bb ? stepOf(bb.bpm, bb.beat_unit) : 0.5;
+    const bpb = bb?.beats_per_bar ?? 4;
+    const offS = userOffset / 1000;
+    const clicks: { t: number; freq: number }[] = [];
+    for (let k = n; k >= 1; k--) clicks.push({ t: nb - k * st + offS, freq: (n - k) % bpb === 0 ? 1500 : 1000 });
+    return { clicks, nb, st };
+  }
+
+  /**
+   * 함께 연습 — 합친 재생으로 출발. 준비 단계에서 예비박 파일을 끼워 두고(mixPrep), 출발 신호가 오면
+   * 첫 소리보다 PREROLL 초 앞(파일의 조용한 앞부분)부터 미리 틀어, 그 조용한 동안에만 서버 시각
+   * 기준 위치를 재서 맞춘다. 소리가 나기 시작한 뒤에는 손대지 않는다(재생 중 보정은 소리를 흔든다).
+   */
+  const mixPrep = useRef<{ id: string; pos: number; clicks: { t: number; freq: number }[] } | null>(null);
+  const PREROLL = 1.5;
+  function mixedRoomStart(s: RoomState) {
+    // 준비해 둔 예비박 파일은 그 출발 한 번에만 쓴다 (속도·반복 구간 변경 같은 이어가기는 아래 '합류')
+    const prep = mixPrep.current && Math.abs(mixPrep.current.pos - s.pos) < 0.01 ? mixPrep.current : null;
+    mixPrep.current = null;
+    const first = Math.min(s.pos, prep?.clicks[0]?.t ?? s.pos);
+    // 이 기기 보정: 소리가 늦게 나는 만큼(블루투스·내 기기 지연) + 재생 위치가 실제 소리보다
+    // 뒤처지는 만큼(아이패드 자동 측정) 앞서 간다
+    const g = (deviceMsRef.current + (devLat?.ms ?? 0)) / 1000;
+    const songAt = (ms: number) => s.pos + ((ms - s.at) / 1000) * s.rate + g * s.rate;
+    const startSong = Math.max(-9.5, first - PREROLL);
+    const startServer = s.at + ((startSong - g * s.rate - s.pos) / s.rate) * 1000;
+    const a = engine.audios.current[0];
+    const wait = startServer - tg.serverNow();
+    if (!a || !prep || wait < 50) {
+      // 준비가 안 됐거나 늦었다 — 지금 위치로 바로 합류 (소리가 나는 중에 맞춘다)
+      engine.seek(Math.max(0, songAt(tg.serverNow() + 300)));
+      window.setTimeout(() => void engine.playRaw(), 300);
+      return;
+    }
+    a.currentTime = startSong;
+    setCounting(prep.clicks.length);
+    timers.current.t = window.setTimeout(async () => {
+      await engine.playRaw();
+      // 조용한 앞부분에서만 맞춘다: 첫 소리 0.2초 전까지
+      const id = window.setInterval(() => {
+        const now = tg.serverNow();
+        const want = songAt(now);
+        const cur = a.currentTime;
+        const left = prep.clicks.filter((c) => c.t > cur - 0.02).length;
+        setCounting(Math.min(prep.clicks.length, left));
+        if (cur > first - 0.2) {
+          clearInterval(id);
+          return;
+        }
+        if (!a.paused && !a.seeking && Math.abs(cur - want) > 0.006) a.currentTime = want + 0.012;
+      }, 25);
+      timers.current.i = id;
+    }, Math.max(0, wait - 30));
+  }
+
   function applyRoomState(s: RoomState) {
     cancelCount();
     if (Math.abs(s.rate - (rate || 1)) > 1e-3) engine.setRate(s.rate);
@@ -333,12 +394,16 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
     prepRef.current = s.prepare?.id ?? "";
     setPreparing(!!s.prepare);
     if (s.prepare) {
-      void prepareLocal(s.prepare.id, s.prepare.pos);
+      void prepareLocal(s.prepare.id, s.prepare.pos, s.prepare.count_in);
       return;
     }
     if (!s.playing) {
       engine.pause();
       engine.seek(s.pos);
+      return;
+    }
+    if (engine.canMix) {
+      mixedRoomStart(s);
       return;
     }
     let ctx: AudioContext;
@@ -370,8 +435,26 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
    * '맞추고 시작' 준비: 그 위치로 가서 모든 트랙이 재생할 만큼 받아질 때까지 기다리고, 시계를
    * 다시 잰 뒤 준비됐다고 알린다. 모두 준비되면 서버가 시작 시각을 정해 보낸다.
    */
-  async function prepareLocal(id: string, pos: number) {
+  async function prepareLocal(id: string, pos: number, nCount = 0) {
     engine.pause();
+    mixPrep.current = null;
+    if (engine.canMix) {
+      // 합친 재생: 예비박 파일을 끼워 두고 시계를 다시 잰 뒤 준비됐다고 알린다
+      const { clicks } = countInClicks(pos, nCount);
+      try {
+        const ok = await engine.prepareCountIn(pos, clicks, 0.9 * Math.max(1, metroVol), pos);
+        if (prepRef.current !== id) return;
+        if (ok) {
+          metro.holdUntil(nextBeatAfter(bars, pos) - 0.02);
+          mixPrep.current = { id, pos, clicks };
+          await tg.resync();
+          if (prepRef.current === id) tg.send({ t: "ready", id });
+          return;
+        }
+      } catch {
+        /* 아래 예전 방식으로 */
+      }
+    }
     engine.seek(pos);
     const t0 = performance.now();
     await tg.resync();
@@ -417,7 +500,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
       if (!s) return;
       let med: number | null = null;
       if (s.playing && !s.prepare && a && !a.paused && !a.seeking && !countingRef.current) {
-        win.push(a.currentTime - roomPosition(s, serverNow() + deviceMsRef.current));
+        win.push(a.currentTime - roomPosition(s, serverNow() + deviceMsRef.current) - (devLatRef.current ?? 0) / 1000);
         if (win.length > 5) win.shift();
         if (win.length >= 3) med = [...win].sort((x, y) => x - y)[Math.floor(win.length / 2)];
       } else win = [];
@@ -479,6 +562,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
     }
     engine.prime();
     voice.prime();
+    if (!devLat) measureDevice(false);
     tg.join();
   }
 
@@ -670,7 +754,12 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
       const step = (b ? stepOf(b.bpm, b.beat_unit) : 0.5) / r;
       const toBeat = (nextBeatAfter(bars, pos) - pos) / r;
       // 예비박이 다 들어갈 만큼 + 네트워크 여유. 음악은 그 뒤 '지금+lead' 에 모두 함께 들어간다.
-      const lead = 0.8 + (withCount ? Math.max(0, countIn * step - toBeat) : 0) + Math.max(0, -clickOffset / 1000);
+      // 합친 재생이면 조용한 앞부분(PREROLL)에서 위치를 맞출 시간도 둔다
+      const lead =
+        0.8 +
+        (withCount ? Math.max(0, countIn * step - toBeat) : 0) +
+        Math.max(0, -clickOffset / 1000) +
+        (engine.canMix ? PREROLL + 0.5 : 0);
       tg.send({ t: "play", pos, count_in: withCount ? countIn : 0, rate: r, loop: lp, lead });
       return;
     }
