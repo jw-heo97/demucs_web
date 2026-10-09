@@ -7,7 +7,8 @@
  * 스피커 지연·블루투스·시계 오차가 모두 들어간 '실제로 귀에 들리는 차이' 만 남는다.
  */
 
-export const CALIB_FREQ = 2000;
+/** 기기(칸)마다 다른 주파수 — 시간 칸과 주파수 둘 다로 누구 소리인지 가린다 */
+export const calibFreq = (slot: number) => 1600 + slot * 500;
 /** 기기마다 칸 간격(ms) — 1초 안에 모두 들어가게, 2대면 450ms (어긋남이 ±200ms 까지 구분된다) */
 export const calibSlotMs = (devices: number) => Math.floor(900 / Math.max(2, devices));
 export const CALIB_COUNT = 6;
@@ -60,11 +61,11 @@ export async function startMic(ctx: AudioContext): Promise<Recording> {
   };
 }
 
-/** 2kHz 성분이 갑자기 커지는 순간들 (AudioContext 시각, 초) */
-export function findBeeps(samples: Float32Array, firstFrame: number, sr: number): number[] {
+/** 그 주파수 성분이 갑자기 커지는 순간들 (AudioContext 시각, 초) */
+export function findBeeps(samples: Float32Array, firstFrame: number, sr: number, freq: number): number[] {
   const hop = 32;
   const win = 256;
-  const w = (2 * Math.PI * CALIB_FREQ) / sr;
+  const w = (2 * Math.PI * freq) / sr;
   const cos = Math.cos(w);
   const pow: number[] = [];
   for (let s = 0; s + win <= samples.length; s += hop) {
@@ -108,8 +109,8 @@ export function findBeeps(samples: Float32Array, firstFrame: number, sr: number)
  * 원래 울려야 할 AudioContext 시각.
  */
 export function lateness(
-  onsets: number[],
-  slots: number,
+  /** 칸(기기)마다 그 기기 주파수로 찾은 소리 시작들 */
+  onsets: number[][],
   expected: (slot: number, k: number) => number,
   slotMs: number,
   selfSlot: number,
@@ -119,25 +120,22 @@ export function lateness(
     const s = [...xs].sort((a, b) => a - b);
     return s[Math.floor(s.length / 2)];
   };
-  // 1) 내 삐(가장 크게 들린다)로 '내 마이크·스피커 지연' 을 먼저 잡는다
-  const mine: number[] = [];
-  for (const t of onsets)
-    for (let k = 0; k < CALIB_COUNT; k++) {
-      const d = t - expected(selfSlot, k);
-      if (Math.abs(d) < within) mine.push(d);
-    }
-  if (mine.length < 3) return Array(slots).fill(null);
-  const m0 = med(mine);
-  // 2) 나머지는 그만큼 옮긴 예정 시각에서 가까운 칸으로 나눈다 (어긋남이 칸 간격의 절반까지 구분된다)
-  const per: number[][] = Array.from({ length: slots }, () => []);
-  for (const t of onsets) {
-    let best: { j: number; d: number } | null = null;
-    for (let j = 0; j < slots; j++)
+  const lateOf = (j: number, shift: number) => {
+    const xs: number[] = [];
+    for (const t of onsets[j] ?? [])
       for (let k = 0; k < CALIB_COUNT; k++) {
-        const d = t - expected(j, k) - m0;
-        if (Math.abs(d) < within && (!best || Math.abs(d) < Math.abs(best.d))) best = { j, d };
+        const d = t - expected(j, k) - shift;
+        if (Math.abs(d) < within) xs.push(d + shift);
       }
-    if (best) per[best.j].push((best.d + m0) * 1000);
-  }
-  return per.map((xs) => (xs.length < 3 ? null : med(xs)));
+    return xs;
+  };
+  // 1) 내 삐로 '내 마이크·스피커 지연' 을 먼저 잡는다
+  const mine = lateOf(selfSlot, 0);
+  if (mine.length < 3) return onsets.map(() => null);
+  const m0 = med(mine);
+  // 2) 나머지는 그만큼 옮긴 예정 시각 기준으로 (어긋남이 칸 간격의 절반까지 구분된다)
+  return onsets.map((_, j) => {
+    const xs = j === selfSlot ? mine : lateOf(j, m0);
+    return xs.length < 3 ? null : med(xs) * 1000;
+  });
 }
