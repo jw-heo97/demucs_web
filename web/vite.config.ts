@@ -14,10 +14,11 @@ export default defineConfig({
   },
   server: {
     port: 5173,
-    // 개발 중에는 API 를 컨테이너로 넘긴다 (npm run dev)
+    // 개발 중에는 API 를 컨테이너로 넘긴다 (npm run dev). 개발 서버를 Docker 의 node 로 돌리면
+    // 컨테이너 안에서 호스트는 127.0.0.1 이 아니라서 API_TARGET=http://host.docker.internal:8080 으로 준다
     proxy: {
-      "/api": { target: "http://127.0.0.1:8080", changeOrigin: true },
-      "/healthz": { target: "http://127.0.0.1:8080", changeOrigin: true },
+      "/api": { target: process.env.API_TARGET || "http://127.0.0.1:8080", changeOrigin: true },
+      "/healthz": { target: process.env.API_TARGET || "http://127.0.0.1:8080", changeOrigin: true },
     },
   },
 });

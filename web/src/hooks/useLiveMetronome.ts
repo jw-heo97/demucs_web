@@ -122,10 +122,10 @@ function lowerBound(ev: ClickEvent[], t: number) {
  * 기다려야 소리가 바뀌었다. 지금은 화면의 마디 목록에서 바로 박을 계산해 Web Audio 로
  * 예약하므로 저장 전 편집도 다음 박부터 들린다.
  *
- * 시계: 음악은 <audio> 가 재생하고 클릭은 AudioContext 가 울리므로 두 시계를 이어야 한다.
- * 재생 위치를 기준점(anchor)으로 잡고 AudioContext 시각으로 앞으로의 곡 시각을 예측해
- * 클릭을 예약한다. 실제 위치와 조금 어긋나면 기준점을 살짝 당기고, 크게 어긋나면
- * (탐색·구간 반복·버퍼링) 다시 잡는다.
+ * 시계: 재생 위치를 기준점(anchor)으로 잡고 AudioContext 시각으로 앞으로의 곡 시각을 예측해
+ * 클릭을 예약한다. 재생기(lib/bufferTransport)의 위치는 AudioContext 시계에서 나오므로 예측이
+ * 그대로 맞는다. (예전 <audio> 시절의 '조금 어긋나면 당기고 크게 어긋나면 다시 잡는' 처리는 남겨
+ * 뒀다 — 탐색·구간 반복·속도 변경에서 그 길로 다시 잡는다.)
  */
 export function useLiveMetronome(engine: Engine, bars: Bar[], subdiv: 1 | 2 = 1, offsetMs = 0) {
   const { tracks, rate, duration } = engine;
@@ -196,14 +196,7 @@ export function useLiveMetronome(engine: Engine, bars: Bar[], subdiv: 1 | 2 = 1,
     },
     [],
   );
-  // 이 곡 위치 전에는 울리지 않는다 — 합친 재생은 예비박이 파일 안에 들어 있어서, 그동안 즉석
-  // 클릭이 같이 울리면 겹친다
-  const holdRef = useRef(-Infinity);
-  const holdUntil = useCallback((songPos: number) => {
-    holdRef.current = songPos;
-  }, []);
   const cancel = useCallback(() => {
-    holdRef.current = -Infinity;
     hintRef.current = null;
     resetRef.current = true;
   }, []);
@@ -262,7 +255,6 @@ export function useLiveMetronome(engine: Engine, bars: Bar[], subdiv: 1 | 2 = 1,
       const horizon = pred + (LOOKAHEAD + Math.max(0, -off)) * r;
       while (anchor && next < ev.length && ev[next].t < horizon) {
         const e = ev[next++];
-        if (e.t < holdRef.current) continue;
         let when = anchor.ctx + (e.t - anchor.song) / r + off;
         // 시작하며 살짝 지나친 박은 바로 울린다 (그 밖에 지난 박은 이미 걸러졌다)
         if (when < now - 0.15) continue;
@@ -410,5 +402,5 @@ export function useLiveMetronome(engine: Engine, bars: Bar[], subdiv: 1 | 2 = 1,
     };
   }, [enabled, engine.audios]);
 
-  return { expect, cancel, holdUntil };
+  return { expect, cancel };
 }
