@@ -419,7 +419,10 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
           lastPush.current = now;
           setTime(t);
         }
-        if (playing) {
+        // 마스터(첫 트랙)가 멈춰 있으면 나머지를 다시 틀지 않는다. 예전엔 일시정지 직후 화면이
+        // 다시 그려지기 전 프레임(playing 이 아직 true)에서 '멈춘 트랙 = 다시 틀어야 할 트랙' 으로
+        // 보고 마스터 외 트랙을 되살려, 일시정지했는데 소리가 계속 났다 (함께 연습의 iPad).
+        if (playing && !as[0].paused) {
           for (let i = 1; i < as.length; i++) {
             const want = t - offOf(i);
             const a = as[i];

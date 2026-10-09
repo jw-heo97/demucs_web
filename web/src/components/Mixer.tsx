@@ -54,7 +54,7 @@ const LS_DEVICE = "together.deviceMs";
 /** 반복 구간 끝에서 반복 시작으로 돌아와 예비박을 시작하기 전 쉬는 시간(초) */
 const LOOP_GAP = 0.5;
 /** 함께 연습 버튼 — 아직 다듬는 중이라 숨겨 둔다 (서버도 TOGETHER=1 일 때만 연다) */
-const TOGETHER_ENABLED = true;
+const TOGETHER_ENABLED = false;
 function useDeviceDelay(): [number, (ms: number) => void] {
   const [v, setV] = useState(() => {
     try {
@@ -579,12 +579,16 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
     }
     if (tg.joined) {
       // 함께 연습: 방에 알리기만 하고, 실제 재생은 방에서 돌아온 상태로 모두가 같이 한다
-      engine.prime();
-      voice.prime();
       if ((playing || counting || preparing) && !opts.force) {
+        // 내 기기는 방의 답을 기다리지 않고 바로 멈춘다 (늦게 오거나 끊겨도 소리가 남지 않게)
+        cancelCount();
+        engine.pause();
         tg.send({ t: "pause" });
         return;
       }
+      // 재생 준비 — prime 은 트랙을 play()·pause() 하므로 재생 중에 부르면 안 된다
+      engine.prime();
+      voice.prime();
       let pos = opts.from ?? time;
       const lp = opts.loop !== undefined ? opts.loop : loopButton?.region ?? null;
       if (lp) pos = lp.start;
