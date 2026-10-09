@@ -266,6 +266,10 @@ async def handle(ws: WebSocket, job_id: str) -> None:
                 else:
                     room.state.update(loop=lp, by=name)
                 await room.push_state()
+            elif t == "beep":
+                # 소리로 맞춤 확인: 모두가 같은 서버 시각들에 클릭을 낸다. 한 번 '딱' 으로 들리면 맞은 것,
+                # '따닥' 으로 갈라지면 어긋난 것 — 각자 '내 기기 지연' 을 조정한다
+                await room.broadcast({"t": "beep", "at": now_ms() + 1500, "n": 8, "by": name})
             elif t == "report":
                 # 기기가 잰 자기 상태(서버 기준 어긋남 ms, 왕복 시간) — 참여자 목록에 보인다
                 m = room.members.get(mid)
