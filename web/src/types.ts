@@ -105,3 +105,33 @@ export interface Playlist {
   created_at: number;
   updated_at: number;
 }
+
+/** 악보 한 마디의 위치 (PDF 포인트 단위, 페이지 기준) */
+export interface ScoreMeasure {
+  number: number;
+  page: number;
+  system: number;
+  x0: number;
+  x1: number;
+  /** 잘라 보여줄 줄 범위 */
+  y0: number;
+  y1: number;
+  /** 보표 맨 윗줄·아랫줄 */
+  top: number;
+  bot: number;
+  sys_x0: number;
+  sys_x1: number;
+}
+
+export interface ScoreData {
+  version: number;
+  pages: { w: number; h: number; img: string }[];
+  page_urls: string[];
+  measures: ScoreMeasure[];
+  /** 구간 표시 — measure 는 악보 마디 번호(1부터) */
+  marks: { measure: number; text: string }[];
+  tempo: number | null;
+  warnings: string[];
+  /** 음원 n번째 마디 = 악보 order[n-1] 번째 마디 (반복 기호가 있는 악보) */
+  order?: number[];
+}

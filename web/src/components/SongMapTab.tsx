@@ -2,11 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { useAudioEngine } from "../hooks/useAudioEngine";
 import { sectionAt } from "../lib/sectionColors";
-import { barsFromMap, emptyRange, nearestBar, stepOf } from "../lib/songmap";
+import { barAtTime, barsFromMap, emptyRange, nearestBar, stepOf } from "../lib/songmap";
 import { stemFilesOf } from "../lib/stems";
 import { showTime } from "../lib/time";
 import type { Job, MapPayload, MapVersion, SongMap } from "../types";
 import { Mixer, type MixerControl } from "./Mixer";
+import { ScorePanel } from "./ScoreView";
 import { TimeInput } from "./TimeInput";
 import { Waveform, type LoopRegion, type WaveMode } from "./Waveform";
 
@@ -360,6 +361,16 @@ export function SongMapTab({ jobs, onChanged }: Props) {
               onCountInChange={setCountIn}
             />
           </div>
+
+          {/* 악보: 지금 마디부터 8마디. 마디를 누르면 그 마디로 이동 */}
+          <ScorePanel
+            jobId={job.id}
+            bar={barAtTime(bars, engine.time)?.bar ?? 1}
+            onPickBar={(b) => {
+              const t = bars.find((x) => x.bar === b)?.start;
+              if (t != null) engine.seek(t);
+            }}
+          />
 
           <div className="panel">
             <div className="vertabs">
