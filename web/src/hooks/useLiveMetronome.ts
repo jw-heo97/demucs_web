@@ -21,6 +21,9 @@ const SOUND: Record<ClickEvent["kind"], { freq: number; peak: number; length: nu
 };
 
 const LS_SUBDIV = "metronome.subdiv";
+const LS_OFFSET = "metronome.offsetMs";
+/** 클릭 지연 보정 범위(ms) */
+export const OFFSET_LIMIT = 200;
 
 /**
  * 메트로놈 4비트(1) / 8비트(2). 곡마다가 아니라 연습 방식이라 브라우저에 하나로 기억한다.
@@ -37,6 +40,34 @@ export function useSubdiv(): [1 | 2, (n: 1 | 2) => void] {
     setV(n);
     try {
       localStorage.setItem(LS_SUBDIV, String(n));
+    } catch {
+      /* 기억만 못 할 뿐 */
+    }
+  }, []);
+  return [v, set];
+}
+
+/**
+ * 클릭 지연 보정(ms). +면 클릭을 늦추고 -면 앞당긴다. 기기마다 다르다.
+ *
+ * 음악은 <audio> 로, 클릭은 Web Audio 로 나가는데 두 경로의 출력 지연이 기기마다 달라서
+ * (특히 블루투스 이어폰·폰) 구성표가 정확해도 클릭이 음악보다 앞서거나 늦게 들린다.
+ * 곡이 아니라 기기의 성질이므로 브라우저에 하나로 기억한다.
+ */
+export function useClickOffset(): [number, (ms: number) => void] {
+  const [v, setV] = useState<number>(() => {
+    try {
+      const n = Number(localStorage.getItem(LS_OFFSET));
+      return Number.isFinite(n) ? Math.max(-OFFSET_LIMIT, Math.min(OFFSET_LIMIT, n)) : 0;
+    } catch {
+      return 0;
+    }
+  });
+  const set = useCallback((ms: number) => {
+    const n = Math.max(-OFFSET_LIMIT, Math.min(OFFSET_LIMIT, Math.round(ms) || 0));
+    setV(n);
+    try {
+      localStorage.setItem(LS_OFFSET, String(n));
     } catch {
       /* 기억만 못 할 뿐 */
     }
@@ -74,7 +105,7 @@ function lowerBound(ev: ClickEvent[], t: number) {
  * 클릭을 예약한다. 실제 위치와 조금 어긋나면 기준점을 살짝 당기고, 크게 어긋나면
  * (탐색·구간 반복·버퍼링) 다시 잡는다.
  */
-export function useLiveMetronome(engine: Engine, bars: Bar[], subdiv: 1 | 2 = 1) {
+export function useLiveMetronome(engine: Engine, bars: Bar[], subdiv: 1 | 2 = 1, offsetMs = 0) {
   const { tracks, rate, duration } = engine;
   const ci = tracks.findIndex((t) => t.virtual);
   const mix = ci >= 0 ? engine.mixOf(ci) : { on: false, vol: 0 };
@@ -103,6 +134,13 @@ export function useLiveMetronome(engine: Engine, bars: Bar[], subdiv: 1 | 2 = 1)
 
   const rateRef = useRef(rate);
   rateRef.current = rate;
+
+  // 지연 보정을 바꾸면 이미 예약한 클릭도 새 보정으로 다시 예약한다 (재생 중 귀로 맞출 수 있게)
+  const offsetRef = useRef(offsetMs / 1000);
+  useEffect(() => {
+    offsetRef.current = offsetMs / 1000;
+    dirtyRef.current = true;
+  }, [offsetMs]);
 
   // 음소거·솔로·볼륨은 마스터 게인 하나로 — 이미 예약한 클릭에도 바로 적용된다
   const gainRef = useRef<GainNode | null>(null);
@@ -190,10 +228,12 @@ export function useLiveMetronome(engine: Engine, bars: Bar[], subdiv: 1 | 2 = 1)
 
     const schedule = (now: number, pred: number, r: number) => {
       const ev = eventsRef.current;
-      const horizon = pred + LOOKAHEAD * r;
+      const off = offsetRef.current;
+      // 앞당길 때는 그만큼 더 앞까지 예약해야 제때 울린다
+      const horizon = pred + (LOOKAHEAD + Math.max(0, -off)) * r;
       while (anchor && next < ev.length && ev[next].t < horizon) {
         const e = ev[next++];
-        let when = anchor.ctx + (e.t - anchor.song) / r;
+        let when = anchor.ctx + (e.t - anchor.song) / r + off;
         // 시작하며 살짝 지나친 박은 바로 울린다 (그 밖에 지난 박은 이미 걸러졌다)
         if (when < now - 0.15) continue;
         when = Math.max(when, now);
