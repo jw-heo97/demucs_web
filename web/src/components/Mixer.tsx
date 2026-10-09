@@ -10,6 +10,30 @@ import { clock } from "../lib/time";
 
 type Engine = ReturnType<typeof useAudioEngine>;
 
+/**
+ * play() 를 부른 뒤 소리가 실제로 나기까지 걸리는 시간(초). 예비박 뒤 음악을 이만큼
+ * 미리 시작해야 1마디 1박이 예비박 박자 그대로 들어온다. 기기마다 달라서 재생할
+ * 때마다 재서 고쳐 가고 브라우저에 기억한다.
+ */
+const LS_LATENCY = "audio.startLatency";
+let startLatency = (() => {
+  try {
+    const v = Number(localStorage.getItem(LS_LATENCY));
+    return Number.isFinite(v) && v > 0 && v < 0.4 ? v : 0.06;
+  } catch {
+    return 0.06;
+  }
+})();
+function learnLatency(lag: number) {
+  // 한 번에 다 믿지 않는다 — 측정값도 몇 ms 씩 흔들린다
+  startLatency = Math.min(0.4, Math.max(0, startLatency + lag * 0.7));
+  try {
+    localStorage.setItem(LS_LATENCY, startLatency.toFixed(4));
+  } catch {
+    /* 기억만 못 할 뿐 */
+  }
+}
+
 interface Props {
   engine: Engine;
   bars: Bar[];
@@ -54,7 +78,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
   // 메트로놈 트랙은 파일이 아니라 송 맵에서 즉석으로 울린다 (편집이 바로 들린다)
   const [subdiv, setSubdiv] = useSubdiv();
   const hasMetronome = tracks.some((t) => t.virtual);
-  useLiveMetronome(engine, bars, subdiv);
+  const metro = useLiveMetronome(engine, bars, subdiv);
   // 구간 이름을 한 마디 전에 읽어 준다 (음성 합성)
   const voice = useSectionVoice(engine, bars);
 
@@ -146,6 +170,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
       }
     });
     timers.current = { oscs: [] };
+    metro.cancel();
     setCounting(0);
   }
 
@@ -218,6 +243,10 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
     }
 
     const startAt = tBeat - toBeat; // >= ctx.currentTime + margin
+    // 메트로놈이 예비박과 같은 시계로 이어 세게 한다 — 마지막 예비박과 1마디 1박 사이가 정확히 한 박
+    metro.expect(startAt, pos, learnLatency);
+    // 음악은 시작 지연만큼 미리 재생을 건다 (그래야 startAt 에 실제로 소리가 난다)
+    const playAt = startAt - startLatency;
     setCounting(countIn);
     timers.current.i = window.setInterval(() => {
       const left = Math.ceil((tBeat - ctx.currentTime) / step);
@@ -227,11 +256,12 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
       async () => {
         if (timers.current.i) clearInterval(timers.current.i);
         setCounting(0);
-        const late = Math.max(0, ctx.currentTime - startAt) * (rate || 1);
+        // 타이머가 늦게 깼으면 그만큼 앞에서 시작해 박을 맞춘다
+        const late = Math.max(0, ctx.currentTime - playAt) * (rate || 1);
         engine.seek(pos + late);
         await startPlay();
       },
-      Math.max(0, (startAt - ctx.currentTime) * 1000),
+      Math.max(0, (playAt - ctx.currentTime) * 1000),
     );
   }
 
