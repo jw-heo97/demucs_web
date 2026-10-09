@@ -146,12 +146,17 @@ def find_barlines(drawings, st: dict) -> list[float]:
     xs = [x for x in merged if x > st["x0"] + 8]
     # 너무 좁은 '마디'는 마디가 아니다 — 줄 앞의 반복 시작 기호(‖:) 같은 것.
     # 줄 안 다른 마디들에 비해 눈에 띄게 좁으면 그 경계를 버리고 옆 마디와 합친다.
+    # 단, `%`(한 마디 반복)만 든 마디는 원래 좁게 그려진다 — 라시사 악보는 넓은 마디 4개와
+    # 좁은 % 마디 4개가 한 줄에 있어, 비율로만 보면 % 마디 3개가 합쳐져 마디 수가 줄었다.
+    # 그래서 비율 기준은 줄 첫 마디(‖: 가 놓이는 자리)에만 쓰고, 나머지는 절대 폭만 본다.
     edges = [st["x0"]] + xs
     while len(edges) > 2:
         widths = [edges[k + 1] - edges[k] for k in range(len(edges) - 1)]
         med = sorted(widths)[len(widths) // 2]
-        k = min(range(len(widths)), key=widths.__getitem__)
-        if widths[k] >= max(3 * st["gap"], 0.3 * med):
+        k = min(range(len(widths)), key=lambda i: widths[i] / (max(3 * st["gap"], 0.3 * med)
+                                                               if i == 0 else 3 * st["gap"]))
+        limit = max(3 * st["gap"], 0.3 * med) if k == 0 else 3 * st["gap"]
+        if widths[k] >= limit:
             break
         del edges[k + 1 if k + 1 < len(edges) - 1 else k]
     return edges[1:]
