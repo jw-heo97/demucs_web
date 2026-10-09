@@ -258,6 +258,7 @@ export function PlaylistTab({ jobs, onChanged }: Props) {
                 engine={engine}
                 bars={bars}
                 jobId={curJob.id}
+              showRate
                 onChanged={onChanged}
                 countIn={countIn}
                 onCountInChange={setCountIn}

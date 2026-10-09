@@ -49,7 +49,7 @@ interface Props {
   jobId: string;
   /** 믹스 파일이 생기면 작업 목록을 다시 받아오게 한다 */
   onChanged?: () => void;
-  /** 속도 조절 노출 여부 (송 맵에서만) */
+  /** BPM 으로 재생 속도를 고르는 칸을 보일지 */
   showRate?: boolean;
   /**
    * 재생 버튼 옆 '구간 반복' (송 맵에서만). on 이면 누를 때 해제한다.

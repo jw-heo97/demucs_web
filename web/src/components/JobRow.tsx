@@ -61,6 +61,7 @@ export function JobRow({ job, open, onToggle, onChanged }: { job: Job; open: boo
               engine={engine}
               bars={bars}
               jobId={job.id}
+              showRate
               onChanged={onChanged}
               countIn={countIn}
               onCountInChange={setCountIn}
