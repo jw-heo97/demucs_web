@@ -529,6 +529,21 @@ export function SongMapTab({ jobs, onChanged }: Props) {
                   <button className="ghost" onClick={() => setMap({ ...map, anchor: +engine.time.toFixed(3) })}>
                     현재
                   </button>
+                  {[-1, 1].map((d) => (
+                    <button
+                      key={d}
+                      className="ghost"
+                      title={`1마디 1박을 한 박 ${d < 0 ? "앞으로" : "뒤로"} 옮깁니다. 클릭 간격은 같고 마디 첫 박(높은 음)과 마디 번호가 한 박씩 움직입니다.`}
+                      onClick={() => {
+                        const r0 = map.ranges[0];
+                        const step = stepOf(r0?.bpm || map.bpm, r0?.beat_unit || 4);
+                        const at = +(map.anchor + d * step).toFixed(4);
+                        if (at >= 0) setMap({ ...map, anchor: at });
+                      }}
+                    >
+                      {d < 0 ? "−1박" : "+1박"}
+                    </button>
+                  ))}
                   <button
                     className="ghost"
                     disabled={busy}
