@@ -1190,6 +1190,10 @@ class JobStore:
                 audio_io.save_wav(path, click, sr)
             else:
                 audio_io.save_mp3(path, click, sr)
+        # 활성 버전은 8비트 파일(박 사이 클릭을 얹은 것)도 재생용 mp3 로 굽는다 — 확정 버전의
+        # 메트로놈 트랙이 4비트/8비트 선택에 따라 이 파일로 바뀐다
+        if not suffix:
+            self._write_click8(job, click, sr)
 
         job.metronome = True
         job.files = self._scan_files(job, out_dir)
@@ -1290,6 +1294,33 @@ class JobStore:
             mix = mix + click
         info = {"count_in": int(times.size), "pre_roll": round(pre, 3)}
         return mix, info
+
+    def _write_click8(self, job: Job, click: np.ndarray, sr: int) -> None:
+        """`mp3/{곡}_click8.mp3` — 4비트 클릭 + 박 사이 클릭 (믹스다운의 8비트와 같은 소리·크기)."""
+        off = separator.render_offbeats(self._offbeat_times(job), sr, click.shape[-1],
+                                        level=CLICK_LEVEL * 0.45)
+        base = job.folder or job.id
+        audio_io.save_mp3(job.out_dir / "mp3" / f"{base}_click8.mp3", click + off, sr)
+
+    def ensure_click8(self, job: Job) -> bool:
+        """확정 버전용 8비트 클릭이 없거나 4비트 클릭보다 오래됐으면 만든다 (예전 곡들)."""
+        out_dir = job.out_dir
+        if not out_dir or not job.beats:
+            return False
+        base = job.folder or out_dir.name
+        # wav 를 먼저 — mp3 를 풀어 다시 mp3 로 구우면 mp3 앞머리 지연이 두 번 붙는다
+        src = next((p for p in (out_dir / "wav" / f"{base}_click.wav", out_dir / "mp3" / f"{base}_click.mp3")
+                    if p.exists()), None)
+        dst = out_dir / "mp3" / f"{base}_click8.mp3"
+        if src is None or (dst.exists() and dst.stat().st_mtime + 1 >= src.stat().st_mtime):
+            return False
+        sr = separator.get_loaded_model().samplerate
+        click = audio_io.decode(src, sample_rate=sr)
+        if click.ndim == 1:
+            click = np.stack([click, click])
+        self._write_click8(job, click.astype(np.float32), sr)
+        job.files = self._scan_files(job, out_dir)
+        return True
 
     @staticmethod
     def _offbeat_times(job: Job) -> np.ndarray:
@@ -1415,6 +1446,10 @@ class JobStore:
                 continue
             t = time.time()
             n = self.ensure_playback_mp3(job)
+            try:
+                n += int(self.ensure_click8(job))
+            except Exception as e:
+                print(f"[{job.id}] 8비트 클릭 실패: {e}", flush=True)
             if n:
                 print(f"[mp3] {job.folder}: 재생용 mp3 {n}개 ({time.time() - t:.1f}초)", flush=True)
 
