@@ -333,3 +333,16 @@ button.danger { background: var(--err); }
 .linkrow { display: flex; gap: 6px; margin: 8px 0; }
 .linkrow input { flex: 1; min-width: 0; }
 @media (max-width: 640px) { .linkform { grid-template-columns: 1fr; } }
+
+/* 여러 개 고르기 (곡 공유) */
+.dlg-check { display: flex; align-items: center; gap: 10px; min-height: 46px; padding: 6px 10px; border: 1px solid var(--border);
+  border-radius: 8px; cursor: pointer; }
+.dlg-check.on { border-color: var(--accent); background: var(--accent-weak); }
+.dlg-check input { width: 20px; height: 20px; min-height: 0; flex: none; }
+
+/* 폰: 곡 줄에는 제목만 (BPM·길이·용량·날짜·완료 표시는 숨긴다 — 제목이 밀려 안 보였다).
+   진행 중 %·실패 표시와 ⋯ 버튼은 남긴다. 긴 제목은 두 줄까지 */
+@media (max-width: 640px) {
+  .summary .chip, .summary .badge.done { display: none; }
+  .summary .job-title { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.3; }
+}

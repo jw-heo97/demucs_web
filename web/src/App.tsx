@@ -21,7 +21,7 @@ export function App() {
   const [info, setInfo] = useState<string>("");
   const [pick, setPick] = useState<{ videoId: string; title: string } | null>(null);
   // 내 권한: 접속자 관리 탭(관리자)·수정 가능 여부. 서버가 정하고 여기선 보여 주기만 한다.
-  const [me, setMe] = useState<Me>({ admin: false, canEdit: true, key: "" });
+  const [me, setMe] = useState<Me>({ admin: false, canEdit: true, key: "", links: [] });
   const admin = me.admin;
   const timer = useRef<number | undefined>(undefined);
 
@@ -82,8 +82,8 @@ export function App() {
       .catch(() => setInfo(""));
     api
       .me()
-      .then((d) => setMe({ admin: d.admin, canEdit: d.can_edit !== false, key: d.key ?? "" }))
-      .catch(() => setMe({ admin: false, canEdit: true, key: "" }));
+      .then((d) => setMe({ admin: d.admin, canEdit: d.can_edit !== false, key: d.key ?? "", links: d.links ?? [] }))
+      .catch(() => setMe({ admin: false, canEdit: true, key: "", links: [] }));
     return () => window.clearTimeout(timer.current);
   }, [refresh]);
 

@@ -55,6 +55,15 @@ app = FastAPI(title="Demucs Web", version="2.0.0", lifespan=lifespan)
 # 접속자 기록 + funnel·다른 계정 차단 (app/access.py)
 app.middleware("http")(access.middleware)
 
+
+def _guard(job_id: str, who: dict, dv) -> bool:
+    """볼 수 없는 곡의 경로(/api/jobs/{id}/…)는 미들웨어가 404 로 막는다. 없는 곡은 각 엔드포인트가 404."""
+    j = store.get(job_id)
+    return j is None or access.can_see(j.owner, j.owner_link, j.shared_links, who, dv)
+
+
+access.job_guard = _guard
+
 # 앱(Capacitor/Tauri)이나 개발 서버처럼 다른 오리진에서 부를 때만 쓴다.
 # 비어 있으면 동일 오리진만 허용 — 웹으로만 쓸 때는 켤 필요가 없다.
 if CORS_ORIGINS:
@@ -81,7 +90,11 @@ def api_me(request: Request):
     return {"via": who["via"], "login": who["login"], "admin": access.is_admin(who),
             "can_edit": access.can_edit(who, dv),
             "key": access.owner_key(who, dv), "name": access.owner_name(who, dv),
-            "device": dv["name"] if dv else None}
+            "device": dv["name"] if dv else None,
+            "link": access.link_of(dv),
+            # 보관함에서 곡을 공유할 링크를 고를 때 쓴다 (관리자만)
+            "links": [{"id": x["id"], "label": x["label"]} for x in access.store.links()]
+            if access.is_admin(who) else []}
 
 
 # --- 접속자 관리 (허용 계정의 tailnet 기기·이 PC 만 — 미들웨어가 /api/admin/* 를 막는다) ---
@@ -95,7 +108,11 @@ def _link_url(request: Request, code: str) -> str:
 
 
 def _links(request: Request) -> list[dict]:
-    return [{**ln, "url": _link_url(request, ln["code"])} for ln in access.store.links()]
+    jobs = store.list()
+    return [{**ln, "url": _link_url(request, ln["code"]),
+             "songs": sum(1 for j in jobs if ln["id"] in j["shared_links"]),
+             "own_songs": sum(1 for j in jobs if j["owner_link"] == ln["id"])}
+            for ln in access.store.links()]
 
 
 @app.get("/api/admin/access")
@@ -126,6 +143,29 @@ def admin_link_update(request: Request, lid: str, payload: dict = Body(...)):
     except KeyError:
         raise HTTPException(404, "그 링크를 찾을 수 없습니다.")
     return {**ln, "url": _link_url(request, ln["code"])}
+
+
+@app.put("/api/admin/links/{lid}/songs")
+def admin_link_songs(lid: str, payload: dict = Body(...)):
+    """{jobs: [id…]} — 이 링크에 공유할 곡을 통째로 정한다 (목록에 없는 곡은 공유 해제)."""
+    if not any(x["id"] == lid for x in access.store.links()):
+        raise HTTPException(404, "그 링크를 찾을 수 없습니다.")
+    want = set(payload.get("jobs") or [])
+    for j in store.all_jobs():
+        has = lid in j.shared_links
+        if (j.id in want) != has:
+            store.set_shared(j, [x for x in j.shared_links if x != lid] + ([lid] if j.id in want else []))
+    return {"ok": True, "songs": len(want)}
+
+
+@app.put("/api/admin/jobs/{job_id}/share")
+def admin_job_share(job_id: str, payload: dict = Body(...)):
+    """{links: [id…]} — 이 곡을 볼 수 있는 접속 링크를 통째로 정한다."""
+    job = _require_job(job_id)
+    known = {x["id"] for x in access.store.links()}
+    links = [x for x in payload.get("links") or [] if x in known]
+    store.set_shared(job, links)
+    return job.to_dict()
 
 
 @app.delete("/api/admin/links/{lid}")
@@ -206,7 +246,7 @@ def api_resolve(url: str):
 
 
 @app.post("/api/jobs", status_code=202)
-def create_job(payload: dict = Body(...)):
+def create_job(request: Request, payload: dict = Body(...)):
     url = (payload.get("url") or "").strip()
     if not url:
         raise HTTPException(400, "url 이 필요합니다.")
@@ -221,6 +261,10 @@ def create_job(payload: dict = Body(...)):
             metronome=bool(payload.get("metronome", METRONOME_DEFAULT)),
             # '_no_*' 제외 믹스는 믹스다운으로 언제든 만들 수 있어 기본은 끔 (용량 절약)
             minus_mixes=bool(payload.get("minus_mixes", False)),
+            # 누가 만들었나 — 같은 접속 링크 사람들끼리 이 곡을 본다
+            owner=access.owner_key(*_who(request)),
+            owner_name=access.owner_name(*_who(request)),
+            owner_link=access.link_of(_who(request)[1]),
         )
     except (DownloadError, ValueError) as e:
         raise HTTPException(400, str(e)) from e
@@ -229,17 +273,29 @@ def create_job(payload: dict = Body(...)):
     return job.to_dict()
 
 
+def _job_visible(j: dict, who: dict, dv) -> bool:
+    return access.can_see(j.get("owner"), j.get("owner_link"), j.get("shared_links"), who, dv)
+
+
+def _for_viewer(j: dict, who: dict) -> dict:
+    # 어느 링크에 공유했는지는 관리자만 안다
+    return j if access.is_admin(who) else {**j, "shared_links": []}
+
+
 @app.get("/api/jobs")
-def list_jobs():
-    return {"jobs": store.list(), "queue": store.queue_depth()}
+def list_jobs(request: Request):
+    """볼 수 있는 곡만 (access.can_see). 같은 링크 사람이 만든 곡 + 관리자가 공유한 곡."""
+    who, dv = _who(request)
+    jobs = [_for_viewer(j, who) for j in store.list() if _job_visible(j, who, dv)]
+    return {"jobs": jobs, "queue": store.queue_depth()}
 
 
 @app.get("/api/jobs/{job_id}")
-def get_job(job_id: str):
+def get_job(request: Request, job_id: str):
     job = store.get(job_id)
     if not job:
         raise HTTPException(404, "작업을 찾을 수 없습니다.")
-    return job.to_dict()
+    return _for_viewer(job.to_dict(), _who(request)[0])
 
 
 def _require_job(job_id: str, done: bool = False, unlocked: bool = False):
@@ -488,8 +544,12 @@ def mixdown(job_id: str, payload: dict = Body(...)):
 
 
 @app.delete("/api/jobs/{job_id}")
-def delete_job(job_id: str):
+def delete_job(request: Request, job_id: str):
     j = store.get(job_id)
+    who, dv = _who(request)
+    # 공유받은 곡(관리자·같은 링크의 다른 사람이 만든 곡)은 지울 수 없다. 주인 없는 예전 곡은 관리자 것
+    if j and not access.is_admin(who) and dv is not None and j.owner != access.owner_key(who, dv):
+        raise HTTPException(403, "내가 만든 곡만 지울 수 있습니다.")
     if j and any(v.get("locked") for v in j.map_versions):
         raise HTTPException(423, "잠긴 송 맵 버전이 있는 곡은 지울 수 없습니다. 먼저 잠금을 푸세요.")
     try:
@@ -636,18 +696,57 @@ def get_score_page(job_id: str, n: int):
 
 # --- 플레이리스트 ---
 
+def _visible_ids(who: dict, dv) -> set[str]:
+    return {j["id"] for j in store.list() if _job_visible(j, who, dv)}
+
+
+def _pl_mine(p: dict, who: dict, dv) -> bool:
+    """이 플레이리스트를 바꿀 수 있는가: 관리자, 만든 사람, 같은 링크 사람."""
+    if access.is_admin(who) or dv is None:
+        return True
+    return (bool(p.get("owner")) and p["owner"] == access.owner_key(who, dv)) \
+        or (bool(access.link_of(dv)) and p.get("owner_link") == access.link_of(dv))
+
+
+def _pl_view(p: dict, who: dict, dv, ids: set[str]):
+    """보이는 플레이리스트면 볼 수 있는 곡만 남겨 돌려준다. 남의(관리자) 플레이리스트는
+    보이는 곡이 하나라도 있을 때만 보인다."""
+    items = [x for x in p.get("items", []) if x in ids]
+    mine = _pl_mine(p, who, dv)
+    if not mine and not items:
+        return None
+    return {**p, "items": items, "readonly": not mine}
+
+
 @app.get("/api/playlists")
-def list_playlists():
+def list_playlists(request: Request):
+    who, dv = _who(request)
     try:
-        return {"playlists": playlists.list()}
+        ids = _visible_ids(who, dv)
+        return {"playlists": [v for p in playlists.list() if (v := _pl_view(p, who, dv, ids))]}
     except RuntimeError as e:
         raise HTTPException(500, str(e)) from e
 
 
+def _pl_guard(pid: str, who: dict, dv, items=None):
+    """바꿀 수 있는지 확인하고, 이 사람이 못 보는 곡은 목록을 바꿔도 지워지지 않게 되붙인다."""
+    p = next((x for x in playlists.list() if x["id"] == pid), None)
+    if p is None:
+        raise HTTPException(404, "플레이리스트를 찾을 수 없습니다.")
+    if not _pl_mine(p, who, dv):
+        raise HTTPException(403, "다른 사람이 만든 플레이리스트는 바꿀 수 없습니다.")
+    if items is None or access.is_admin(who):
+        return items
+    ids = _visible_ids(who, dv)
+    return list(items) + [x for x in p.get("items", []) if x not in ids]
+
+
 @app.post("/api/playlists", status_code=201)
-def create_playlist(payload: dict = Body(...)):
+def create_playlist(request: Request, payload: dict = Body(...)):
+    who, dv = _who(request)
     try:
-        return playlists.create(payload.get("name"), payload.get("items"))
+        return playlists.create(payload.get("name"), payload.get("items"),
+                                owner=access.owner_key(who, dv), owner_link=access.link_of(dv))
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     except RuntimeError as e:
@@ -655,9 +754,11 @@ def create_playlist(payload: dict = Body(...)):
 
 
 @app.put("/api/playlists/{pid}")
-def update_playlist(pid: str, payload: dict = Body(...)):
+def update_playlist(request: Request, pid: str, payload: dict = Body(...)):
+    who, dv = _who(request)
+    items = _pl_guard(pid, who, dv, payload.get("items"))
     try:
-        p = playlists.update(pid, payload.get("name"), payload.get("items"))
+        p = playlists.update(pid, payload.get("name"), items)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     except RuntimeError as e:
@@ -668,7 +769,8 @@ def update_playlist(pid: str, payload: dict = Body(...)):
 
 
 @app.delete("/api/playlists/{pid}")
-def delete_playlist(pid: str):
+def delete_playlist(request: Request, pid: str):
+    _pl_guard(pid, *_who(request))
     try:
         found = playlists.delete(pid)
     except RuntimeError as e:

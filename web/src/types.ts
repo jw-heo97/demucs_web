@@ -103,6 +103,13 @@ export interface Job {
   beat_count: number;
   files: JobFile[];
   tracks?: JobTrack[];
+  /** 만든 사람 (access.owner_key). 없으면 관리자 것 */
+  owner?: string | null;
+  owner_name?: string | null;
+  /** 만든 기기가 들어온 접속 링크 — 같은 링크 사람들끼리 본다 */
+  owner_link?: string | null;
+  /** 관리자가 이 곡을 공유한 접속 링크 (관리자에게만 채워진다) */
+  shared_links?: string[];
   /** 잠긴 송 맵 버전 수 (하나라도 있으면 곡을 지울 수 없다) */
   locked_versions?: number;
   created_at: number;
@@ -126,6 +133,8 @@ export interface Playlist {
   items: string[];
   created_at: number;
   updated_at: number;
+  /** 다른 사람(관리자)이 만든 것이라 바꿀 수 없다 */
+  readonly?: boolean;
 }
 
 /** 악보 한 마디의 위치 (PDF 포인트 단위, 페이지 기준) */

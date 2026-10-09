@@ -38,6 +38,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import threading
 import time
@@ -337,6 +338,31 @@ def is_owner(owner: Optional[str], who: dict, device: Optional[dict]) -> bool:
     return owner == owner_key(who, device)
 
 
+def link_of(device: Optional[dict]) -> Optional[str]:
+    """이 기기가 들어온 접속 링크 id — 곡을 같이 보는 그룹이다."""
+    return (device or {}).get("link") or None
+
+
+def can_see(owner: Optional[str], owner_link: Optional[str], shared_links, who: dict,
+            device: Optional[dict]) -> bool:
+    """곡·플레이리스트를 볼 수 있는가.
+
+    관리자(내 계정 기기·이 PC)와 등록 기기가 아닌 접속(태그 기기)은 전부 본다.
+    링크로 등록한 기기는: 내가 만든 것 + 같은 링크 사람이 만든 것 + 관리자가 그 링크에 공유한 것.
+    주인이 없는 예전 곡은 관리자 것이라 공유해야 보인다."""
+    if is_admin(who) or device is None:
+        return True
+    if owner and owner == owner_key(who, device):
+        return True
+    ln = link_of(device)
+    return bool(ln) and (owner_link == ln or ln in (shared_links or ()))
+
+
+# 곡 id 가 들어간 경로 — 볼 수 없는 곡이면 없는 것처럼(404) 답한다. main 이 job_guard 를 채운다.
+_JOB_PATH = re.compile(r"^/api/jobs/([0-9a-f]{6,32})(?:/|$)")
+job_guard = None   # (job_id, who, device) -> bool
+
+
 def is_admin(who: dict) -> bool:
     """접속자 관리 화면을 볼 수 있는가: 허용 계정의 tailnet 기기, 이 PC 직접."""
     if who["via"] == "direct":
@@ -560,6 +586,10 @@ async def middleware(request: Request, call_next):
         status = 403
         resp = JSONResponse({"detail": "보기 전용 기기입니다. 재생·다운로드만 할 수 있습니다."},
                             status_code=403)
+    elif (m := _JOB_PATH.match(path)) and job_guard is not None \
+            and not job_guard(m.group(1), who, device):
+        status = 404
+        resp = JSONResponse({"detail": "작업을 찾을 수 없습니다."}, status_code=404)
     else:
         request.state.who = who
         request.state.device = device

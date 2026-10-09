@@ -1,11 +1,11 @@
 import { useMemo, useState } from "react";
-import { confirmBox, notice } from "../lib/dialog";
+import { confirmBox, notice, pickMany } from "../lib/dialog";
 import { api } from "../api";
 import { useAudioEngine } from "../hooks/useAudioEngine";
 import { barsFromMap } from "../lib/songmap";
 import { fmtDate, fmtSize, clock } from "../lib/time";
 import type { Job } from "../types";
-import { useMe } from "../lib/me";
+import { ownsJob, useMe } from "../lib/me";
 import { Mixer } from "./Mixer";
 
 const LABEL: Record<string, string> = {
@@ -34,7 +34,28 @@ export function JobRow({
   onChanged: () => void;
   onOpen?: () => void;
 }) {
-  const { canEdit } = useMe();
+  const me = useMe();
+  const { canEdit } = me;
+  const mine = ownsJob(me, job.owner);
+  const sharedTo = me.links.filter((l) => job.shared_links?.includes(l.id));
+
+  const share = async () => {
+    const links = await pickMany({
+      title: `${name} 공유`,
+      message: "고른 접속 링크로 들어온 사람들이 이 곡을 볼 수 있습니다. 고르지 않으면 나만 봅니다.",
+      items: me.links.map((l) => ({ label: l.label, value: l.id })),
+      selected: job.shared_links ?? [],
+      okText: "저장",
+      empty: "접속 링크가 없습니다. 접속자 관리 탭에서 먼저 만드세요.",
+    });
+    if (!links) return;
+    try {
+      await api.shareJob(job.id, links);
+      onChanged();
+    } catch (e) {
+      await notice("공유를 바꾸지 못했습니다", (e as Error).message);
+    }
+  };
   const done = ["done", "error"].includes(job.status);
   const pct = Math.round((job.progress || 0) * 100);
   const name = job.folder ?? job.title_override ?? job.title ?? job.url;
@@ -58,6 +79,16 @@ export function JobRow({
               🔒
             </span>
           )}
+          {me.admin && sharedTo.length > 0 && (
+            <span className="chip" title={`공유: ${sharedTo.map((l) => l.label).join(", ")}`}>
+              👥 {sharedTo.length === 1 ? sharedTo[0].label : `${sharedTo.length}곳`}
+            </span>
+          )}
+          {!mine && (
+            <span className="chip" title="다른 사람이 만든 곡 — 지울 수 없습니다">
+              {job.owner_name || "관리자"}
+            </span>
+          )}
           {job.bpm ? <span className="chip">♩={job.bpm}</span> : null}
           {job.duration ? <span className="chip">{clock(job.duration)}</span> : null}
           {done && job.files?.length ? <span className="chip">{job.files.length}개 · {fmtSize(size)}</span> : null}
@@ -72,8 +103,8 @@ export function JobRow({
                 e.stopPropagation();
                 onToggle();
               }}
-              title="파일 다운로드 · 삭제"
-              aria-label="파일 다운로드 · 삭제"
+              title={me.admin ? "파일 다운로드 · 공유 · 삭제" : "파일 다운로드 · 삭제"}
+              aria-label={me.admin ? "파일 다운로드 · 공유 · 삭제" : "파일 다운로드 · 삭제"}
             >
               ⋯
             </button>
@@ -124,7 +155,12 @@ export function JobRow({
               </a>
             )}
             <span style={{ flex: 1 }} />
-            {done && canEdit && (
+            {me.admin && job.status === "done" && (
+              <button className="ghost" onClick={() => void share()} title="이 곡을 볼 수 있는 접속 링크 고르기">
+                공유{sharedTo.length ? ` (${sharedTo.length})` : ""}
+              </button>
+            )}
+            {done && canEdit && mine && (
               <button
                 className="ghost"
                 disabled={!!job.locked_versions}

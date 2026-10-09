@@ -200,7 +200,8 @@ def _default_name(who: dict, device: Optional[dict]) -> str:
 async def handle(ws: WebSocket, job_id: str) -> None:
     who = access.classify(ws)  # type: ignore[arg-type]  (헤더·쿠키·client 는 Request 와 같다)
     device = access.store.device_for(ws.cookies.get(access.DEVICE_COOKIE, ""))
-    if access._denied(who, device):
+    # 웹소켓은 http 미들웨어를 거치지 않으므로 곡 공유 범위도 여기서 확인한다
+    if access._denied(who, device) or (access.job_guard and not access.job_guard(job_id, who, device)):
         await ws.close(code=4403)
         return
     await ws.accept()

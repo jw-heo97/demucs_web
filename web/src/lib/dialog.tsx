@@ -34,10 +34,22 @@ interface ChooseOpts<T> {
   items: { label: string; sub?: string; value: T }[];
 }
 
+interface PickManyOpts<T> {
+  title: string;
+  message?: string;
+  items: { label: string; sub?: string; value: T }[];
+  /** 처음에 켜 둘 값 */
+  selected: T[];
+  okText?: string;
+  /** 비어 있을 때 보일 말 */
+  empty?: string;
+}
+
 type Req =
   | { type: "ask"; opts: AskOpts; resolve: (v: string | null) => void }
   | { type: "confirm"; opts: ConfirmOpts; resolve: (v: boolean) => void }
   | { type: "choose"; opts: ChooseOpts<unknown>; resolve: (v: unknown) => void }
+  | { type: "pickMany"; opts: PickManyOpts<unknown>; resolve: (v: unknown[] | null) => void }
   | { type: "notice"; opts: { title: string; message?: string }; resolve: () => void };
 
 let push: ((r: Req) => void) | null = null;
@@ -51,6 +63,11 @@ export const confirmBox = (opts: ConfirmOpts) => new Promise<boolean>((resolve) 
 /** 목록에서 하나 고르기. 취소하면 null */
 export const choose = <T,>(opts: ChooseOpts<T>) =>
   new Promise<T | null>((resolve) => send({ type: "choose", opts: opts as ChooseOpts<unknown>, resolve: resolve as (v: unknown) => void }));
+/** 여러 개 고르기 (체크). 취소하면 null */
+export const pickMany = <T,>(opts: PickManyOpts<T>) =>
+  new Promise<T[] | null>((resolve) =>
+    send({ type: "pickMany", opts: opts as PickManyOpts<unknown>, resolve: resolve as (v: unknown[] | null) => void }),
+  );
 /** 알림 (확인 버튼 하나) */
 export const notice = (title: string, message?: string) =>
   new Promise<void>((resolve) => send({ type: "notice", opts: { title, message }, resolve }));
@@ -75,13 +92,16 @@ function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
   const isAsk = req.type === "ask";
   const askOpts = isAsk ? req.opts : null;
   const [value, setValue] = useState(askOpts?.value ?? "");
+  const [picked, setPicked] = useState<Set<unknown>>(
+    () => new Set(req.type === "pickMany" ? req.opts.selected : []),
+  );
   const inputRef = useRef<HTMLInputElement | null>(null);
   const okRef = useRef<HTMLButtonElement | null>(null);
 
   const cancel = () => {
     if (req.type === "ask") req.resolve(null);
     else if (req.type === "confirm") req.resolve(false);
-    else if (req.type === "choose") req.resolve(null);
+    else if (req.type === "choose" || req.type === "pickMany") req.resolve(null);
     else req.resolve();
     onDone();
   };
@@ -90,6 +110,7 @@ function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
       if (!value.trim() && !req.opts.allowEmpty) return inputRef.current?.focus();
       req.resolve(value);
     } else if (req.type === "confirm") req.resolve(true);
+    else if (req.type === "pickMany") req.resolve(req.opts.items.map((x) => x.value).filter((v) => picked.has(v)));
     else if (req.type === "notice") req.resolve();
     else return;
     onDone();
@@ -166,6 +187,32 @@ function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
                 <span>{it.label}</span>
                 {it.sub && <span className="meta">{it.sub}</span>}
               </button>
+            ))}
+          </div>
+        )}
+
+        {req.type === "pickMany" && (
+          <div className="dlg-list">
+            {req.opts.items.length === 0 && <p className="meta">{req.opts.empty ?? "고를 것이 없습니다."}</p>}
+            {req.opts.items.map((it, i) => (
+              <label key={i} className={`dlg-check${picked.has(it.value) ? " on" : ""}`}>
+                <input
+                  type="checkbox"
+                  checked={picked.has(it.value)}
+                  onChange={(e) =>
+                    setPicked((s) => {
+                      const n = new Set(s);
+                      if (e.target.checked) n.add(it.value);
+                      else n.delete(it.value);
+                      return n;
+                    })
+                  }
+                />
+                <span>
+                  {it.label}
+                  {it.sub && <span className="meta"> {it.sub}</span>}
+                </span>
+              </label>
             ))}
           </div>
         )}
