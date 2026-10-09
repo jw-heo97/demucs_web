@@ -1093,11 +1093,11 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
           <input
             type="range"
             min={0}
-            // 메트로놈은 300% 까지 (리미터가 찌그러짐을 막는다). 스템은 100% 까지
-            max={t.virtual ? 300 : 100}
+            // 메트로놈은 600% 까지 (리미터가 찌그러짐을 막는다). 스템은 100% 까지
+            max={t.virtual ? 600 : 100}
             value={Math.round((vol[i] ?? 1) * 100)}
             onChange={(e) => engine.setVolume(i, Number(e.target.value) / 100)}
-            title={t.virtual ? "메트로놈 볼륨 — 음악에 묻히면 100 넘게(최대 300) 올리세요" : undefined}
+            title={t.virtual ? "메트로놈 볼륨 — 음악에 묻히면 100 넘게(최대 600) 올리세요" : undefined}
           />
           <span className="pct">{Math.round((vol[i] ?? 1) * 100)}</span>
           {t.trackId && (() => {
