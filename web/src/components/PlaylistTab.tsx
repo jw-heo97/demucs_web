@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import { useMe } from "../lib/me";
 import { useAudioEngine } from "../hooks/useAudioEngine";
 import { barAtTime, barsFromMap } from "../lib/songmap";
 import { clock } from "../lib/time";
@@ -38,6 +39,7 @@ const nameOf = (j: Job) => j.folder ?? j.title_override ?? j.title ?? j.url;
  * 곡마다 따로 저장하는 설정은 없고, 각 곡의 현재 송 맵(활성 버전)을 그대로 쓴다.
  */
 export function PlaylistTab({ jobs, onChanged }: Props) {
+  const { canEdit } = useMe();
   const [lists, setLists] = useState<Playlist[] | null>(null);
   const [selId, setSelId] = useState<string | null>(() => lsGet(LS_SELECTED));
   const [cur, setCur] = useState(0);
@@ -208,7 +210,7 @@ export function PlaylistTab({ jobs, onChanged }: Props) {
             {p.name} <span className="meta">{p.items.length}</span>
           </button>
         ))}
-        <button className="ghost" onClick={create}>+ 새 플레이리스트</button>
+        {canEdit && <button className="ghost" onClick={create}>+ 새 플레이리스트</button>}
       </div>
 
       {hint && <div className="err" style={{ marginBottom: 10 }}>{hint}</div>}
@@ -284,8 +286,8 @@ export function PlaylistTab({ jobs, onChanged }: Props) {
               {sel.name} <span className="meta">{items.length}곡</span>
             </h2>
             <span style={{ flex: 1 }} />
-            <button className="ghost" onClick={rename}>이름 변경</button>
-            <button className="ghost" onClick={removeList}>플레이리스트 삭제</button>
+            {canEdit && <button className="ghost" onClick={rename}>이름 변경</button>}
+            {canEdit && <button className="ghost" onClick={removeList}>플레이리스트 삭제</button>}
           </div>
 
           <div style={{ marginTop: 10 }}>
@@ -313,9 +315,13 @@ export function PlaylistTab({ jobs, onChanged }: Props) {
                       >
                         ▶
                       </button>
-                      <button className="ghost" onClick={() => move(i, -1)} disabled={i === 0} title="위로">▲</button>
-                      <button className="ghost" onClick={() => move(i, 1)} disabled={i === items.length - 1} title="아래로">▼</button>
-                      <button className="ghost" onClick={() => remove(i)} title="플레이리스트에서 빼기">✕</button>
+                      {canEdit && (
+                        <>
+                          <button className="ghost" onClick={() => move(i, -1)} disabled={i === 0} title="위로">▲</button>
+                          <button className="ghost" onClick={() => move(i, 1)} disabled={i === items.length - 1} title="아래로">▼</button>
+                          <button className="ghost" onClick={() => remove(i)} title="플레이리스트에서 빼기">✕</button>
+                        </>
+                      )}
                     </span>
                   </div>
                 </div>
@@ -323,6 +329,7 @@ export function PlaylistTab({ jobs, onChanged }: Props) {
             })}
           </div>
 
+          {canEdit && (
           <div className="actions">
             <select value={addId} onChange={(e) => setAddId(e.target.value)} style={{ flex: 1, minWidth: 180 }}>
               <option value="">보관함에서 곡 고르기…</option>
@@ -335,6 +342,7 @@ export function PlaylistTab({ jobs, onChanged }: Props) {
             </select>
             <button onClick={add} disabled={!addId}>추가</button>
           </div>
+          )}
           <div className="meta" style={{ marginTop: 6 }}>
             곡을 누르면 선택, ▶ 를 누르면(또는 두 번 누르면) 바로 재생합니다. 음소거·볼륨은 곡이 바뀌어도 이어집니다.
           </div>

@@ -3,6 +3,7 @@ import { api } from "../api";
 import { useAudioEngine } from "../hooks/useAudioEngine";
 import { sectionAt } from "../lib/sectionColors";
 import { barAtTime, barsFromMap, emptyRange, nearestBar, stepOf } from "../lib/songmap";
+import { useMe } from "../lib/me";
 import { stemFilesOf } from "../lib/stems";
 import { showTime } from "../lib/time";
 import type { Job, MapPayload, MapRange, MapVersion, ScoreData, SongMap } from "../types";
@@ -23,11 +24,18 @@ const STEM_LABEL: Record<string, string> = {
 interface Props {
   jobs: Job[];
   onChanged: () => void;
+  /** 보관함에서 고른 곡 */
+  pick?: { id: string; n: number } | null;
 }
 
-export function SongMapTab({ jobs, onChanged }: Props) {
+export function SongMapTab({ jobs, onChanged, pick }: Props) {
+  const { canEdit } = useMe();
   const done = useMemo(() => jobs.filter((j) => j.status === "done"), [jobs]);
-  const [jobId, setJobId] = useState("");
+  const [jobId, setJobId] = useState(pick?.id ?? "");
+  // 보관함에서 곡을 누르면 그 곡으로 (같은 곡을 다시 눌러도 n 이 올라가 다시 반영된다)
+  useEffect(() => {
+    if (pick) setJobId(pick.id);
+  }, [pick]);
   const job = useMemo(() => done.find((j) => j.id === jobId) ?? null, [done, jobId]);
   // 지금 보고 있는 곡. 응답이 늦게 온 이전 곡의 구성표가 새 곡 화면에 덮이지 않게 한다
   // — 그 상태로 저장하면 다른 곡의 구성표가 이 곡에 저장된다 (Summer time → 라시사 에서 실제로 있었다).
@@ -454,7 +462,7 @@ export function SongMapTab({ jobs, onChanged }: Props) {
           >
             <button
               className="ghost"
-              disabled={busy || !scoreData?.marks.length}
+              disabled={busy || !canEdit || !scoreData?.marks.length}
               onClick={buildFromScore}
               title={
                 !scoreData
@@ -477,6 +485,7 @@ export function SongMapTab({ jobs, onChanged }: Props) {
                   key={v.id}
                   className="vertab"
                   aria-selected={v.id === active}
+                  disabled={!canEdit && v.id !== active}
                   onClick={() =>
                     v.id !== active &&
                     verAction(() => api.activateVersion(job.id, v.id), "버전을 전환했습니다.")
@@ -488,6 +497,7 @@ export function SongMapTab({ jobs, onChanged }: Props) {
               <span style={{ flex: 1 }} />
               <button
                 className="ghost"
+                disabled={!canEdit}
                 onClick={() => {
                   const name = prompt("새 버전 이름 (지금 화면 내용을 복사합니다)", "연습용");
                   if (name != null)
@@ -499,6 +509,7 @@ export function SongMapTab({ jobs, onChanged }: Props) {
               {active && (
                 <button
                   className="ghost"
+                  disabled={!canEdit}
                   onClick={() => {
                     const cur = versions.find((v) => v.id === active);
                     const name = prompt("버전 이름", cur?.name ?? "");
@@ -512,6 +523,7 @@ export function SongMapTab({ jobs, onChanged }: Props) {
               {versions.length > 1 && active && (
                 <button
                   className="ghost"
+                  disabled={!canEdit}
                   onClick={() =>
                     confirm("이 버전과 메트로놈 파일을 삭제합니다.") &&
                     verAction(() => api.deleteVersion(job.id, active), "버전 삭제")
@@ -523,6 +535,7 @@ export function SongMapTab({ jobs, onChanged }: Props) {
               {!!payload?.history?.length && (
                 <button
                   className="ghost"
+                  disabled={!canEdit}
                   onClick={() => {
                     const lines = payload.history
                       .map(
@@ -565,9 +578,9 @@ export function SongMapTab({ jobs, onChanged }: Props) {
                   ))}
                   <button
                     className="ghost"
-                    disabled={busy}
                     title="템포는 그대로 두고, 곡 전체의 드럼 타격에 맞춰 1마디 1박(과 고정 마디)을 미세 조정합니다"
                     onClick={align}
+                    disabled={busy || !canEdit}
                   >
                     자동 맞춤
                   </button>
@@ -813,7 +826,7 @@ export function SongMapTab({ jobs, onChanged }: Props) {
               >
                 추가
               </button>
-              <button className="ghost" onClick={detect} disabled={busy}>
+              <button className="ghost" onClick={detect} disabled={busy || !canEdit}>
                 자동 재검출
               </button>
               <span style={{ flex: 1 }} />
@@ -824,12 +837,17 @@ export function SongMapTab({ jobs, onChanged }: Props) {
               )}
               <button
                 onClick={save}
-                disabled={busy || dupBars.size > 0}
+                disabled={busy || !canEdit || dupBars.size > 0}
                 title="메트로놈은 저장하지 않아도 편집한 대로 바로 들립니다. 저장하면 맵이 남고 다운로드용 클릭 파일이 갱신됩니다."
               >
                 저장
               </button>
             </div>
+            {!canEdit && (
+              <div className="meta" style={{ marginTop: 8 }}>
+                보기 전용 기기라 구성표를 저장할 수 없습니다. 편집한 메트로놈은 이 화면에서만 들립니다.
+              </div>
+            )}
             {msg && <div className="meta" style={{ marginTop: 8 }}>{msg}</div>}
           </div>
         </>

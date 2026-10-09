@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type AccessClient, type AccessDevice } from "../api";
+import { api, type AccessClient, type AccessDevice, type AccessRole } from "../api";
+
+const ROLE: Record<AccessRole, string> = { view: "보기만", edit: "수정 가능" };
 
 const VIA: Record<AccessClient["via"], string> = {
   tailnet: "Tailscale",
@@ -74,6 +76,7 @@ export function AccessTab() {
   // 방금 만든 초대 링크 — 서버엔 해시만 남아서 지금만 볼 수 있다
   const [fresh, setFresh] = useState<{ name: string; url: string } | null>(null);
   const [inviteName, setInviteName] = useState("");
+  const [inviteRole, setInviteRole] = useState<AccessRole>("view");
 
   const copy = async (text: string) => {
     try {
@@ -92,7 +95,7 @@ export function AccessTab() {
     }
     setBusy(true);
     try {
-      const r = await api.createInvite(name);
+      const r = await api.createInvite(name, inviteRole);
       // 이 PC 에서 직접 열었으면 서버가 공개 주소를 모르므로 지금 주소를 붙인다
       const url = r.url.startsWith("/") ? location.origin + r.url : r.url;
       setFresh({ name: r.name, url });
@@ -132,6 +135,15 @@ export function AccessTab() {
             onChange={(e) => setInviteName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && void createInvite()}
           />
+          <select
+            value={inviteRole}
+            style={{ width: 130 }}
+            onChange={(e) => setInviteRole(e.target.value as AccessRole)}
+            title="보기만: 재생·믹스 받기·다운로드. 수정 가능: 송 맵 저장·분리 등록·삭제까지. 등록된 뒤에도 아래 표에서 바꿀 수 있습니다."
+          >
+            <option value="view">보기만</option>
+            <option value="edit">수정 가능</option>
+          </select>
           <button disabled={busy} onClick={() => void createInvite()}>
             링크 만들기
           </button>
@@ -156,6 +168,7 @@ export function AccessTab() {
             {data.invites.map((iv) => (
               <div key={iv.id} style={{ display: "flex", gap: 8, alignItems: "center", padding: "3px 0" }}>
                 <span>{iv.name}</span>
+                <span className="meta">{ROLE[iv.role ?? "edit"]}</span>
                 <span className="meta">
                   {when(iv.created)} 만듦 · {when(iv.expires)} 만료
                 </span>
@@ -187,6 +200,7 @@ export function AccessTab() {
                   <th>등록</th>
                   <th>마지막 접속</th>
                   <th>IP</th>
+                  <th>권한</th>
                   <th>상태</th>
                   <th></th>
                 </tr>
@@ -203,6 +217,23 @@ export function AccessTab() {
                       {ago(d.last)}
                     </td>
                     <td className="meta">{d.last_ip}</td>
+                    <td>
+                      <select
+                        value={d.role ?? "edit"}
+                        disabled={busy}
+                        style={{ width: 118 }}
+                        onChange={(e) =>
+                          void act(
+                            () => api.updateDevice(d.id, { role: e.target.value as AccessRole }),
+                            `${d.name}: ${ROLE[e.target.value as AccessRole]}`,
+                          )
+                        }
+                        title="보기만: 재생·믹스 받기·다운로드. 수정 가능: 송 맵 저장·분리 등록·삭제까지."
+                      >
+                        <option value="view">보기만</option>
+                        <option value="edit">수정 가능</option>
+                      </select>
+                    </td>
                     <td>{d.blocked ? <span className="err">차단됨</span> : "허용"}</td>
                     <td>
                       <div className="rowbtns">

@@ -5,10 +5,12 @@ import { JobRow } from "./JobRow";
 interface Props {
   jobs: Job[];
   onChanged: () => void;
+  /** 곡을 눌렀을 때 — 송 맵으로 간다 */
+  onOpen: (id: string) => void;
 }
 
-/** 분리가 끝난 곡 목록. 펼치면 믹서로 바로 들어볼 수 있다. */
-export function LibraryTab({ jobs, onChanged }: Props) {
+/** 분리가 끝난 곡 목록(홈). 곡을 누르면 송 맵으로 가고, ⋯ 로 파일·삭제를 연다. */
+export function LibraryTab({ jobs, onChanged, onOpen }: Props) {
   const [filter, setFilter] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
 
@@ -38,6 +40,7 @@ export function LibraryTab({ jobs, onChanged }: Props) {
           open={openId === j.id}
           onToggle={() => setOpenId((v) => (v === j.id ? null : j.id))}
           onChanged={onChanged}
+          onOpen={() => onOpen(j.id)}
         />
       ))}
     </div>

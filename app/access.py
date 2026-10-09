@@ -25,6 +25,10 @@ Tailscale 은 이 헤더들을 바깥에서 보낸 값이 있어도 지우고 �
 
 관리자(접속자 관리 탭·/api/admin/*): 허용 계정으로 들어온 tailnet 기기와 이 PC 직접 접속.
 funnel 로 등록한 기기는 앱은 쓰되 관리 화면은 못 본다.
+
+수정 권한(role): 초대 링크로 등록한 기기는 'view'(보기만) 또는 'edit'. 보기만인 기기는
+GET 과 믹스 받기(POST …/mixdown, 파일만 만들 뿐 아무것도 바꾸지 않는다)만 되고, 그 밖의
+POST/PUT/PATCH/DELETE 는 403. 관리자(tailnet 허용 계정·이 PC)는 언제나 edit.
 """
 from __future__ import annotations
 
@@ -72,7 +76,13 @@ def _hash(token: str) -> str:
 
 
 def _public(dv: dict) -> dict:
-    return {k: v for k, v in dv.items() if k != "hash"}
+    out = {k: v for k, v in dv.items() if k != "hash"}
+    out.setdefault("role", "edit")       # 권한이 생기기 전에 등록된 기기는 전처럼 수정 가능
+    return out
+
+
+def _role(v) -> str:
+    return "view" if str(v or "").lower() == "view" else "edit"
 
 
 class _Store:
@@ -113,12 +123,13 @@ class _Store:
             self._prune(d)
             return [_public(x) for x in d["invites"]]
 
-    def create_invite(self, name: str) -> tuple[str, dict]:
-        """이름을 붙인 1회용 초대 키. 원문은 돌려주기만 하고 해시만 저장한다."""
+    def create_invite(self, name: str, role: str = "view") -> tuple[str, dict]:
+        """이름을 붙인 1회용 초대 키. 원문은 돌려주기만 하고 해시만 저장한다. role 은 등록될 기기의 권한."""
         key = secrets.token_urlsafe(18)
         now = time.time()
         inv = {"id": uuid.uuid4().hex[:8], "hash": _hash(key),
                "name": (str(name or "").strip() or "이름 없음")[:40],
+               "role": _role(role),
                "created": round(now, 3), "expires": round(now + INVITE_DAYS * 86400, 3)}
         with self._lock:
             d = self._load()
@@ -149,6 +160,7 @@ class _Store:
             token = secrets.token_urlsafe(32)
             now = round(time.time(), 3)
             dv = {"id": uuid.uuid4().hex[:8], "hash": _hash(token), "name": inv["name"],
+                  "role": _role(inv.get("role")),
                   "ua": who["ua"], "created": now, "last": now,
                   "last_ip": who["ip"], "blocked": False}
             d["devices"].append(dv)
@@ -178,7 +190,8 @@ class _Store:
         with self._lock:
             return [_public(dv) for dv in self._load()["devices"]]
 
-    def update(self, did: str, name: Optional[str], blocked: Optional[bool]) -> dict:
+    def update(self, did: str, name: Optional[str], blocked: Optional[bool],
+               role: Optional[str] = None) -> dict:
         with self._lock:
             for dv in self._load()["devices"]:
                 if dv["id"] == did:
@@ -186,6 +199,8 @@ class _Store:
                         dv["name"] = (str(name).strip() or dv["name"])[:40]
                     if blocked is not None:
                         dv["blocked"] = bool(blocked)
+                    if role is not None:
+                        dv["role"] = _role(role)
                     self._save()
                     return _public(dv)
         raise KeyError(did)
@@ -239,6 +254,25 @@ def classify(request: Request) -> dict:
     return {"via": via, "ip": ip, "login": login,
             "name": _header(request, "tailscale-user-name"),
             "ua": request.headers.get("user-agent", "")[:200]}
+
+
+def can_edit(who: dict, device: Optional[dict]) -> bool:
+    """바꾸는 요청을 보낼 수 있는가. 관리자는 언제나, 등록 기기는 그 기기의 role 로."""
+    if is_admin(who):
+        return True
+    if device is not None:
+        return _role(device.get("role", "edit")) == "edit"
+    return True
+
+
+# 보기만인 기기도 할 수 있는 '바꾸는' 요청 — 파일을 만들 뿐 아무것도 바꾸지 않는다
+_VIEW_OK = ("/mixdown",)
+
+
+def is_mutation(method: str, path: str) -> bool:
+    if method in ("GET", "HEAD", "OPTIONS"):
+        return False
+    return not path.endswith(_VIEW_OK)
 
 
 def is_admin(who: dict) -> bool:
@@ -334,6 +368,10 @@ async def middleware(request: Request, call_next):
     elif path.startswith("/api/admin/") and not is_admin(who):
         status = 403
         resp = JSONResponse({"detail": "관리 화면은 내 Tailscale 계정 기기에서만 열 수 있습니다."},
+                            status_code=403)
+    elif path.startswith("/api/") and is_mutation(method, path) and not can_edit(who, device):
+        status = 403
+        resp = JSONResponse({"detail": "보기 전용 기기입니다. 재생·다운로드만 할 수 있습니다."},
                             status_code=403)
     else:
         request.state.who = who

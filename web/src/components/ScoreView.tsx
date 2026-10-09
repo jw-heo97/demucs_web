@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
+import { useMe } from "../lib/me";
 import type { ScoreData, ScoreMeasure } from "../types";
 
 /** 한 번에 보여줄 마디 수. 지금 마디가 든 4마디 묶음 + 다음 4마디라 늘 앞이 보인다. */
@@ -190,6 +191,7 @@ export function ScorePanel({
   onScore?: (s: ScoreData | null) => void;
   children?: React.ReactNode;
 }) {
+  const { canEdit } = useMe();
   const [score, setScore] = useState<ScoreData | null | undefined>(undefined);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
@@ -257,10 +259,12 @@ export function ScorePanel({
           style={{ display: "none" }}
           onChange={(e) => e.target.files?.[0] && void upload(e.target.files[0])}
         />
-        <button className="ghost" disabled={busy} onClick={() => file.current?.click()}>
-          {score ? "악보 바꾸기" : "악보 PDF 올리기"}
-        </button>
-        {score && (
+        {canEdit && (
+          <button className="ghost" disabled={busy} onClick={() => file.current?.click()}>
+            {score ? "악보 바꾸기" : "악보 PDF 올리기"}
+          </button>
+        )}
+        {score && canEdit && (
           <button className="ghost" onClick={remove}>
             연결 끊기
           </button>

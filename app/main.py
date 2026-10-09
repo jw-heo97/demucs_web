@@ -77,6 +77,7 @@ def api_me(request: Request):
     who = getattr(request.state, "who", None) or access.classify(request)
     dv = getattr(request.state, "device", None)
     return {"via": who["via"], "login": who["login"], "admin": access.is_admin(who),
+            "can_edit": access.can_edit(who, dv),
             "device": dv["name"] if dv else None}
 
 
@@ -99,8 +100,8 @@ def admin_access():
 
 @app.post("/api/admin/invites")
 def admin_invite_create(request: Request, payload: dict = Body(default={})):
-    """{name} — 1회용 초대 링크. 링크 원문은 이 응답에서만 보인다(서버엔 해시만)."""
-    key, inv = access.store.create_invite(payload.get("name") or "")
+    """{name, role?} — 1회용 초대 링크. 링크 원문은 이 응답에서만 보인다(서버엔 해시만)."""
+    key, inv = access.store.create_invite(payload.get("name") or "", payload.get("role") or "view")
     return {**inv, "url": _invite_url(request, key)}
 
 
@@ -115,10 +116,11 @@ def admin_invite_cancel(iid: str):
 
 @app.patch("/api/admin/devices/{did}")
 def admin_device_update(did: str, payload: dict = Body(...)):
-    """{name?, blocked?}"""
+    """{name?, blocked?, role?}  role: view | edit"""
     try:
         return access.store.update(did, payload.get("name"),
-                                   payload.get("blocked") if "blocked" in payload else None)
+                                   payload.get("blocked") if "blocked" in payload else None,
+                                   payload.get("role"))
     except KeyError:
         raise HTTPException(404, "그 기기를 찾을 수 없습니다.")
 
