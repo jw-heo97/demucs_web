@@ -1181,7 +1181,9 @@ class JobStore:
         for sub, ext in (("wav", ".wav"), ("mp3", ".mp3")):
             if sub == "wav" and job.fmt not in ("wav", "both"):
                 continue
-            if sub == "mp3" and job.fmt not in ("mp3", "both"):
+            # 활성 버전 클릭(_click)은 mp3 도 늘 만든다 — 확정(잠긴) 버전은 이 파일을 스템(mp3)과
+            # 같은 트랙으로 재생하므로 같은 형식이어야 mp3 앞머리 지연까지 똑같이 맞는다
+            if sub == "mp3" and job.fmt not in ("mp3", "both") and suffix:
                 continue
             path = out_dir / sub / f"{base}_click{tag}{ext}"
             if ext == ".wav":
@@ -1389,10 +1391,12 @@ class JobStore:
             return 0
         base = job.folder or out_dir.name
         made = 0
-        for key in self.PLAYBACK_KEYS:
+        for key in self.PLAYBACK_KEYS + ("click",):
             wav = out_dir / "wav" / f"{base}_{key}.wav"
             mp3 = out_dir / "mp3" / f"{base}_{key}.mp3"
-            if wav.exists() and not mp3.exists():
+            # 클릭은 송 맵을 저장할 때마다 다시 구워지므로, wav 가 더 새로우면 mp3 도 새로
+            stale = key == "click" and mp3.exists() and wav.exists()                 and wav.stat().st_mtime > mp3.stat().st_mtime + 1
+            if wav.exists() and (not mp3.exists() or stale):
                 try:
                     audio_io.transcode_mp3(wav, mp3)
                     made += 1

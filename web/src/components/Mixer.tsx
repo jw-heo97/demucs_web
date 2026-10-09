@@ -238,7 +238,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
   // 메트로놈 트랙은 파일이 아니라 송 맵에서 즉석으로 울린다 (편집이 바로 들린다)
   const [subdiv, setSubdiv] = useSubdiv();
   const [clickSound, setClickSoundState] = useState<ClickSound>(getClickSound);
-  const metroIdx = tracks.findIndex((t) => t.virtual);
+  const metroIdx = tracks.findIndex((t) => t.key === "click");
   const metroVol = metroIdx >= 0 ? (vol[metroIdx] ?? 1) : 1;
   const hasMetronome = tracks.some((t) => t.virtual);
   const [localOffset, setClickOffset] = useClickOffset();
@@ -497,7 +497,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
     const stems = idx.map((i) => tracks[i].key);
     // 스템은 기본 볼륨이 50 이라 그대로 넘기면 파일이 작게 나온다. 들리는 균형은 그대로 두고
     // 가장 큰 스템이 100 이 되게 키운다 (넘치면 서버가 전체를 낮춘다).
-    const top = Math.max(0, ...idx.filter((i) => !tracks[i].virtual).map((i) => vol[i] ?? 1));
+    const top = Math.max(0, ...idx.filter((i) => tracks[i].key !== "click").map((i) => vol[i] ?? 1));
     const scale = top > 0 ? 1 / top : 1;
     const gains: Record<string, number> = {};
     idx.forEach((i) => (gains[tracks[i].key] = (vol[i] ?? 1) * scale));
@@ -1169,10 +1169,15 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
             type="range"
             min={0}
             // 메트로놈은 600% 까지 (리미터가 찌그러짐을 막는다). 스템은 100% 까지
-            max={t.virtual ? 600 : 100}
+            max={t.key === "click" ? 600 : 100}
             value={Math.round((vol[i] ?? 1) * 100)}
             onChange={(e) => engine.setVolume(i, Number(e.target.value) / 100)}
-            title={t.virtual ? "메트로놈 볼륨 — 음악에 묻히면 100 넘게(최대 600) 올리세요" : undefined}
+            title={
+              t.key === "click"
+                ? (t.virtual ? "" : "확정(잠긴) 버전 — 서버가 구운 클릭 파일을 스템처럼 재생합니다. ") +
+                  "메트로놈 볼륨 — 음악에 묻히면 100 넘게(최대 600) 올리세요"
+                : undefined
+            }
           />
           <span className="pct">{Math.round((vol[i] ?? 1) * 100)}</span>
           {t.trackId && (() => {
