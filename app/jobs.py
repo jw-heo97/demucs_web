@@ -539,6 +539,10 @@ class JobStore:
             job.stage = "파일 저장 중"
             self._write_outputs(job, stems, audio, sr, out_dir, job.folder, click=click)
 
+            # 재생용 mp3 — 'wav 만' 으로 분리해도 기기에 받아 두는 크기를 1/4 로 (믹스는 wav 원본으로)
+            job.stage = "재생용 mp3 만드는 중"
+            self.ensure_playback_mp3(job)
+
             job.progress = 1.0
             job.status = "done"
             job.stage = "완료"
@@ -1302,6 +1306,46 @@ class JobStore:
         job.files = self._scan_files(job, out_dir)
         entry = next((f for f in job.files if f["rel"] == f"mix/{path.name}"), None)
         return {"file": entry, "stems": used, "normalized": normalized, **ci}
+
+    # --- 재생용 mp3 ---
+    PLAYBACK_KEYS = ("drums", "bass", "vocals", "other")
+
+    def ensure_playback_mp3(self, job: Job) -> int:
+        """스템 wav 만 있고 mp3 가 없으면 mp3 를 만들어 둔다. 만든 개수를 돌려준다.
+
+        믹서는 기기(브라우저 저장소)에 스템을 통째로 받아 두고 재생한다. wav 는 곡당
+        170~200MB 라 폰·LTE 에서 부담이 커서, 재생은 mp3(1/4 크기)로 한다. 믹스 받기는
+        _find_stem 이 wav 를 우선하므로 음질 손해가 없다.
+        """
+        out_dir = job.out_dir
+        if not out_dir or not out_dir.exists():
+            return 0
+        base = job.folder or out_dir.name
+        made = 0
+        for key in self.PLAYBACK_KEYS:
+            wav = out_dir / "wav" / f"{base}_{key}.wav"
+            mp3 = out_dir / "mp3" / f"{base}_{key}.mp3"
+            if wav.exists() and not mp3.exists():
+                try:
+                    audio_io.transcode_mp3(wav, mp3)
+                    made += 1
+                except Exception as e:
+                    print(f"[{job.id}] 재생용 mp3 실패 {wav.name}: {e}", flush=True)
+        if made:
+            job.files = self._scan_files(job, out_dir)
+        return made
+
+    def backfill_playback_mp3(self) -> None:
+        """기동 때 예전 곡들의 재생용 mp3 를 뒤에서 채운다 (한 번 만들면 다음엔 건너뛴다)."""
+        for job in list(self._jobs.values()):
+            if self._stop.is_set():
+                return
+            if job.status != "done":
+                continue
+            t = time.time()
+            n = self.ensure_playback_mp3(job)
+            if n:
+                print(f"[mp3] {job.folder}: 재생용 mp3 {n}개 ({time.time() - t:.1f}초)", flush=True)
 
     @staticmethod
     def _find_stem(out_dir: Path, key: str) -> Optional[Path]:

@@ -10,6 +10,7 @@ load/save 는 TorchCodec 별칭이 되었다. 그래서 여기서는 torchaudio 
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -97,3 +98,17 @@ def save_mp3(path: Path, audio: np.ndarray, sample_rate: int, bitrate: str = MP3
     if p.returncode != 0:
         raise AudioError(f"mp3 인코딩 실패: {p.stderr.decode('utf-8', 'replace').strip()[:500]}")
     return path
+
+
+def transcode_mp3(src: Path, dst: Path, bitrate: str = MP3_BITRATE) -> Path:
+    """wav 파일을 mp3 로 (재생용 사본). 다 쓴 뒤 이름을 바꿔서, 도중에 끊겨도 반쪽 파일이 남지 않는다."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(dst.stem + ".part.mp3")
+    cmd = [FFMPEG_BIN, "-nostdin", "-v", "error", "-y", "-i", str(src),
+           "-c:a", "libmp3lame", "-b:a", bitrate, str(tmp)]
+    p = subprocess.run(cmd, capture_output=True)
+    if p.returncode != 0:
+        tmp.unlink(missing_ok=True)
+        raise AudioError(f"mp3 변환 실패: {p.stderr.decode('utf-8', 'replace').strip()[:500]}")
+    os.replace(tmp, dst)
+    return dst

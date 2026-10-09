@@ -7,6 +7,7 @@ Tailscale 이 맡는다 — 내 tailnet 에 속한 기기만 접속할 수 있�
 from __future__ import annotations
 
 import asyncio
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -39,6 +40,8 @@ async def lifespan(app: FastAPI):
     # 이전 결과를 디스크에서 되살린다 (재시작해도 라이브러리가 유지되도록)
     await asyncio.to_thread(store.restore_from_disk)
     store.start()
+    # 예전 곡들의 재생용 mp3 를 뒤에서 채운다 (wav 만 있으면 기기 저장이 너무 크다)
+    threading.Thread(target=store.backfill_playback_mp3, name="mp3-backfill", daemon=True).start()
     try:
         yield
     finally:
