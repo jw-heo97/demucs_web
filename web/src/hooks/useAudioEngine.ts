@@ -107,8 +107,11 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
   const [muted, setMuted] = useState<boolean[]>([]);
   const [solo, setSolo] = useState<boolean[]>([]);
   const [vol, setVol] = useState<number[]>([]);
-  /** 기기 저장 상태: 확인 중 / 받는 중(pct) / 저장됨 / 스트리밍만(받기 실패) */
-  const [cache, setCache] = useState<{ state: "checking" | "downloading" | "cached" | "stream"; pct: number }>({
+  /** 기기 저장 상태: 확인 중 / 받는 중(pct) / 재생 중이라 쉬는 중 / 저장됨 / 스트리밍만(받기 실패) */
+  const [cache, setCache] = useState<{
+    state: "checking" | "downloading" | "waiting" | "cached" | "stream";
+    pct: number;
+  }>({
     state: "checking",
     pct: 0,
   });
@@ -200,9 +203,10 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
         a.src = swapTo[i]!;
         a.currentTime = at;
       });
-      created[0].removeEventListener("pause", trySwap);
       setCache({ state: "cached", pct: 100 });
     };
+    let onPlayEv: (() => void) | null = null;
+    let onPauseEv: (() => void) | null = null;
     setCache({ state: "checking", pct: 0 });
     void (async () => {
       const hits = await Promise.all(real.map((t) => cachedUrl(t.url)));
@@ -216,39 +220,80 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
         setCache({ state: "cached", pct: 100 });
         return;
       }
-      const got = real.map(() => 0);
-      const total = real.map(() => 0);
-      let lastPct = -1;
-      const progress = () => {
-        const t = total.reduce((x, y) => x + y, 0);
-        const pct = t ? Math.min(99, Math.floor((got.reduce((x, y) => x + y, 0) / t) * 100)) : 0;
-        if (pct !== lastPct && alive) {
-          lastPct = pct;
-          setCache({ state: "downloading", pct });
-        }
-      };
       hits.forEach((h, i) => {
         if (h) swapTo[i] = h;
       });
-      await Promise.all(
-        real.map(async (t, i) => {
-          if (hits[i]) return;
-          swapTo[i] = await download(
-            t.url,
-            (g, tot) => {
-              got[i] = g;
-              total[i] = tot;
-              progress();
-            },
-            abort.signal,
-          );
-        }),
-      );
-      if (!alive) return;
-      created[0].addEventListener("pause", trySwap);
-      trySwap();
+
+      // 뒤에서 받기 — 듣고 보는 게 먼저다. 원격(LTE·Tailscale)에서 4개를 한꺼번에 최대 속도로
+      // 받으면 회선을 다 차지해 재생 스트리밍·악보 이미지가 멈춰 '저장하는 동안 아무것도 못 했다'.
+      //  - 한 번에 하나씩, 브라우저에 낮은 우선순위로 요청한다
+      //  - 재생 중에는 받기를 멈추고(스트리밍에 회선을 준다) 멈추면 그 파일부터 다시 받는다
+      //  - 곡을 연 직후 화면·악보·첫 재생 준비가 먼저 끝나게 잠깐 기다렸다 시작한다
+      const queue = real.map((_, i) => i).filter((i) => !hits[i]);
+      const n = real.length;
+      let doneCount = n - queue.length;
+      let cur: AbortController | null = null;
+      let running = false;
+      const show = (frac: number) => {
+        if (!alive) return;
+        const pct = Math.min(99, Math.floor(((doneCount + frac) / n) * 100));
+        setCache({ state: created[0].paused ? "downloading" : "waiting", pct });
+      };
+      const run = async () => {
+        if (running || !alive) return;
+        running = true;
+        try {
+          while (alive && queue.length) {
+            if (!created[0].paused) {
+              show(0);
+              return; // 재생 중 — 멈추면(onPause) 다시 시작한다
+            }
+            const i = queue[0];
+            cur = new AbortController();
+            const stop = () => cur?.abort();
+            abort.signal.addEventListener("abort", stop);
+            try {
+              swapTo[i] = await download(real[i].url, (g, tot) => show(tot ? g / tot : 0), cur.signal, "low");
+              queue.shift();
+              doneCount += 1;
+            } catch (e) {
+              if (cur.signal.aborted) return; // 재생을 시작했거나 곡을 바꿨다
+              throw e;
+            } finally {
+              abort.signal.removeEventListener("abort", stop);
+              cur = null;
+            }
+          }
+          if (alive && !queue.length) trySwap();
+        } catch {
+          // 받기에 실패해도 스트리밍으로는 계속 들을 수 있다
+          if (alive) setCache({ state: "stream", pct: 0 });
+        } finally {
+          running = false;
+        }
+      };
+      // 멈추고 3초가 지나야 다시 받는다 — 재생 버튼을 누르면 예비박 동안은 음악이 멈춰 있고
+      // (iOS 잠금 풀기로 잠깐 재생·정지도 한다), 그 사이에 받기 시작하면 첫 재생과 회선을 다툰다.
+      let resumeTimer = 0;
+      onPlayEv = () => {
+        clearTimeout(resumeTimer);
+        cur?.abort();
+        show(0);
+      };
+      onPauseEv = () => {
+        clearTimeout(resumeTimer);
+        if (!queue.length) return trySwap();
+        resumeTimer = window.setTimeout(() => {
+          if (created[0].paused) void run();
+        }, 3000);
+      };
+      abort.signal.addEventListener("abort", () => clearTimeout(resumeTimer));
+      created[0].addEventListener("play", onPlayEv);
+      created[0].addEventListener("pause", onPauseEv);
+      show(0);
+      await new Promise((r) => setTimeout(r, 2000));
+      void run();
     })().catch(() => {
-      // 받기에 실패해도 스트리밍으로는 계속 들을 수 있다
       if (alive) setCache({ state: "stream", pct: 0 });
     });
 
@@ -266,7 +311,8 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     return () => {
       alive = false;
       abort.abort();
-      m.removeEventListener("pause", trySwap);
+      if (onPlayEv) m.removeEventListener("play", onPlayEv);
+      if (onPauseEv) m.removeEventListener("pause", onPauseEv);
       m.removeEventListener("loadedmetadata", onMeta);
       m.removeEventListener("ended", onEnded);
       // src 를 비우면 currentTime 이 0 으로 돌아가므로 그 전에 기억해 둔다

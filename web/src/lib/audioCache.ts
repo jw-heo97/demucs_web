@@ -16,6 +16,9 @@ const objectUrls = new Map<string, string>();
 
 const hasCache = () => typeof caches !== "undefined";
 
+/** 받다 만 파일 — 다음에 이어 받는다 (이번 세션 메모리에만) */
+const partials = new Map<string, { chunks: Uint8Array[]; got: number; total: number; type: string }>();
+
 function remember(url: string, blob: Blob) {
   const prev = objectUrls.get(url);
   if (prev) return prev;
@@ -51,21 +54,34 @@ export async function download(
   url: string,
   onProgress?: (got: number, total: number) => void,
   signal?: AbortSignal,
+  priority: "high" | "low" | "auto" = "auto",
 ): Promise<string> {
-  const res = await fetch(url, { signal });
+  // 중간에 멈춘(재생을 시작해 양보한) 파일은 받은 데까지 이어 받는다 (서버가 Range 를 지원한다)
+  const part = partials.get(url);
+  const headers: Record<string, string> = part ? { Range: `bytes=${part.got}-` } : {};
+  // priority: 뒤에서 받을 때는 low — 재생·악보 같은 다른 요청이 먼저 나가게 (지원 안 하면 무시된다)
+  const res = await fetch(url, { signal, priority, headers } as RequestInit);
   if (!res.ok || !res.body) throw new Error(`받기 실패 (${res.status})`);
-  const total = Number(res.headers.get("content-length")) || 0;
+  const resumed = !!part && res.status === 206;
+  const chunks: Uint8Array[] = resumed ? part!.chunks : [];
+  let got = resumed ? part!.got : 0;
+  const total = resumed ? part!.total : Number(res.headers.get("content-length")) || 0;
+  const type = res.headers.get("content-type") || part?.type || "audio/mpeg";
+  partials.delete(url);
   const reader = res.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let got = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    got += value.length;
-    onProgress?.(got, total);
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      got += value.length;
+      onProgress?.(got, total);
+    }
+  } catch (e) {
+    if (got > 0) partials.set(url, { chunks, got, total, type });
+    throw e;
   }
-  const blob = new Blob(chunks as BlobPart[], { type: res.headers.get("content-type") || "audio/mpeg" });
+  const blob = new Blob(chunks as BlobPart[], { type });
   if (hasCache()) {
     try {
       const cache = await caches.open(CACHE_NAME);

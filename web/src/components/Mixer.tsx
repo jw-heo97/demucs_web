@@ -557,6 +557,11 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
             기기에 저장 중 {engine.cache.pct}%
           </span>
         )}
+        {engine.cache.state === "waiting" && (
+          <span className="meta" title="재생하는 동안에는 회선을 재생에 양보합니다. 멈추면 이어서 기기에 저장합니다.">
+            재생 중 — 멈추면 이어서 저장 ({engine.cache.pct}%)
+          </span>
+        )}
         {engine.cache.state === "cached" && (
           <span className="meta" title="이 곡은 기기에 저장돼 있어 네트워크 없이 재생·이동합니다.">
             기기에 저장됨
