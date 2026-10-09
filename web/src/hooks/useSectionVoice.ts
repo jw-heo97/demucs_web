@@ -106,6 +106,7 @@ export function useSectionVoice(engine: Engine, bars: Bar[]) {
     if (!enabled || !canSpeak()) return;
     let last: number | null = null;
     let wasPlaying = false;
+    let startedAt = 0;
     const id = window.setInterval(() => {
       const a = engine.audios.current[0];
       if (!a || a.paused) {
@@ -120,9 +121,17 @@ export function useSectionVoice(engine: Engine, bars: Bar[]) {
         // 막 재생을 시작했다: 지금 위치가 어느 구간의 '안내 시점 ~ 시작' 사이면 그 구간은
         // 읽지 않는다 — 재생 직후(예비박 끝)에 읽으면 첫 박과 겹친다. 다음 구간부터 읽는다.
         wasPlaying = true;
+        startedAt = performance.now();
         const from = last ?? t;
         ss.forEach((s, i) => {
           if (from >= s.cue && from < s.start - 0.3) said.current.add(i);
+        });
+      } else if (performance.now() - startedAt < 1000 && last !== null && (t < last || t - last > 1)) {
+        // 재생 직후 위치가 자리 잡는 중 — 합친 재생은 예비박 파일로 바꿔 끼우는 순간 위치가 잠깐
+        // 곡 0초보다 앞(-10초)을 가리켰다가 돌아온다. 이걸 '이동' 으로 보고 지우면 첫 구간(예비박과
+        // 겹쳐서 일부러 건너뛴 것)을 다시 읽었다. 새 위치 기준으로 시작 판단만 다시 한다.
+        ss.forEach((s, i) => {
+          if (t >= s.cue && t < s.start - 0.3) said.current.add(i);
         });
       } else if (last !== null && (t < last || t - last > 1)) {
         // 탐색·구간 반복: 다시 읽을 수 있게 비운다
