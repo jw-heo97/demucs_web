@@ -354,7 +354,10 @@ class JobStore:
     def _scan_files(job: Job, d: Path) -> list[dict]:
         out = []
         for p in sorted(d.rglob("*")):
-            if not p.is_file() or p.name in (META_FILE, MAP_HISTORY_FILE, PEAKS_FILE):
+            if not p.is_file() or p.name in (META_FILE, MAP_HISTORY_FILE, PEAKS_FILE, "_score.json"):
+                continue
+            # 악보 분석 결과(페이지 이미지)는 내려받을 파일이 아니다
+            if "_score" in p.relative_to(d).parts[:-1]:
                 continue
             out.append(JobStore._file_entry(job, d, p))
         return out

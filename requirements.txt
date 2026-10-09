@@ -13,3 +13,6 @@ scipy==1.17.1
 
 fastapi==0.141.1
 uvicorn[standard]==0.52.1
+
+# 악보 PDF 의 보표·마디선·글자 위치를 읽고 페이지 이미지를 만든다 (scores.py)
+pymupdf==1.28.2

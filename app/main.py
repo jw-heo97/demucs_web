@@ -10,11 +10,12 @@ import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Body, FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 import downloader
+import scores
 import separator
 from config import CORS_ORIGINS, MAX_DURATION_SEC, METRONOME_DEFAULT, OUTPUT_DIR, WORK_DIR
 from downloader import DownloadError
@@ -310,6 +311,85 @@ def delete_job(job_id: str):
         raise HTTPException(404, "작업을 찾을 수 없습니다.")
     playlists.remove_job(job_id)
     return JSONResponse({"deleted": job_id})
+
+
+# --- 악보 ---
+# 곡 폴더의 score.pdf 와 그 분석 결과(_score.json, _score/page-N.png). scores.py 참고.
+
+MAX_SCORE_BYTES = 30 * 1024 * 1024
+
+
+def _score_dir(job_id: str) -> Path:
+    job = _require_job(job_id, done=True)
+    if not job.out_dir or not job.out_dir.exists():
+        raise HTTPException(404, "결과 폴더가 없습니다.")
+    return job.out_dir
+
+
+def _score_payload(job_id: str, data: dict) -> dict:
+    return {**data, "page_urls": [f"/api/jobs/{job_id}/score/pages/{i + 1}"
+                                  for i in range(len(data.get("pages", [])))]}
+
+
+@app.get("/api/jobs/{job_id}/score")
+def get_score(job_id: str):
+    d = _score_dir(job_id)
+    data = scores.load(d)
+    if data is None and (d / scores.SCORE_PDF).exists():
+        data = scores.rebuild(d)          # PDF 만 넣어둔 경우 처음 볼 때 분석한다
+    if data is None:
+        raise HTTPException(404, "연결된 악보가 없습니다.")
+    return _score_payload(job_id, data)
+
+
+@app.put("/api/jobs/{job_id}/score")
+async def put_score(job_id: str, request: Request):
+    """악보 PDF 를 올린다 (본문 = PDF 그대로). 곡 폴더에 score.pdf 로 저장하고 분석한다."""
+    d = _score_dir(job_id)
+    body = await request.body()
+    if not body.startswith(b"%PDF"):
+        raise HTTPException(400, "PDF 파일이 아닙니다.")
+    if len(body) > MAX_SCORE_BYTES:
+        raise HTTPException(400, "악보 파일이 너무 큽니다 (30MB 까지).")
+    tmp = d / (scores.SCORE_PDF + ".tmp")
+    tmp.write_bytes(body)
+    tmp.replace(d / scores.SCORE_PDF)
+    try:
+        data = await asyncio.to_thread(scores.rebuild, d)
+    except Exception as e:                 # 깨진 PDF 등
+        raise HTTPException(400, f"악보를 읽지 못했습니다: {e}") from e
+    job = store.get(job_id)
+    job.files = store._scan_files(job, d)
+    return _score_payload(job_id, data)
+
+
+@app.post("/api/jobs/{job_id}/score/analyze")
+def analyze_score(job_id: str):
+    d = _score_dir(job_id)
+    if not (d / scores.SCORE_PDF).exists():
+        raise HTTPException(404, "연결된 악보가 없습니다.")
+    data = scores.rebuild(d)
+    job = store.get(job_id)
+    job.files = store._scan_files(job, d)
+    return _score_payload(job_id, data)
+
+
+@app.delete("/api/jobs/{job_id}/score")
+def delete_score(job_id: str):
+    d = _score_dir(job_id)
+    scores.remove(d)
+    job = store.get(job_id)
+    job.files = store._scan_files(job, d)
+    return {"deleted": True}
+
+
+@app.get("/api/jobs/{job_id}/score/pages/{n}")
+def get_score_page(job_id: str, n: int):
+    d = _score_dir(job_id)
+    p = d / scores.SCORE_DIR / f"page-{n}.png"
+    if n < 1 or not p.is_file():
+        raise HTTPException(404, "페이지가 없습니다.")
+    return FileResponse(p, media_type="image/png", headers={"Cache-Control": "no-cache"})
 
 
 # --- 플레이리스트 ---
