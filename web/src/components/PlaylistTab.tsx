@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ask, confirmBox } from "../lib/dialog";
 import { api } from "../api";
 import { useMe } from "../lib/me";
@@ -100,6 +100,21 @@ export function PlaylistTab({ jobs, onChanged }: Props) {
       setAutoToken((t) => t + 1);
     },
   });
+  // 다음 곡을 미리 받아 풀어 둔다 — 넘어갈 때 기다리지 않게. 지금 곡이 준비된 뒤에 시작한다
+  // (풀기는 전역으로 한 번에 하나라 지금 곡보다 먼저 가지 않는다). 지난 곡은 트랙 캐시가 들고 있다
+  const nextIdx = nextPlayable(cur, 1);
+  const nextJobRef = useRef<Job | null>(null);
+  nextJobRef.current = nextIdx >= 0 ? byId.get(items[nextIdx]) ?? null : null;
+  const nextJobId = nextJobRef.current?.id ?? null;
+  const prefetch = engine.prefetch;
+  useEffect(() => {
+    if (!engine.ready || !nextJobId) return;
+    const t = window.setTimeout(() => {
+      const j = nextJobRef.current;
+      if (j && j.id === nextJobId) void prefetch(j);
+    }, 2000);
+    return () => window.clearTimeout(t);
+  }, [engine.ready, nextJobId, prefetch]);
   // 연결된 악보 (곡이 바뀌면 다시 받는다)
   const [score, setScore] = useState<ScoreData | null>(null);
   const [showScore, setShowScore] = useState(() => lsGet(LS_SHOWSCORE) !== "0");

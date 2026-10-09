@@ -5,16 +5,7 @@ import { api } from "../api";
 import type { Track, useAudioEngine } from "../hooks/useAudioEngine";
 import { OFFSET_LIMIT, useClickOffset, useLiveMetronome, useSubdiv } from "../hooks/useLiveMetronome";
 import { useSectionVoice } from "../hooks/useSectionVoice";
-import {
-  CLICK_SOUNDS,
-  audioCtx,
-  getClickSound,
-  metroOut,
-  scheduleClick,
-  setClickSound,
-  type ClickHandle,
-  type ClickSound,
-} from "../lib/audioCtx";
+import { audioCtx, metroOut, scheduleClick, type ClickHandle } from "../lib/audioCtx";
 import type { Bar } from "../types";
 import { barAtTime, stepOf } from "../lib/songmap";
 import { clock } from "../lib/time";
@@ -183,7 +174,6 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
   const timers = useRef<{ i?: number; oscs: ClickHandle[] }>({ oscs: [] });
   // 메트로놈 트랙은 파일이 아니라 송 맵에서 즉석으로 울린다 (편집이 바로 들린다)
   const [subdiv, setSubdiv] = useSubdiv();
-  const [clickSound, setClickSoundState] = useState<ClickSound>(getClickSound);
   const metroIdx = tracks.findIndex((t) => t.key === "click");
   const metroVol = metroIdx >= 0 ? (vol[metroIdx] ?? 1) : 1;
   const hasMetronome = tracks.some((t) => t.virtual);
@@ -556,32 +546,6 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
           >
             <option value="1">클릭 4비트</option>
             <option value="2">클릭 8비트</option>
-          </select>
-        )}
-        {(hasMetronome || countIn > 0) && (
-          <select
-            style={{ width: 128 }}
-            value={clickSound}
-            onChange={(e) => {
-              const v = e.target.value as ClickSound;
-              setClickSound(v);
-              setClickSoundState(v);
-              // 고르면 한 번 들려준다 (첫 박 소리)
-              try {
-                const ctx = audioCtx();
-                void ctx.resume();
-                scheduleClick(ctx, ctx.currentTime + 0.03, 1500, metroOut(ctx), { peak: 0.9 * Math.max(1, metroVol) });
-              } catch {
-                /* Web Audio 미지원 */
-              }
-            }}
-            title="메트로놈·예비박 소리. 이 기기에 기억합니다. 재생 중에도 바로 바뀝니다."
-          >
-            {CLICK_SOUNDS.map((s) => (
-              <option key={s.value} value={s.value}>
-                소리: {s.label}
-              </option>
-            ))}
           </select>
         )}
         {(hasMetronome || countIn > 0) && (

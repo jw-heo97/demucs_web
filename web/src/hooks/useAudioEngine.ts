@@ -5,7 +5,8 @@ import { cachedUrl, download, removeFromDevice } from "../lib/audioCache";
 import { audioCtx } from "../lib/audioCtx";
 import { stemFilesOf } from "../lib/stems";
 import { useSubdiv } from "./useLiveMetronome";
-import { BufferTransport, decodePcm, type Pcm } from "../lib/bufferTransport";
+import { BufferTransport, type Pcm } from "../lib/bufferTransport";
+import { dropPcm, getPcm, hasPcm, pinPcm, unpinPcm } from "../lib/pcmCache";
 
 export interface Track {
   key: string;
@@ -169,6 +170,8 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
   }>({ state: "checking", pct: 0 });
   /** 트랙을 푸는 중이면 진척 (done/total) */
   const [preparing, setPreparing] = useState<{ done: number; total: number } | null>(null);
+  /** 재생기가 준비됐나 (트랙을 다 풀어 올렸다) */
+  const [ready, setReady] = useState(false);
   const onEndedRef = useRef(opts.onEnded);
   onEndedRef.current = opts.onEnded;
   const carryRef = useRef(!!opts.carryMix);
@@ -259,6 +262,7 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     const real = ts.filter((t) => !t.virtual);
     setDuration(j?.duration ?? 0);
     setPreparing(null);
+    setReady(false);
     const loaded: Loaded = { real, urls: real.map(() => null), tp: null, building: null, alive: true };
     loadedRef.current = loaded;
     if (!real.length) {
@@ -345,7 +349,9 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
       // 재생기를 지우면 위치가 사라지므로 그 전에 기억해 둔다
       lastTime.current = Math.max(0, loaded.tp?.currentTime ?? lastTime.current);
       loaded.tp?.dispose();
+      if (loaded.tp) unpinPcm(real.map((t) => t.url)); // 풀어 둔 것은 캐시에 남는다 (돌아오면 바로)
       loaded.tp = null;
+      setReady(false);
       if (loadedRef.current === loaded) loadedRef.current = null;
       audiosRef.current = [];
       setPlaying(false);
@@ -386,9 +392,9 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
       const total = l.real.length;
       setPreparing({ done: 0, total });
       const pcms: Pcm[] = [];
-      // 한 번에 하나씩 — 푸는 순간엔 float32 전체가 잠깐 살아서 (5분 ~115MB) 동시에 풀면 아이패드가 버겁다
+      // 캐시(lib/pcmCache)에 있으면 바로, 없으면 푼다 — 푸는 것은 전역으로 한 번에 하나씩
       for (let i = 0; i < total; i++) {
-        pcms.push(await decodePcm(ctx, l.urls[i]!));
+        pcms.push(await getPcm(ctx, l.real[i].url, l.urls[i]!));
         if (!l.alive) return null;
         setPreparing({ done: i + 1, total });
       }
@@ -408,8 +414,10 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
       });
       tp.playbackRate = rateRef.current;
       tp.currentTime = lastTime.current;
+      pinPcm(l.real.map((t) => t.url));
       l.tp = tp;
       audiosRef.current = [tp as unknown as HTMLAudioElement];
+      setReady(true);
       return tp;
     })();
     l.building = job;
@@ -430,6 +438,31 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     const t = window.setTimeout(() => void prepare(), 1500);
     return () => window.clearTimeout(t);
   }, [cache.state, loadedId, prepare]);
+
+  /**
+   * 다른 곡을 미리 받아 풀어 둔다 (플레이리스트의 다음 곡). 트랙 캐시(lib/pcmCache)에 들어가므로 그 곡으로
+   * 넘어가면 바로 재생기가 만들어진다. 받기·풀기는 한 번에 하나씩, 낮은 우선순위.
+   */
+  const prefetch = useCallback(async (j: Job) => {
+    const ts = tracksOf(j, subdivRef.current).filter((t) => !t.virtual);
+    const ctx = audioCtx();
+    for (const t of ts) {
+      if (hasPcm(t.url)) continue;
+      let u = await cachedUrl(t.url);
+      if (!u) {
+        try {
+          u = await download(t.url, undefined, undefined, "low");
+        } catch {
+          return;
+        }
+      }
+      try {
+        await getPcm(ctx, t.url, u);
+      } catch {
+        return;
+      }
+    }
+  }, []);
 
   // 시간 추적 + 구간 반복
   const lastPush = useRef(0);
@@ -562,6 +595,8 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
       setPlaying(false);
       await removeFromDevice(urls);
       setReloadTick((n) => n + 1);
+      // 풀어 둔 것도 지운다 (재생기가 놓은 뒤에 — 다음 렌더에서)
+      window.setTimeout(() => dropPcm(urls), 0);
     },
     setRate,
     play,
@@ -579,6 +614,10 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     job,
     /** 트랙을 푸는 중인가 (done/total) */
     preparing,
+    /** 재생기가 준비됐나 */
+    ready,
+    /** 다른 곡(플레이리스트의 다음 곡)을 미리 받아 풀어 둔다 */
+    prefetch,
     /** 재생 준비 (받기 → 풀기). 준비되면 true. 예비박처럼 시작 시각을 정해 틀 때 먼저 부른다 */
     prepare: async () => !!(await prepare()),
     playAt,
