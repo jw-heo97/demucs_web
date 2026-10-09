@@ -323,6 +323,7 @@ export function SongMapTab({ jobs, onChanged }: Props) {
               showRate
               loopButton={{
                 on: !!loop,
+                region: loop,
                 title: loop
                   ? `반복 해제 (${showTime(loop.start)}~${showTime(loop.end)})`
                   : "지금 재생 위치가 속한 구간(같은 이름이 이어지는 마디들)을 반복합니다",

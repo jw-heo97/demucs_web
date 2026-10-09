@@ -19,8 +19,16 @@ interface Props {
   onChanged?: () => void;
   /** 속도 조절 노출 여부 (송 맵에서만) */
   showRate?: boolean;
-  /** 재생 버튼 옆 '구간 반복' (송 맵에서만). on 이면 누를 때 해제한다. */
-  loopButton?: { on: boolean; title: string; onToggle: () => void };
+  /**
+   * 재생 버튼 옆 '구간 반복' (송 맵에서만). on 이면 누를 때 해제한다.
+   * region 이 있으면 재생을 누를 때 반복 시작으로 가서 예비박부터 시작한다.
+   */
+  loopButton?: {
+    on: boolean;
+    title: string;
+    onToggle: () => void;
+    region: { start: number; end: number } | null;
+  };
   countIn: number;
   onCountInChange: (n: number) => void;
   /**
@@ -157,13 +165,20 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
       return;
     }
     voice.prime();
-    const pos = time;
-    // 예비박은 곡 처음부터 재생할 때만. 중간에서 매번 붙으면 방해가 된다.
-    if (!countIn || pos > 0.25) {
+    let pos = time;
+    // 구간 반복 중이면 반복 시작(구간 2마디 전)으로 가서 예비박부터 들어간다.
+    // 반복이 한 바퀴 돌아 처음으로 돌아갈 때는 예비박 없이 바로 이어진다.
+    const lp = loopButton?.region ?? null;
+    if (lp) {
+      pos = lp.start;
+      engine.seek(pos);
+    }
+    // 예비박은 곡 처음(또는 반복 시작)부터 재생할 때만. 중간에서 매번 붙으면 방해가 된다.
+    if (!countIn || (pos > 0.25 && !lp)) {
       await startPlay();
       return;
     }
-    const b = cur ?? bars[0];
+    const b = barAtTime(bars, pos) ?? bars[0];
     const stepRaw = b ? stepOf(b.bpm, b.beat_unit) : 0.5;
     const step = stepRaw / (rate || 1);
     const bpb = b?.beats_per_bar ?? 4;
