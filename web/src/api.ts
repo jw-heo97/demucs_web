@@ -104,6 +104,12 @@ export const api = {
   detectMap: (id: string) => post<{ bpm: number; bars: number; octave_note: string; raw_bpm: number }>(
     `/api/jobs/${id}/map/detect`,
   ),
+  alignMap: (id: string, map: SongMap) =>
+    post<{
+      map: SongMap;
+      groups: { from_bar: number; offset: number | null; confidence: number; beats: number }[];
+      source: string;
+    }>(`/api/jobs/${id}/map/align`, { map }),
   createVersion: (id: string, name: string, map?: SongMap) =>
     post(`/api/jobs/${id}/map/versions`, { name, map }),
   activateVersion: (id: string, vid: string) =>

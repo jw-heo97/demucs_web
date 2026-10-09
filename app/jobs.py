@@ -348,6 +348,11 @@ class JobStore:
                 job.songmap = self.default_map(job.bpm, data.get("beats") or [], job.duration)
         if job.songmap:
             self.sync_beats(job)
+        # 예전 메타에는 버전 내용이 저장되지 않았다. 활성 버전은 지금 구성표와 같으니 채우고,
+        # 나머지는 내용 없음(None)으로 둔다 — 전환하려 하면 이력에서 되살리라고 알린다.
+        for v in job.map_versions:
+            if "map" not in v:
+                v["map"] = copy.deepcopy(job.songmap) if v["id"] == job.map_active and job.songmap else None
         return job
 
     @staticmethod
@@ -372,6 +377,9 @@ class JobStore:
         data["started_at"] = job.started_at
         data["finished_at"] = job.finished_at
         data["minus_mixes"] = job.minus_mixes
+        # 버전의 구성표 내용까지 저장한다. to_dict 는 목록 폴링용이라 이름만 싣는데,
+        # 예전엔 그걸 그대로 저장해서 활성이 아닌 버전의 내용이 재시작하면 사라졌다.
+        data["map_versions"] = [dict(v) for v in job.map_versions]
         # 박자 배열은 저장하지 않는다 — 구성표에서 언제든 다시 만들 수 있고,
         # 곡당 수백~수천 개라 메타 파일만 커진다.
         # 임시 파일에 쓰고 교체한다 — 쓰는 도중 죽어도 파일이 깨지지 않는다.
@@ -910,6 +918,9 @@ class JobStore:
         v = next((x for x in job.map_versions if x["id"] == vid), None)
         if not v:
             raise ValueError("그 버전을 찾을 수 없습니다.")
+        if not v.get("map"):
+            raise ValueError(f"'{v['name']}' 버전의 내용이 저장돼 있지 않습니다 (예전 버그). "
+                             "이력에서 되살린 뒤 다시 저장해 주세요.")
         self._push_map_history(job, job.songmap)
         job.map_active = vid
         job.songmap = copy.deepcopy(v["map"])
@@ -943,7 +954,12 @@ class JobStore:
         if job.out_dir:
             job.files = self._scan_files(job, job.out_dir)
         if job.map_active == vid:
-            self.activate_version(job, job.map_versions[0]["id"])
+            # 내용이 남아 있는 버전으로 옮긴다. 없으면(예전 버그로 내용이 사라진 버전뿐이면)
+            # 지우는 버전의 구성표를 넘겨받아 화면이 빈 채로 남지 않게 한다.
+            nxt = next((x for x in job.map_versions if x.get("map")), job.map_versions[0])
+            if not nxt.get("map"):
+                nxt["map"] = copy.deepcopy(job.songmap)
+            self.activate_version(job, nxt["id"])
         else:
             self._save_meta(job)
 
@@ -1104,6 +1120,37 @@ class JobStore:
 
         job.metronome = True
         job.files = self._scan_files(job, out_dir)
+
+    def align_map(self, job: Job, songmap: Any) -> dict:
+        """편집 중인 구성표의 기준 시각들을 실제 타격 위치에 맞춰 돌려준다 (저장은 안 함).
+
+        템포·마디 구성은 그대로 두고 1마디 1박과 고정 마디 시각만 옮긴다.
+        사용자가 들어 보고 저장하도록 화면에만 반영한다.
+        """
+        out_dir = job.out_dir
+        if not out_dir or not out_dir.exists():
+            raise ValueError("결과 폴더가 없습니다.")
+        m = self.normalize_map(songmap, job.duration)
+        # 드럼이 타격 위치가 가장 또렷하다. 없으면 원곡으로 물러선다.
+        src = self._find_stem(out_dir, "drums") or self._find_stem(out_dir, "original")
+        if src is None:
+            raise ValueError("드럼 스템이나 원곡 파일이 없어 맞출 수 없습니다.")
+        sr = separator.get_loaded_model().samplerate
+        audio = audio_io.decode(src, sample_rate=sr)
+        duration = job.duration or audio.shape[-1] / sr
+        groups = separator.align_map(m, audio, sr, duration)
+
+        for g in groups:
+            off = g["offset"]
+            if off is None:
+                continue
+            if g["from_bar"] == 1:
+                m["anchor"] = round(max(0.0, m["anchor"] + off), 4)
+                continue
+            for r in m["ranges"]:
+                if int(r.get("from_bar", 0)) == g["from_bar"] and r.get("anchor") is not None:
+                    r["anchor"] = round(max(0.0, float(r["anchor"]) + off), 4)
+        return {"map": m, "groups": groups, "source": src.stem.rsplit("_", 1)[-1]}
 
     def redetect_map(self, job: Job) -> dict:
         """드럼 스템을 다시 분석해 기본 구성표를 만든다 (사용자 편집 전 출발점)."""

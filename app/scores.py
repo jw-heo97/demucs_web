@@ -146,35 +146,75 @@ def find_barlines(drawings, st: dict) -> list[float]:
     xs = [x for x in merged if x > st["x0"] + 8]
     # 너무 좁은 '마디'는 마디가 아니다 — 줄 앞의 반복 시작 기호(‖:) 같은 것.
     # 줄 안 다른 마디들에 비해 눈에 띄게 좁으면 그 경계를 버리고 옆 마디와 합친다.
+    # 단, `%`(한 마디 반복)만 든 마디는 원래 좁게 그려진다 — 라시사 악보는 넓은 마디 4개와
+    # 좁은 % 마디 4개가 한 줄에 있어, 비율로만 보면 % 마디 3개가 합쳐져 마디 수가 줄었다.
+    # 그래서 비율 기준은 줄 첫 마디(‖: 가 놓이는 자리)에만 쓰고, 나머지는 절대 폭만 본다.
     edges = [st["x0"]] + xs
     while len(edges) > 2:
         widths = [edges[k + 1] - edges[k] for k in range(len(edges) - 1)]
         med = sorted(widths)[len(widths) // 2]
-        k = min(range(len(widths)), key=widths.__getitem__)
-        if widths[k] >= max(3 * st["gap"], 0.3 * med):
+        k = min(range(len(widths)), key=lambda i: widths[i] / (max(3 * st["gap"], 0.3 * med)
+                                                               if i == 0 else 3 * st["gap"]))
+        limit = max(3 * st["gap"], 0.3 * med) if k == 0 else 3 * st["gap"]
+        if widths[k] >= limit:
             break
         del edges[k + 1 if k + 1 < len(edges) - 1 else k]
     return edges[1:]
 
 
+# 상자 없이 글자로만 쓰는 구간 이름 (하이볼 악보의 'Intro' 처럼)
+_SECTION_WORD = re.compile(
+    r"^(intro|outro|verse|chorus|pre-?chorus|bridge|interlude|inter|ending|solo|coda)\d*'?$", re.I)
+
+
+def _is_box(d) -> bool:
+    """사각형(또는 둥근 사각형) 테두리인가. 마디마다 끊어 그린 보표 다섯 줄 묶음도
+    테두리 크기만 보면 상자처럼 보여서, 세로 변이 있는지까지 본다."""
+    for it in d["items"]:
+        if it[0] in ("re", "qu", "c"):
+            return True
+        if it[0] == "l" and abs(it[1].x - it[2].x) < 0.3 and abs(it[1].y - it[2].y) > 3:
+            return True
+    return False
+
+
 def _boxed_texts(words, drawings, area) -> list[dict]:
-    """네모 상자 안의 글자 = 구간 표시(Intro, A, Verse A …)."""
+    """네모 상자 안의 글자 = 구간 표시(Intro, A, Verse A …).
+
+    글자를 그림(윤곽선)으로 바꿔 버린 PDF(윈도우의 'Microsoft Print to PDF' 등)는
+    글자를 읽을 수 없지만 상자와 그 안의 글자 모양은 남아 있다. 그런 상자는 이름 없이
+    (text=None) 돌려줘서 구간 시작 마디라도 쓸 수 있게 한다.
+    """
     ax0, ay0, ax1, ay1 = area
     # 상자를 사각형 하나로 그리는 악보도, 선 네 개로 그리는 악보도 있어서 그림 요소의
     # 테두리 크기로 본다. 안에 글자가 들어 있어야 하므로 음표·빔이 섞여도 걸러진다.
+    # 작은 상자(하이볼 악보의 'A' 는 7pt)도 있어 6pt 부터 본다.
     boxes = []
     for d in drawings:
         r = d["rect"]
-        if d.get("color") is not None and 8 < r.width < 160 and 8 < r.height < 30 \
-                and r.x1 > ax0 and r.x0 < ax1 and r.y1 > ay0 and r.y0 < ay1:
+        if d.get("color") is not None and 6 < r.width < 160 and 6 < r.height < 30                 and r.x1 > ax0 and r.x0 < ax1 and r.y1 > ay0 and r.y1 <= ay1 + 1 and _is_box(d):
             boxes.append(r)
     out = []
     for r in boxes:
-        inside = [w for w in words if w[0] >= r.x0 - 1 and w[2] <= r.x1 + 1
-                  and w[1] >= r.y0 - 1 and w[3] <= r.y1 + 1]
+        # 글자 상자는 글꼴 높이만큼 커서 테두리를 살짝 넘는다 — 가운데가 안에 있으면 된다
+        inside = [w for w in words if r.x0 - 1 <= (w[0] + w[2]) / 2 <= r.x1 + 1
+                  and r.y0 - 1 <= (w[1] + w[3]) / 2 <= r.y1 + 1]
         if inside:
             inside.sort(key=lambda w: w[0])
             out.append({"text": " ".join(w[4] for w in inside), "x": r.x0, "y": r.y0})
+            continue
+        # 글자가 없으면 칠해진 그림(윤곽선 글자)이 안에 있는지 본다
+        glyph = any(e.get("fill") is not None and e["rect"].width < r.width
+                    and r.x0 - 0.5 <= e["rect"].x0 and e["rect"].x1 <= r.x1 + 0.5
+                    and r.y0 - 0.5 <= e["rect"].y0 and e["rect"].y1 <= r.y1 + 0.5
+                    for e in drawings)
+        if glyph:
+            out.append({"text": None, "x": r.x0, "y": r.y0})
+    # 상자 없는 구간 이름 (보표 위 글자)
+    for w in words:
+        if _SECTION_WORD.match(w[4]) and ax0 <= w[0] < ax1 and ay0 <= w[1] and w[3] <= ay1 + 1                 and not any(b["text"] and w[4] in b["text"].split() for b in out
+                            if abs(b["y"] - w[1]) < 30 and abs(b["x"] - w[0]) < 30):
+            out.append({"text": w[4], "x": w[0], "y": w[1]})
     # 같은 상자가 두 번 그려지는 경우
     uniq, seen = [], set()
     for b in out:
@@ -281,10 +321,30 @@ def analyze(pdf_path: Path, out_dir: Path) -> dict:
                 cand = [k for k in range(first, len(measures))]
                 if not cand:
                     continue
-                k = min(cand, key=lambda k: 0 if measures[k]["x0"] - 30 <= b["x"] < measures[k]["x1"]
-                        else abs(measures[k]["x0"] - b["x"]))
+                # 구간 표시는 마디 시작(또는 그 마디 첫 음표) 위에 놓인다 → 시작이 가장 가까운 마디.
+                # '걸치는 마디' 로 고르면 못갖춘마디 바로 뒤의 표시(Mela! 의 Intro1)가
+                # 앞 마디로 붙는다.
+                k = min(cand, key=lambda k: abs(measures[k]["x0"] - b["x"]))
                 marks.append({"measure": k + 1, "text": b["text"]})
     doc.close()
+
+    # 같은 마디에 여러 개가 붙으면(상자와 그 안 글자가 따로 잡힌 경우 등) 이름 있는 것 하나만
+    by_measure: dict[int, dict] = {}
+    for m in marks:
+        cur = by_measure.get(m["measure"])
+        if cur is None or (cur["text"] is None and m["text"]):
+            by_measure[m["measure"]] = m
+    marks = [by_measure[k] for k in sorted(by_measure)]
+    # 이름을 못 읽은 구간(글자가 그림인 PDF)은 순서대로 이름을 붙인다 — 송 맵에서 고치면 된다
+    unnamed = 0
+    for m in marks:
+        if not m["text"]:
+            unnamed += 1
+            m["text"] = f"구간{unnamed}"
+    if unnamed:
+        warnings_unnamed = f"구간 이름 {unnamed}개를 읽지 못해 '구간N' 으로 붙였습니다 (악보 글자가 그림으로 저장된 PDF)"
+    else:
+        warnings_unnamed = None
 
     # 마디 번호와 개수 맞추기: 줄 첫 마디 번호가 있으면 마디선 수가 맞는지 확인한다
     warnings = []
@@ -292,6 +352,8 @@ def analyze(pdf_path: Path, out_dir: Path) -> dict:
         if "number" in m and m["number"] != k + 1:
             warnings.append(f"악보 {m['number']}마디가 {k + 1}번째로 세어졌습니다 (p{m['page'] + 1})")
             break
+    if warnings_unnamed:
+        warnings.append(warnings_unnamed)
     for k, m in enumerate(measures):
         m["number"] = k + 1
         for key in ("x0", "x1", "y0", "y1", "top", "bot", "sys_x0", "sys_x1"):

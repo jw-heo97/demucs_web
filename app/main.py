@@ -194,6 +194,16 @@ def detect_map(job_id: str):
     return {**result, "job": job.to_dict()}
 
 
+@app.post("/api/jobs/{job_id}/map/align")
+def align_map(job_id: str, payload: dict = Body(...)):
+    """{map} — 편집 중인 구성표의 1마디 1박·고정 마디를 실제 타격에 맞춘 결과 (저장 안 함)."""
+    job = _require_job(job_id, done=True)
+    try:
+        return store.align_map(job, payload.get("map") or payload)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
 @app.post("/api/jobs/{job_id}/map/versions")
 def create_map_version(job_id: str, payload: dict = Body(default={})):
     """새 구성표 버전을 만들고 활성화한다. 메트로놈 파일도 버전 이름으로 함께 구워진다."""

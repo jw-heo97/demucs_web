@@ -77,6 +77,9 @@ export interface EngineOptions {
   carryMix?: boolean;
 }
 
+/** 스템 트랙의 처음 볼륨 (0~1) */
+const DEFAULT_STEM_VOL = 0.5;
+
 export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
   /**
    * 작업 목록은 1~8초마다 폴링돼 **매번 새 객체**로 온다.
@@ -159,7 +162,8 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     setLoadedId(j?.id ?? null);
     setMuted(ts.map((t) => prevMix.get(t.key)?.muted ?? false));
     setSolo(ts.map((t) => prevMix.get(t.key)?.solo ?? false));
-    setVol(ts.map((t) => prevMix.get(t.key)?.vol ?? 1));
+    // 스템은 50 에서 시작한다 — 4개를 다 켜면 메트로놈 클릭이 묻힌다. 메트로놈은 100.
+    setVol(ts.map((t) => prevMix.get(t.key)?.vol ?? (t.virtual ? 1 : DEFAULT_STEM_VOL)));
     const real = ts.filter((t) => !t.virtual);
     if (!real.length) {
       setDuration(j?.duration ?? 0);

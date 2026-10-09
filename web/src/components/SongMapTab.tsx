@@ -29,6 +29,10 @@ export function SongMapTab({ jobs, onChanged }: Props) {
   const done = useMemo(() => jobs.filter((j) => j.status === "done"), [jobs]);
   const [jobId, setJobId] = useState("");
   const job = useMemo(() => done.find((j) => j.id === jobId) ?? null, [done, jobId]);
+  // 지금 보고 있는 곡. 응답이 늦게 온 이전 곡의 구성표가 새 곡 화면에 덮이지 않게 한다
+  // — 그 상태로 저장하면 다른 곡의 구성표가 이 곡에 저장된다 (Summer time → 라시사 에서 실제로 있었다).
+  const jobIdRef = useRef(jobId);
+  jobIdRef.current = jobId;
 
   const [map, setMap] = useState<SongMap | null>(null);
   const [payload, setPayload] = useState<MapPayload | null>(null);
@@ -78,6 +82,7 @@ export function SongMapTab({ jobs, onChanged }: Props) {
 
   const load = useCallback(async (id: string) => {
     const d = await api.map(id);
+    if (id !== jobIdRef.current) return;
     setPayload(d);
     setMap(
       d.map?.ranges?.length
@@ -216,6 +221,38 @@ export function SongMapTab({ jobs, onChanged }: Props) {
       setMsg(`저장 완료 — ♩=${r.bpm} · ${r.bars}마디 · 박자 ${r.beats}개`);
       await load(job.id);
       onChanged();
+    } catch (e) {
+      setMsg((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * 1마디 1박(과 고정 마디)을 곡 전체의 실제 타격 위치에 맞춘다. 템포·마디는 그대로.
+   * 저장하지 않고 화면에만 반영한다 — 들어 보고 저장하면 된다.
+   */
+  const align = async () => {
+    if (!job || !map) return;
+    setBusy(true);
+    setMsg("박자 위치 맞추는 중…");
+    try {
+      const r = await api.alignMap(job.id, map);
+      if (job.id !== jobIdRef.current) return;
+      // 응답의 구성표를 통째로 쓰지 않고 기준 시각만 옮겨 온다 (편집 중인 다른 값 보존)
+      const pinned = new Map(r.map.ranges.map((x) => [x.from_bar, x.anchor]));
+      setMap({
+        ...map,
+        anchor: r.map.anchor,
+        ranges: map.ranges.map((x) => (x.anchor != null && pinned.get(x.from_bar) != null ? { ...x, anchor: pinned.get(x.from_bar)! } : x)),
+      });
+      const parts = r.groups.map((g) => {
+        const at = g.from_bar === 1 ? "1마디 1박" : `${g.from_bar}마디(고정)`;
+        if (g.offset == null) return `${at} 그대로(근거 부족)`;
+        const ms = Math.round(g.offset * 1000);
+        return `${at} ${ms > 0 ? "+" : ""}${ms}ms`;
+      });
+      setMsg(`맞춤 — ${parts.join(" · ")} (${r.source} 기준). 들어 보고 저장하세요.`);
     } catch (e) {
       setMsg((e as Error).message);
     } finally {
@@ -415,7 +452,20 @@ export function SongMapTab({ jobs, onChanged }: Props) {
               if (t != null) engine.seek(t);
             }}
           >
-            <button className="ghost" disabled={busy || !scoreData?.marks.length} onClick={buildFromScore}>
+            <button
+              className="ghost"
+              disabled={busy || !scoreData?.marks.length}
+              onClick={buildFromScore}
+              title={
+                !scoreData
+                  ? "먼저 이 곡의 악보 PDF 를 올려 주세요."
+                  : !scoreData.marks.length
+                    ? "악보에서 구간 표시(Intro·A·サビ 같은 상자)를 찾지 못했습니다. 송 맵을 직접 만들어 주세요."
+                    : busy
+                      ? "다른 작업이 끝나길 기다리는 중입니다."
+                      : `악보의 구간 ${scoreData.marks.length}개로 송 맵을 만들어 새 버전에 저장합니다.`
+              }
+            >
               악보로 송 맵 만들기
             </button>
           </ScorePanel>
@@ -497,6 +547,29 @@ export function SongMapTab({ jobs, onChanged }: Props) {
                   <TimeInput value={map.anchor} onChange={(v) => setMap({ ...map, anchor: v })} />
                   <button className="ghost" onClick={() => setMap({ ...map, anchor: +engine.time.toFixed(3) })}>
                     현재
+                  </button>
+                  {[-1, 1].map((d) => (
+                    <button
+                      key={d}
+                      className="ghost"
+                      title={`1마디 1박을 한 박 ${d < 0 ? "앞으로" : "뒤로"} 옮깁니다. 클릭 간격은 같고 마디 첫 박(높은 음)과 마디 번호가 한 박씩 움직입니다.`}
+                      onClick={() => {
+                        const r0 = map.ranges[0];
+                        const step = stepOf(r0?.bpm || map.bpm, r0?.beat_unit || 4);
+                        const at = +(map.anchor + d * step).toFixed(4);
+                        if (at >= 0) setMap({ ...map, anchor: at });
+                      }}
+                    >
+                      {d < 0 ? "−1박" : "+1박"}
+                    </button>
+                  ))}
+                  <button
+                    className="ghost"
+                    disabled={busy}
+                    title="템포는 그대로 두고, 곡 전체의 드럼 타격에 맞춰 1마디 1박(과 고정 마디)을 미세 조정합니다"
+                    onClick={align}
+                  >
+                    자동 맞춤
                   </button>
                 </div>
               </div>

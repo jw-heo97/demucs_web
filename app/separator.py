@@ -394,3 +394,80 @@ def beats_from_map(songmap: dict, duration: float):
             np.asarray(accents, dtype=bool),
             np.asarray(sounds, dtype=bool),
             bars)
+
+
+# 자동 맞춤은 이만큼 안에서만 찾는다(초). 귀로 잡은 격자를 미세 조정하는 기능이라,
+# 더 멀리 찾으면 8분·16분음표(하이햇)에 물려 반 박 어긋난 자리로 옮겨 버린다.
+_ALIGN_MAX = 0.10
+# 히스토그램 봉우리가 평균의 이 배수는 넘어야 믿는다 (드럼이 없는 구간 등)
+_ALIGN_MIN_CONF = 1.8
+
+
+def align_map(songmap: dict, audio: np.ndarray, sample_rate: int, duration: float) -> list[dict]:
+    """구성표의 기준 시각(1마디 1박, 고정 마디)을 실제 타격 위치에 맞출 보정량을 구한다.
+
+    템포는 건드리지 않는다. 기준 시각 하나로 이어지는 마디 묶음(1마디부터, 그리고
+    시각을 고정한 마디부터 다음 고정 전까지)마다 **그 묶음의 모든 박**에서 앞뒤 타격의
+    세기를 박 기준 상대 시각으로 모아, 가장 강한 자리를 고른다. 곡 맨 앞 한 박을 귀로
+    찍는 것보다 훨씬 안정적이다 — 역광 실측: 손으로 찍은 1마디 1박이 곡 전체에서 일정하게
+    23~28ms 늦었다. 같은 방법을 정확한 위치에 찍힌 클릭 트랙에 쓰면 +1ms 가 나온다.
+
+    반환: [{from_bar, offset, confidence, beats}] — offset(초)을 그 묶음의 기준 시각에
+    더하면 된다. 근거가 약하면 offset 은 None.
+    """
+    import librosa
+
+    beats, _, _, bars = beats_from_map(songmap, duration)
+    if not bars:
+        return []
+
+    mono = np.ascontiguousarray(audio.mean(axis=0) if audio.ndim > 1 else audio)
+    hop = 64   # 1.45ms — 보정량이 수십 ms 라 해상도가 높아야 한다
+    env = librosa.onset.onset_strength(y=mono, sr=sample_rate, hop_length=hop,
+                                       n_fft=1024, lag=1, max_size=1)
+    env_t = librosa.frames_to_time(np.arange(env.size), sr=sample_rate, hop_length=hop)
+
+    # 기준 시각 하나로 이어지는 묶음: 1마디, 그리고 고정(anchored)된 마디마다 새로 시작
+    groups: list[dict] = []
+    for b in bars:
+        if not groups or b.get("anchored"):
+            groups.append({"from_bar": b["bar"], "starts": []})
+        groups[-1]["starts"].append(b)
+
+    out = []
+    bin_w = 0.001
+    nb = int(round(2 * _ALIGN_MAX / bin_w)) + 1
+    for g in groups:
+        lo = g["starts"][0]["start"]
+        last = g["starts"][-1]
+        step_last = (60.0 / last["bpm"]) * (4.0 / last["beat_unit"])
+        hi = last["start"] + last["beats_per_bar"] * step_last
+        gb = beats[(beats >= lo - 1e-6) & (beats < hi - 1e-6)]
+        # 박 간격이 짧으면(빠른 곡·N/8) 이웃 박을 넘보지 않게 범위를 줄인다
+        w = _ALIGN_MAX
+        if gb.size > 1:
+            w = min(w, 0.4 * float(np.min(np.diff(gb))))
+        hist = np.zeros(nb)
+        for bt in gb:
+            i0 = np.searchsorted(env_t, bt - w)
+            i1 = np.searchsorted(env_t, bt + w)
+            if i1 <= i0:
+                continue
+            rel = env_t[i0:i1] - bt
+            idx = np.clip(np.round((rel + _ALIGN_MAX) / bin_w).astype(int), 0, nb - 1)
+            np.add.at(hist, idx, env[i0:i1])
+        if gb.size < 8 or hist.sum() <= 0:
+            out.append({"from_bar": g["from_bar"], "offset": None, "confidence": 0.0,
+                        "beats": int(gb.size)})
+            continue
+        smooth = np.convolve(hist, np.ones(5) / 5, mode="same")
+        k = int(np.argmax(smooth))
+        conf = float(smooth[k] / (smooth.mean() or 1.0))
+        offset = round(k * bin_w - _ALIGN_MAX, 4)
+        # 탐색 범위 끝에 붙은 봉우리는 실제 박이 범위 밖에 있다는 뜻이다
+        lim = int(round((_ALIGN_MAX - w) / bin_w))
+        edge = k < lim + 3 or k > nb - lim - 4
+        ok = conf >= _ALIGN_MIN_CONF and not edge
+        out.append({"from_bar": g["from_bar"], "offset": offset if ok else None,
+                    "confidence": round(conf, 2), "beats": int(gb.size)})
+    return out
