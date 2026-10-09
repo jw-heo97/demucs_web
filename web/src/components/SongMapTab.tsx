@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { useAudioEngine } from "../hooks/useAudioEngine";
 import { sectionAt } from "../lib/sectionColors";
@@ -6,7 +6,7 @@ import { barsFromMap, emptyRange, nearestBar, stepOf } from "../lib/songmap";
 import { stemFilesOf } from "../lib/stems";
 import { showTime } from "../lib/time";
 import type { Job, MapPayload, MapVersion, SongMap } from "../types";
-import { Mixer } from "./Mixer";
+import { Mixer, type MixerControl } from "./Mixer";
 import { TimeInput } from "./TimeInput";
 import { Waveform, type LoopRegion, type WaveMode } from "./Waveform";
 
@@ -38,6 +38,7 @@ export function SongMapTab({ jobs, onChanged }: Props) {
   const [mode, setMode] = useState<WaveMode>("seek");
   const [loop, setLoopRegion] = useState<LoopRegion | null>(null);
   const [countIn, setCountIn] = useState(4);
+  const mixer = useRef<MixerControl | null>(null);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [addBar, setAddBar] = useState("");
@@ -55,6 +56,24 @@ export function SongMapTab({ jobs, onChanged }: Props) {
 
   // 편집 중인 구성표에서 즉시 마디를 계산한다 (저장 전에도 파형에 반영)
   const bars = useMemo(() => barsFromMap(map, duration), [map, duration]);
+
+  /**
+   * fromBar~toBar 구간을 연습할 반복 범위: 2마디 전부터 다음 구간 첫 마디 끝까지
+   * (Verse A 13~18 → 11~19마디). 들어가는 흐름과 넘어가는 첫 마디까지 연습하려고.
+   */
+  const loopFor = (fromBar: number, toBar: number) => {
+    if (!bars.length) return null;
+    const first = bars[0].bar;
+    const last = bars[bars.length - 1].bar;
+    const a = Math.max(first, fromBar - 2);
+    const b = Math.min(last, toBar + 1);
+    const start = bars.find((x) => x.bar === a)?.start;
+    const end = bars.find((x) => x.bar === b + 1)?.start ?? duration;
+    if (start == null || end - start < 0.3) return null;
+    return { start, end, fromBar: a, toBar: b };
+  };
+  const sameLoop = (x: LoopRegion | null, y: LoopRegion | null) =>
+    !!x && !!y && Math.abs(x.start - y.start) < 0.002 && Math.abs(x.end - y.end) < 0.002;
 
   const load = useCallback(async (id: string) => {
     const d = await api.map(id);
@@ -329,21 +348,14 @@ export function SongMapTab({ jobs, onChanged }: Props) {
                   : "지금 재생 위치가 속한 구간(같은 이름이 이어지는 마디들)을 반복합니다",
                 onToggle: () => {
                   if (loop) return setLoopRegion(null);
-                  // 구간 2마디 전부터 다음 구간 첫 마디 끝까지 (Verse A 13~18 → 11~19마디).
-                  // 들어가는 흐름과 다음 구간으로 넘어가는 첫 마디까지 연습하기 위해서다.
                   const s = sectionAt(bars, engine.time, duration);
-                  if (!s) return;
-                  const first = bars[0].bar;
-                  const last = bars[bars.length - 1].bar;
-                  const fromBar = Math.max(first, s.fromBar - 2);
-                  const toBar = Math.min(last, s.toBar + 1);
-                  const start = bars.find((b) => b.bar === fromBar)!.start;
-                  const end = bars.find((b) => b.bar === toBar + 1)?.start ?? duration;
-                  if (end - start < 0.3) return;
-                  setLoopRegion({ start, end });
-                  setMsg(`${s.name || `${s.fromBar}마디`} 반복 — ${fromBar}~${toBar}마디`);
+                  const lp = s && loopFor(s.fromBar, s.toBar);
+                  if (!s || !lp) return;
+                  setLoopRegion({ start: lp.start, end: lp.end });
+                  setMsg(`${s.name || `${s.fromBar}마디`} 반복 — ${lp.fromBar}~${lp.toBar}마디`);
                 },
               }}
+              control={mixer}
               countIn={countIn}
               onCountInChange={setCountIn}
             />
@@ -472,7 +484,7 @@ export function SongMapTab({ jobs, onChanged }: Props) {
                     <th style={{ width: 86 }}>BPM</th>
                     <th style={{ width: 150 }}>클릭할 박</th>
                     <th style={{ width: 120 }}>적용 범위</th>
-                    <th style={{ width: 108 }} />
+                    <th style={{ width: 200 }} />
                   </tr>
                 </thead>
                 <tbody>
@@ -575,11 +587,45 @@ export function SongMapTab({ jobs, onChanged }: Props) {
                           <div className="rowbtns">
                             <button
                               className="ghost"
-                              onClick={() => t != null && engine.seek(t)}
-                              title="이 마디로 이동"
+                              onClick={() => {
+                                if (t == null) return;
+                                setLoopRegion(null);
+                                // 듣고 있으면 그 자리로 옮겨 계속, 멈춰 있으면 예비박부터
+                                if (engine.playing) engine.seek(t);
+                                else mixer.current?.playFrom(t, null);
+                              }}
+                              title="이 구간 첫 마디부터 재생 (멈춰 있으면 예비박부터)"
                             >
                               ▶
                             </button>
+                            {(() => {
+                              const toBar = map.ranges[i + 1]
+                                ? map.ranges[i + 1].from_bar - 1
+                                : bars[bars.length - 1]?.bar ?? r.from_bar;
+                              const lp = loopFor(r.from_bar, toBar);
+                              const on = sameLoop(loop, lp);
+                              return (
+                                <button
+                                  className={`ghost${on ? " on" : ""}`}
+                                  disabled={!lp}
+                                  onClick={() => {
+                                    if (!lp) return;
+                                    if (on) return setLoopRegion(null);
+                                    const region = { start: lp.start, end: lp.end };
+                                    setLoopRegion(region);
+                                    setMsg(`${r.name || `${r.from_bar}마디`} 반복 — ${lp.fromBar}~${lp.toBar}마디`);
+                                    mixer.current?.playFrom(region.start, region);
+                                  }}
+                                  title={
+                                    lp
+                                      ? `${lp.fromBar}~${lp.toBar}마디 반복 재생 (구간 2마디 전부터 다음 구간 첫 마디까지, 예비박부터)`
+                                      : ""
+                                  }
+                                >
+                                  반복
+                                </button>
+                              );
+                            })()}
                             <button
                               className="ghost"
                               onClick={() =>

@@ -10,6 +10,14 @@ import { clock } from "../lib/time";
 
 type Engine = ReturnType<typeof useAudioEngine>;
 
+type Region = { start: number; end: number };
+
+/** 바깥(송 맵 구성표)에서 '여기서부터 재생'을 시킬 때 쓴다. 클릭 처리 안에서 바로 불러야 iOS 가 재생을 허락한다. */
+export interface MixerControl {
+  /** pos 에서 예비박부터 재생한다(재생 중이었으면 멈추고 다시). loop 를 주면 그 반복 시작에서. */
+  playFrom: (pos: number, loop?: Region | null) => void;
+}
+
 /**
  * play() 를 부른 뒤 소리가 실제로 나기까지 걸리는 시간(초). 예비박 뒤 음악을 이만큼
  * 미리 시작해야 1마디 1박이 예비박 박자 그대로 들어온다. 기기마다 달라서 재생할
@@ -51,8 +59,9 @@ interface Props {
     on: boolean;
     title: string;
     onToggle: () => void;
-    region: { start: number; end: number } | null;
+    region: Region | null;
   };
+  control?: { current: MixerControl | null };
   countIn: number;
   onCountInChange: (n: number) => void;
   /**
@@ -68,7 +77,7 @@ interface Props {
  * 예비박은 파일에 굽지 않고 Web Audio 로 즉석에서 만든다. 파일에 넣으려면 모든 스템 앞에
  * 같은 길이의 무음을 붙여 전부 재인코딩해야 하고, 곡 중간부터 연습할 때는 쓸 수 없다.
  */
-export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, countIn, onCountInChange, autoStart }: Props) {
+export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, control, countIn, onCountInChange, autoStart }: Props) {
   const { tracks, playing, time, duration, rate, muted, solo, vol } = engine;
   const [counting, setCounting] = useState(0);
   const [hint, setHint] = useState("");
@@ -141,7 +150,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
     if (autoStart === undefined || autoStart === startedFor.current) return;
     if (engine.loadedId !== jobId || !tracks.length) return;
     startedFor.current = autoStart;
-    void handlePlay();
+    void handlePlay({ force: true });
     // handlePlay 는 매 렌더 새로 만들어지지만 여기서는 시작 신호만 보면 된다
   }, [autoStart, engine.loadedId, jobId, tracks]);
 
@@ -177,7 +186,13 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
   const cur = barAtTime(bars, time);
   const next = cur ? bars.find((b) => b.bar === cur.bar + 1) : bars[0];
 
-  async function handlePlay() {
+  if (control) control.current = { playFrom: (pos, loop) => void handlePlay({ force: true, from: pos, loop }) };
+
+  /**
+   * force: 재생 중이어도 멈추지 않고 처음부터 다시 시작하며, 위치와 상관없이 예비박을 넣는다.
+   * from/loop: 시작 위치와 반복 구간 (안 주면 지금 위치·지금 반복 구간).
+   */
+  async function handlePlay(opts: { force?: boolean; from?: number; loop?: Region | null } = {}) {
     // iOS 는 사용자 제스처 안에서만 AudioContext 를 깨울 수 있다. 메트로놈·예비박 모두 여기에 의존한다.
     try {
       void audioCtx().resume();
@@ -187,19 +202,18 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
     if (playing || counting) {
       cancelCount();
       engine.pause();
-      return;
+      if (!opts.force) return;
     }
     voice.prime();
-    let pos = time;
+    let pos = opts.from ?? time;
     // 구간 반복 중이면 반복 시작(구간 2마디 전)으로 가서 예비박부터 들어간다.
     // 반복이 한 바퀴 돌아 처음으로 돌아갈 때는 예비박 없이 바로 이어진다.
-    const lp = loopButton?.region ?? null;
-    if (lp) {
-      pos = lp.start;
-      engine.seek(pos);
-    }
-    // 예비박은 곡 처음(또는 반복 시작)부터 재생할 때만. 중간에서 매번 붙으면 방해가 된다.
-    if (!countIn || (pos > 0.25 && !lp)) {
+    const lp = opts.loop !== undefined ? opts.loop : loopButton?.region ?? null;
+    if (lp) pos = lp.start;
+    if (lp || opts.from !== undefined) engine.seek(pos);
+    // 예비박은 곡 처음·반복 시작·구성표에서 고른 구간에서 시작할 때만.
+    // 중간에서 이어 들을 때마다 붙으면 방해가 된다.
+    if (!countIn || (pos > 0.25 && !lp && !opts.force)) {
       await startPlay();
       return;
     }
@@ -270,7 +284,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
   return (
     <div className="mixer">
       <div className="transport">
-        <button className="playbtn" onClick={handlePlay}>
+        <button className="playbtn" onClick={() => void handlePlay()}>
           {counting ? counting : playing ? "❚❚" : "▶"}
         </button>
         {loopButton && (
