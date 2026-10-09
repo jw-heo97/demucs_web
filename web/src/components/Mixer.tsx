@@ -65,6 +65,8 @@ const LS_DEVICE = "together.deviceMs";
 const LOOP_GAP = 0.5;
 /** 함께 연습 버튼 — 아직 다듬는 중이라 숨겨 둔다 (서버도 TOGETHER=1 일 때만 연다) */
 const TOGETHER_ENABLED = false;
+/** 플레이리스트에서 다음 곡으로 넘어가 자동으로 시작하기 전에 쉬는 시간(초) */
+const AUTO_START_DELAY = 1.5;
 function useDeviceDelay(): [number, (ms: number) => void] {
   const [v, setV] = useState(() => {
     try {
@@ -545,15 +547,41 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
   // 곡이 바뀌면 진행 중이던 예비박을 버린다 (안 그러면 타이머가 새 곡을 엉뚱한 위치에서 튼다)
   useEffect(() => cancelCount(), [jobId]);
 
-  // 다음 곡 자동 시작. 새 곡의 트랙이 실제로 올라온 뒤에만 누른다.
+  // 다음 곡 자동 시작(플레이리스트의 자동 넘김·다음/이전·▶). 새 곡의 트랙이 실제로 올라온 뒤
+  // AUTO_START_DELAY 만큼 쉬었다가 누른다 — 곡을 바꾸자마자 틀면 새 트랙이 아직 준비되는 중이라
+  // 첫 박이 밀리거나 예비박과 어긋났다. 기다리는 동안 ▶ 를 누르면 그때 바로 시작한다.
   const startedFor = useRef(autoStart);
+  const autoTimer = useRef<{ id: number; job: string } | null>(null);
+  const [autoPending, setAutoPending] = useState(false);
+  const handlePlayRef = useRef(handlePlay);
+  handlePlayRef.current = handlePlay;
+  const cancelAuto = () => {
+    if (autoTimer.current) clearTimeout(autoTimer.current.id);
+    autoTimer.current = null;
+    setAutoPending(false);
+  };
   useEffect(() => {
     if (autoStart === undefined || autoStart === startedFor.current) return;
     if (engine.loadedId !== jobId || !tracks.length) return;
     startedFor.current = autoStart;
-    void handlePlay({ force: true });
-    // handlePlay 는 매 렌더 새로 만들어지지만 여기서는 시작 신호만 보면 된다
+    cancelAuto();
+    setAutoPending(true);
+    autoTimer.current = {
+      job: jobId,
+      id: window.setTimeout(() => {
+        const t = autoTimer.current;
+        autoTimer.current = null;
+        setAutoPending(false);
+        if (t?.job === jobId) void handlePlayRef.current({ force: true });
+      }, AUTO_START_DELAY * 1000),
+    };
+    // 트랙 배열이 다시 만들어져도 타이머는 그대로 둔다 (정리는 곡이 바뀔 때·화면을 떠날 때)
   }, [autoStart, engine.loadedId, jobId, tracks]);
+  // 기다리는 중에 다른 곡으로 옮기면(재생 없이 고르기) 그 곡을 틀지 않는다
+  useEffect(() => {
+    if (autoTimer.current && autoTimer.current.job !== jobId) cancelAuto();
+  }, [jobId]);
+  useEffect(() => () => cancelAuto(), []);
 
   // 스페이스바 = 재생/일시정지. 입력칸에 있을 때는 원래 동작(공백 입력)을 살린다.
   useEffect(() => {
@@ -601,6 +629,11 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
    * from/loop: 시작 위치와 반복 구간 (안 주면 지금 위치·지금 반복 구간).
    */
   async function handlePlay(opts: { force?: boolean; from?: number; loop?: Region | null } = {}) {
+    // 자동 시작을 기다리는 중에 ▶ 를 누르면 기다리지 않고 지금 시작한다
+    if (autoTimer.current) {
+      cancelAuto();
+      opts = { ...opts, force: true };
+    }
     // iOS 는 사용자 제스처 안에서만 AudioContext 를 깨울 수 있다. 메트로놈·예비박 모두 여기에 의존한다.
     try {
       void audioCtx().resume();
@@ -760,7 +793,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
     <div className="mixer">
       <div className="transport" ref={transportRef}>
         <button className="playbtn" onClick={() => void handlePlay()}>
-          {counting ? counting : preparing ? "…" : playing ? "❚❚" : "▶"}
+          {counting ? counting : preparing || autoPending ? "…" : playing ? "❚❚" : "▶"}
         </button>
         {loopButton && (
           <button
@@ -1011,7 +1044,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
       {transportHidden && tracks.length > 0 && (
         <div className="minibar">
           <button className="playbtn" onClick={() => void handlePlay()}>
-            {counting ? counting : preparing ? "…" : playing ? "❚❚" : "▶"}
+            {counting ? counting : preparing || autoPending ? "…" : playing ? "❚❚" : "▶"}
           </button>
           {bars.length > 0 ? (
             <BarJump cur={cur?.bar ?? 0} last={lastBar} onGo={gotoBar} name={cur?.name} />
