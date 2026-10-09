@@ -75,3 +75,6 @@ ALLOW_FUNNEL = os.getenv("ALLOW_FUNNEL", "0").strip().lower() in ("1", "true", "
 TAILSCALE_ALLOW_USERS = {
     u.strip().lower() for u in os.getenv("TAILSCALE_ALLOW_USERS", "").split(",") if u.strip()
 }
+
+# 함께 연습(app/together.py) — 아직 다듬는 중이라 기본은 꺼 둔다. 1 이면 WebSocket 을 연다.
+TOGETHER_ENABLED = os.getenv("TOGETHER", "0").strip().lower() in ("1", "true", "yes", "on")

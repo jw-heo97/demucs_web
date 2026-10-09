@@ -3,6 +3,7 @@ import { api } from "../api";
 import type { useAudioEngine } from "../hooks/useAudioEngine";
 import { OFFSET_LIMIT, useClickOffset, useLiveMetronome, useSubdiv } from "../hooks/useLiveMetronome";
 import { useSectionVoice } from "../hooks/useSectionVoice";
+import { roomPosition, useTogether, type RoomState } from "../hooks/useTogether";
 import { audioCtx, scheduleClick } from "../lib/audioCtx";
 import type { Bar } from "../types";
 import { barAtTime, stepOf } from "../lib/songmap";
@@ -40,6 +41,34 @@ function learnLatency(lag: number) {
   } catch {
     /* 기억만 못 할 뿐 */
   }
+}
+
+/**
+ * 함께 연습할 때 내 기기 소리가 늦게 나오는 정도(ms). 블루투스 이어폰은 100~200ms 늦다.
+ * 이만큼 앞서 재생해서 다른 사람과 귀에 들리는 순간을 맞춘다. 기기의 성질이라 브라우저에 기억한다.
+ */
+const LS_DEVICE = "together.deviceMs";
+/** 함께 연습 버튼 — 아직 다듬는 중이라 숨겨 둔다 (서버도 TOGETHER=1 일 때만 연다) */
+const TOGETHER_ENABLED = false;
+function useDeviceDelay(): [number, (ms: number) => void] {
+  const [v, setV] = useState(() => {
+    try {
+      const n = Number(localStorage.getItem(LS_DEVICE));
+      return Number.isFinite(n) ? Math.max(0, Math.min(500, n)) : 0;
+    } catch {
+      return 0;
+    }
+  });
+  const set = (ms: number) => {
+    const n = Math.max(0, Math.min(500, Math.round(ms) || 0));
+    setV(n);
+    try {
+      localStorage.setItem(LS_DEVICE, String(n));
+    } catch {
+      /* 기억만 못 할 뿐 */
+    }
+  };
+  return [v, set];
 }
 
 interface Props {
@@ -91,6 +120,170 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
   const metro = useLiveMetronome(engine, bars, subdiv, clickOffset);
   // 구간 이름을 한 마디 전에 읽어 준다 (음성 합성)
   const voice = useSectionVoice(engine, bars);
+
+  // ---------------- 함께 연습 ----------------
+  // 방의 재생 상태를 받으면 그대로 따라 한다. 내가 누른 재생도 방을 한 바퀴 돌아와서 시작한다
+  // — 그래야 모든 기기가 같은 서버 시각에 들어간다.
+  const [deviceMs, setDeviceMs] = useDeviceDelay();
+  const deviceMsRef = useRef(deviceMs);
+  deviceMsRef.current = deviceMs;
+  const countingRef = useRef(0);
+  countingRef.current = counting;
+  const tg = useTogether(jobId, (s) => applyRoomState(s));
+
+  const [preparing, setPreparing] = useState(false);
+  const prepRef = useRef("");
+
+  function applyRoomState(s: RoomState) {
+    cancelCount();
+    if (Math.abs(s.rate - (rate || 1)) > 1e-3) engine.setRate(s.rate);
+    engine.setLoop(s.loop);
+    prepRef.current = s.prepare?.id ?? "";
+    setPreparing(!!s.prepare);
+    if (s.prepare) {
+      void prepareLocal(s.prepare.id, s.prepare.pos);
+      return;
+    }
+    if (!s.playing) {
+      engine.pause();
+      engine.seek(s.pos);
+      return;
+    }
+    let ctx: AudioContext;
+    try {
+      ctx = audioCtx();
+      void ctx.resume();
+    } catch {
+      engine.seek(roomPosition(s, tg.serverNow() + deviceMsRef.current));
+      void startPlay();
+      return;
+    }
+    engine.pause();
+    // 내 기기 소리가 늦게 나오는 만큼(블루투스 등) 앞서 간다
+    const mine = tg.serverNow() + deviceMsRef.current;
+    const delay = (s.at - mine) / 1000;
+    if (delay > 0.08) {
+      engine.seek(s.pos);
+      scheduleStart(ctx, s.pos, ctx.currentTime + delay, s.count_in, s.rate);
+    } else {
+      // 이미 시작했다(늦게 들어왔거나 메시지가 늦었다) — 지금 위치로 바로 합류
+      const lead = Math.max(0.2, startLatency + 0.08);
+      const p = roomPosition(s, mine + lead * 1000);
+      engine.seek(p);
+      scheduleStart(ctx, p, ctx.currentTime + lead, 0, s.rate);
+    }
+  }
+
+  /**
+   * '맞추고 시작' 준비: 그 위치로 가서 모든 트랙이 재생할 만큼 받아질 때까지 기다리고, 시계를
+   * 다시 잰 뒤 준비됐다고 알린다. 모두 준비되면 서버가 시작 시각을 정해 보낸다.
+   */
+  async function prepareLocal(id: string, pos: number) {
+    engine.pause();
+    engine.seek(pos);
+    const t0 = performance.now();
+    await tg.resync();
+    // 받아 두기: 모든 트랙이 그 자리에서 바로 재생할 수 있을 때까지 (최대 9초)
+    while (performance.now() - t0 < 9000) {
+      if (prepRef.current !== id) return; // 그새 다른 명령이 왔다
+      const as = engine.audios.current;
+      if (as.length && as.every((a) => !a.seeking && a.readyState >= 3)) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    if (prepRef.current === id) tg.send({ t: "ready", id });
+  }
+
+  // 재생 중 미세 보정 + 내 상태 알리기.
+  // 위치를 옮기면 소리가 끊기므로, 작은 어긋남은 재생 속도를 살짝(최대 ±5%, 음정 유지)
+  // 바꿔 1초 남짓에 걸쳐 따라잡고, 크게(0.3초 넘게) 벌어졌을 때만 위치를 옮긴다.
+  // 재생 위치 값은 몇 ms 씩 흔들리므로 최근 5번의 가운데 값으로 판단한다.
+  const { send, serverNow, state: roomRef } = tg;
+  const rttRef = useRef(tg.rtt);
+  rttRef.current = tg.rtt;
+  useEffect(() => {
+    if (!tg.joined) return;
+    let tick = 0;
+    let win: number[] = [];
+    let nudged = false;
+    const setSpeed = (r: number) => engine.audios.current.forEach((a) => (a.playbackRate = r));
+    const restore = (s: RoomState | null) => {
+      if (nudged && s) setSpeed(s.rate);
+      nudged = false;
+    };
+    const id = window.setInterval(() => {
+      const s = roomRef.current;
+      const a = engine.audios.current[0];
+      if (!s) return;
+      let med: number | null = null;
+      if (s.playing && !s.prepare && a && !a.paused && !a.seeking && !countingRef.current) {
+        const expected = roomPosition(s, serverNow() + deviceMsRef.current);
+        win.push(a.currentTime - expected);
+        if (win.length > 5) win.shift();
+        if (win.length >= 3) {
+          med = [...win].sort((x, y) => x - y)[Math.floor(win.length / 2)];
+          if (Math.abs(med) > 0.3) {
+            restore(s);
+            engine.seek(expected);
+            win = [];
+          } else if (Math.abs(med) > 0.01) {
+            // 앞서 있으면(+) 느리게, 뒤처지면(-) 빠르게. 1초에 어긋남만큼 따라잡는 정도.
+            const k = Math.max(-0.05, Math.min(0.05, -med / 1.0));
+            setSpeed(s.rate * (1 + k));
+            nudged = true;
+          } else restore(s);
+        }
+      } else {
+        win = [];
+        restore(s);
+      }
+      if (++tick % 10 === 0)
+        send({ t: "report", err: med == null ? null : Math.round(med * 1000), rtt: rttRef.current, ready: !!a && a.readyState >= 3 });
+    }, 200);
+    return () => {
+      window.clearInterval(id);
+      restore(roomRef.current);
+    };
+    // tg 는 매 렌더 새 객체라 의존성에 두면 타이머가 계속 다시 걸린다 — 쓰는 것은 모두 안정적이다
+  }, [tg.joined, engine.audios, send, serverNow, roomRef]);
+
+  // 송 맵의 구간 반복을 켜고 끄면 방에도 알린다 (다른 사람도 같은 구간을 돈다)
+  const loopKey = loopButton?.region ? `${loopButton.region.start}-${loopButton.region.end}` : "";
+  useEffect(() => {
+    if (!tg.connected) return;
+    const s = tg.state.current;
+    const cur = s?.loop ? `${s.loop.start}-${s.loop.end}` : "";
+    if (cur !== loopKey) tg.send({ t: "loop", loop: loopButton?.region ?? null });
+    // loopKey 가 바뀔 때만 (방 상태가 바뀌어 다시 도는 것은 아니다)
+  }, [loopKey, tg.connected]);
+
+  // 반복 구간 끝: 멈췄다가 예비박부터 다시. 이어 붙이면(바로 처음으로 점프) 박을 놓치기 쉽고
+  // 함께 연습에서는 기기마다 점프 순간이 달라 엉켰다. 함께 연습이면 방(서버)이 끝나는 순간을
+  // 알고 있어 모두를 멈추고 맞추고 시작을 다시 돌리므로, 여기서는 멈추기만 한다.
+  const loopEndFn = useRef<(lp: Region) => void>(() => {});
+  loopEndFn.current = (lp) => {
+    if (tg.joined) return;
+    void handlePlay({ force: true, from: lp.start, loop: lp });
+  };
+  const setLoopEnd = engine.setLoopEnd;
+  useEffect(() => {
+    setLoopEnd((lp) => loopEndFn.current(lp));
+    return () => setLoopEnd(null);
+  }, [setLoopEnd]);
+
+  function joinTogether() {
+    // 참여 버튼이 사용자 제스처라 여기서 소리를 풀어 둔다 — 이후 방 신호로 재생이 시작된다 (iOS)
+    try {
+      void audioCtx().resume();
+    } catch {
+      /* Web Audio 미지원 */
+    }
+    engine.prime();
+    voice.prime();
+    tg.join();
+  }
+
+  const seekTo = (t: number) => (tg.joined ? tg.send({ t: "seek", pos: t }) : engine.seek(t));
+  const setRateShared = (r: number) => (tg.joined ? tg.send({ t: "rate", rate: r }) : engine.setRate(r));
 
   /**
    * 지금 들리는 트랙(음소거·솔로·볼륨 반영)만 서버에서 합쳐 한 파일로 받는다.
@@ -210,6 +403,27 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
     } catch {
       /* Web Audio 미지원 — 음악만 재생된다 */
     }
+    if (tg.joined) {
+      // 함께 연습: 방에 알리기만 하고, 실제 재생은 방에서 돌아온 상태로 모두가 같이 한다
+      engine.prime();
+      voice.prime();
+      if ((playing || counting || preparing) && !opts.force) {
+        tg.send({ t: "pause" });
+        return;
+      }
+      let pos = opts.from ?? time;
+      const lp = opts.loop !== undefined ? opts.loop : loopButton?.region ?? null;
+      if (lp) pos = lp.start;
+      const withCount = !!countIn && (pos <= 0.25 || !!lp || !!opts.force);
+      const r = rate || 1;
+      const b = barAtTime(bars, pos) ?? bars[0];
+      const step = (b ? stepOf(b.bpm, b.beat_unit) : 0.5) / r;
+      const toBeat = (nextBeatAfter(bars, pos) - pos) / r;
+      // 예비박이 다 들어갈 만큼 + 네트워크 여유. 음악은 그 뒤 '지금+lead' 에 모두 함께 들어간다.
+      const lead = 0.8 + (withCount ? Math.max(0, countIn * step - toBeat) : 0) + Math.max(0, -clickOffset / 1000);
+      tg.send({ t: "play", pos, count_in: withCount ? countIn : 0, rate: r, loop: lp, lead });
+      return;
+    }
     if (playing || counting) {
       cancelCount();
       engine.pause();
@@ -231,7 +445,6 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
     const b = barAtTime(bars, pos) ?? bars[0];
     const stepRaw = b ? stepOf(b.bpm, b.beat_unit) : 0.5;
     const step = stepRaw / (rate || 1);
-    const bpb = b?.beats_per_bar ?? 4;
 
     // 실제 재생은 예비박이 끝난 뒤 타이머에서 시작한다. iOS 는 사용자 제스처 밖의 play()
     // 를 거부하므로, 제스처 안(첫 await 전)에서 트랙들을 미리 풀어둔다.
@@ -258,33 +471,52 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
     const margin = 0.15 + Math.max(0, -off);
     const toBeat = (nextBeat - pos) / (rate || 1); // 재생 속도를 반영한 실제 시간
     const tBeat = ctx.currentTime + margin + Math.max(countIn * step, toBeat);
+    scheduleStart(ctx, pos, tBeat - toBeat, countIn, rate || 1);
+  }
+
+  /**
+   * 곡 위치 pos 가 AudioContext 시각 startAt 에 소리 나도록 음악을 시작한다. countIn 이 있으면
+   * 마지막 클릭과 '곡의 다음 박' 사이가 정확히 한 박이 되게 그 앞에 클릭을 찍는다(이미 지난
+   * 클릭은 건너뛴다). 혼자 재생과 함께 연습(서버가 정한 시각)이 같이 쓴다.
+   */
+  function scheduleStart(ctx: AudioContext, pos: number, startAt: number, nCount: number, r: number) {
+    const b = barAtTime(bars, pos) ?? bars[0];
+    const stepRaw = b ? stepOf(b.bpm, b.beat_unit) : 0.5;
+    const step = stepRaw / r;
+    const bpb = b?.beats_per_bar ?? 4;
+    const nextBeat = nextBeatAfter(bars, pos);
+    const off = clickOffset / 1000;
+    const tBeat = startAt + (nextBeat - pos) / r;
 
     // 곧 시작하는 구간(곡 맨 앞 Intro 등)은 읽지 않는다 — 예비박과 겹친다
-    voice.cueAt(pos, Math.max(countIn * stepRaw, nextBeat - pos) + 0.1);
+    voice.cueAt(pos, Math.max(nCount * stepRaw, nextBeat - pos) + 0.1);
 
     timers.current.oscs = [];
-    for (let k = countIn; k >= 1; k--) {
+    for (let k = nCount; k >= 1; k--) {
+      const when = tBeat - k * step + off;
+      if (when < ctx.currentTime) continue;
       timers.current.oscs.push(
-        scheduleClick(ctx, tBeat - k * step + off, (countIn - k) % bpb === 0 ? 1500 : 1000, ctx.destination),
+        scheduleClick(ctx, when, (nCount - k) % bpb === 0 ? 1500 : 1000, ctx.destination),
       );
     }
 
-    const startAt = tBeat - toBeat; // >= ctx.currentTime + margin
     // 메트로놈이 예비박과 같은 시계로 이어 세게 한다 — 마지막 예비박과 1마디 1박 사이가 정확히 한 박
     metro.expect(startAt, pos, learnLatency);
     // 음악은 시작 지연만큼 미리 재생을 건다 (그래야 startAt 에 실제로 소리가 난다)
     const playAt = startAt - startLatency;
-    setCounting(countIn);
-    timers.current.i = window.setInterval(() => {
-      const left = Math.ceil((tBeat - ctx.currentTime) / step);
-      setCounting(Math.max(0, Math.min(left, countIn)));
-    }, 60);
+    if (nCount) {
+      setCounting(nCount);
+      timers.current.i = window.setInterval(() => {
+        const left = Math.ceil((tBeat - ctx.currentTime) / step);
+        setCounting(Math.max(0, Math.min(left, nCount)));
+      }, 60);
+    }
     timers.current.t = window.setTimeout(
       async () => {
         if (timers.current.i) clearInterval(timers.current.i);
         setCounting(0);
         // 타이머가 늦게 깼으면 그만큼 앞에서 시작해 박을 맞춘다
-        const late = Math.max(0, ctx.currentTime - playAt) * (rate || 1);
+        const late = Math.max(0, ctx.currentTime - playAt) * r;
         engine.seek(pos + late);
         await startPlay();
       },
@@ -298,7 +530,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
     <div className="mixer">
       <div className="transport">
         <button className="playbtn" onClick={() => void handlePlay()}>
-          {counting ? counting : playing ? "❚❚" : "▶"}
+          {counting ? counting : preparing ? "…" : playing ? "❚❚" : "▶"}
         </button>
         {loopButton && (
           <button
@@ -315,14 +547,33 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
           min={0}
           max={1000}
           value={Math.round(pct)}
-          onChange={(e) => duration && engine.seek((Number(e.target.value) / 1000) * duration)}
+          onChange={(e) => duration && seekTo((Number(e.target.value) / 1000) * duration)}
         />
         <span className="time">
           {clock(time)} / {clock(duration)}
         </span>
+        {engine.cache.state === "downloading" && (
+          <span className="meta" title="다 받으면 이 기기에 저장해 두고, 이후로는 정지·이동·재생 때 서버에서 다시 받지 않습니다.">
+            기기에 저장 중 {engine.cache.pct}%
+          </span>
+        )}
+        {engine.cache.state === "cached" && (
+          <span className="meta" title="이 곡은 기기에 저장돼 있어 네트워크 없이 재생·이동합니다.">
+            기기에 저장됨
+          </span>
+        )}
         {showRate && bars[0]?.bpm ? (
-          <BpmControl base={bars[0].bpm} rate={rate} onRate={engine.setRate} />
+          <BpmControl base={bars[0].bpm} rate={rate} onRate={setRateShared} />
         ) : null}
+        {TOGETHER_ENABLED && (
+        <button
+          className={`ghost${tg.joined ? " on" : ""}`}
+          onClick={() => (tg.joined ? tg.leave() : joinTogether())}
+          title="같은 곡을 연 다른 기기들과 같은 순간에 재생합니다. 누가 재생·멈춤·이동해도 모두 따라갑니다. 볼륨·음소거는 각자 따로입니다."
+        >
+          {tg.joined ? "함께 연습 중" : "함께 연습"}
+        </button>
+        )}
         <select
           style={{ width: 112 }}
           value={String(countIn)}
@@ -386,6 +637,61 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
         {hint && <span className="err">{hint}</span>}
         {!hint && note && <span className="meta">{note}</span>}
       </div>
+
+      {(tg.joined || tg.error) && (
+        <div className="together">
+          {tg.error && <span className="err">{tg.error}</span>}
+          {tg.joined && (
+            <>
+              <span className="meta">{tg.connected ? `함께 연습 · ${tg.members.length}명` : "연결 중…"}</span>
+              {tg.members.map((m) => (
+                <span
+                  key={m.id}
+                  className={`member${m.id === tg.me ? " me" : ""}`}
+                  title={m.rtt != null ? `왕복 ${m.rtt}ms` : undefined}
+                >
+                  {m.name}
+                  {m.id === tg.me && " (나)"}
+                  {preparing && <span className={m.preparing ? "warn" : "ok"}>{m.preparing ? " 준비 중" : " 준비됨"}</span>}
+                  {!preparing && m.err != null && (
+                    <span className={Math.abs(m.err) < 30 ? "ok" : Math.abs(m.err) < 80 ? "warn" : "err"}>
+                      {" "}
+                      {m.err > 0 ? "+" : ""}
+                      {m.err}ms
+                    </span>
+                  )}
+                </span>
+              ))}
+              <label className="meta" title="같이 들을 때 보이는 이름 (이 기기에 기억)">
+                이름
+                <input
+                  defaultValue={tg.name}
+                  style={{ width: 96 }}
+                  onBlur={(e) => e.target.value.trim() !== tg.name && tg.setName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+                />
+              </label>
+              <label
+                className="meta"
+                title="내 기기 소리가 늦게 나오는 만큼(블루투스 이어폰은 100~200ms) 앞서 재생해 다른 사람과 맞춥니다. 이 기기에 기억."
+              >
+                내 기기 지연
+                <input
+                  type="number"
+                  min={0}
+                  max={500}
+                  step={10}
+                  style={{ width: 64 }}
+                  value={deviceMs}
+                  onChange={(e) => setDeviceMs(Number(e.target.value))}
+                />
+                ms
+              </label>
+              {tg.state.current?.by && <span className="meta">마지막 조작: {tg.state.current.by}</span>}
+            </>
+          )}
+        </div>
+      )}
 
       <div className="sectbar">
         {cur ? (

@@ -7,11 +7,12 @@ Tailscale 이 맡는다 — 내 tailnet 에 속한 기기만 접속할 수 있�
 from __future__ import annotations
 
 import asyncio
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Body, FastAPI, HTTPException, Request
+from fastapi import Body, FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -19,7 +20,8 @@ import access
 import downloader
 import scores
 import separator
-from config import CORS_ORIGINS, MAX_DURATION_SEC, METRONOME_DEFAULT, OUTPUT_DIR, WORK_DIR
+import together
+from config import TOGETHER_ENABLED, CORS_ORIGINS, MAX_DURATION_SEC, METRONOME_DEFAULT, OUTPUT_DIR, WORK_DIR
 from downloader import DownloadError
 from jobs import FORMATS, MAX_TITLE_LEN, STEMS, store
 from playlists import playlists
@@ -38,6 +40,8 @@ async def lifespan(app: FastAPI):
     # 이전 결과를 디스크에서 되살린다 (재시작해도 라이브러리가 유지되도록)
     await asyncio.to_thread(store.restore_from_disk)
     store.start()
+    # 예전 곡들의 재생용 mp3 를 뒤에서 채운다 (wav 만 있으면 기기 저장이 너무 크다)
+    threading.Thread(target=store.backfill_playback_mp3, name="mp3-backfill", daemon=True).start()
     try:
         yield
     finally:
@@ -127,6 +131,19 @@ def admin_device_delete(did: str):
     except KeyError:
         raise HTTPException(404, "그 기기를 찾을 수 없습니다.")
     return {"ok": True}
+
+
+@app.websocket("/api/together/{job_id}")
+async def together_ws(ws: WebSocket, job_id: str):
+    """함께 연습 — 같은 곡을 여러 기기에서 같은 순간에 재생한다 (app/together.py).
+    아직 다듬는 중이라 TOGETHER=1 일 때만 연다."""
+    if not TOGETHER_ENABLED:
+        await ws.close(code=4410)
+        return
+    if store.get(job_id) is None:
+        await ws.close(code=4404)
+        return
+    await together.handle(ws, job_id)
 
 
 @app.get("/api/info")
