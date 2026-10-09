@@ -52,21 +52,21 @@ def normalize_pin(pin: object) -> str:
     return s
 
 
-def locked_out(job_id: str, who_key: str) -> Optional[int]:
+def locked_out(job_id: str, who_key: str, max_fails: int = MAX_FAILS) -> Optional[int]:
     """막혀 있으면 남은 초, 아니면 None."""
     now = time.time()
     hits = [t for t in _fails.get((job_id, who_key), []) if now - t < LOCK_SEC]
     _fails[(job_id, who_key)] = hits
-    if len(hits) >= MAX_FAILS:
+    if len(hits) >= max_fails:
         return int(LOCK_SEC - (now - hits[0])) + 1
     return None
 
 
-def record_fail(job_id: str, who_key: str) -> int:
+def record_fail(job_id: str, who_key: str, max_fails: int = MAX_FAILS) -> int:
     """틀린 시도를 적고 남은 기회를 돌려준다."""
     hits = _fails.setdefault((job_id, who_key), [])
     hits.append(time.time())
-    return max(0, MAX_FAILS - len(hits))
+    return max(0, max_fails - len(hits))
 
 
 def clear_fails(job_id: str, who_key: str) -> None:

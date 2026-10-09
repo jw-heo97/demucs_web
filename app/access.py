@@ -14,10 +14,12 @@ Tailscale 은 이 헤더들을 바깥에서 보낸 값이 있어도 지우고 �
 
 규칙:
   - funnel 접속은 '등록된 기기' 만 받는다. funnel 로는 Tailscale 계정을 알 수 없어서
-    (내 계정 기기도 Tailscale 에 안 붙어 있으면 그냥 인터넷 접속이다) 초대 링크로 등록한다:
-    접속자 관리 탭에서 사람 이름을 넣어 **1회용** 링크(`/?key=...`)를 만들고, 그 링크를 연
-    브라우저에 기기별 토큰을 발급해 1년짜리 HttpOnly 쿠키로 남긴다. 링크는 한 번 쓰면
-    사라지고(친구가 남에게 넘겨도 소용없다), INVITE_DAYS 일 안에 안 쓰면 만료된다.
+    (내 계정 기기도 Tailscale 에 안 붙어 있으면 그냥 인터넷 접속이다) 접속 링크로 등록한다:
+    접속자 관리 탭에서 **링크(`/join/<코드>`) + 비밀번호** 를 만들어 보내면, 받은 사람이 그
+    링크에서 자기 이름과 비밀번호를 넣고 들어온다. 맞으면 그 브라우저를 그 이름으로 등록하고
+    기기별 토큰을 1년짜리 HttpOnly 쿠키로 남긴다. 링크는 여러 사람·여러 기기가 같이 쓴다
+    (예전 1회용 키는 기기마다 새로 만들어야 해서 번거로웠다). 링크가 새도 비밀번호를 모르면
+    못 들어오고, 비밀번호는 IP 별로 5번(링크 전체로 30번) 틀리면 5분 막힌다.
     기기마다 토큰이 달라서 하나씩 끊을 수 있다.
   - TAILSCALE_ALLOW_USERS 가 있으면 그 계정의 tailnet 기기만 허용한다
     (다른 계정에 기기를 공유했을 때 그 사람을 막는다).
@@ -43,17 +45,19 @@ import uuid
 from collections import OrderedDict
 from email.header import decode_header, make_header
 from typing import Optional
-from urllib.parse import urlencode
+from html import escape
 
 from fastapi import Request
-from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 from config import ALLOW_FUNNEL, OUTPUT_DIR, TAILSCALE_ALLOW_USERS
+from lock import check_pin, clear_fails, hash_pin, locked_out, record_fail
 
 DEVICE_COOKIE = "dw_device"
 DEVICE_MAX_AGE = 365 * 24 * 3600
-# 1회용 초대 링크 유효 기간
-INVITE_DAYS = 7
+JOIN_PREFIX = "/join/"
+# 한 링크에 여러 IP 가 번갈아 틀려도 막히게 (IP 하나당은 lock.MAX_FAILS)
+LINK_MAX_FAILS = 30
 # 보관함과 같은 폴더라 함께 백업된다 (_playlists.json 처럼)
 STATE_FILE = "_access.json"
 
@@ -81,6 +85,13 @@ def _public(dv: dict) -> dict:
     return out
 
 
+def normalize_password(pw: object) -> str:
+    s = str(pw or "").strip()
+    if not (4 <= len(s) <= 64):
+        raise ValueError("비밀번호는 4~64자여야 합니다.")
+    return s
+
+
 def _role(v) -> str:
     return "view" if str(v or "").lower() == "view" else "edit"
 
@@ -101,8 +112,10 @@ class _Store:
             except (OSError, ValueError):
                 d = {}
             d.setdefault("devices", [])
-            d.setdefault("invites", [])
-            d.pop("invite_key", None)      # 예전 여러 번 쓰는 초대 키 — 1회용으로 바뀌었다
+            d.setdefault("links", [])
+            # 예전 방식(여러 번 쓰는 키 → 1회용 키)은 '링크 + 비밀번호' 로 바뀌었다
+            d.pop("invite_key", None)
+            d.pop("invites", None)
             self._data = d
         return self._data
 
@@ -111,59 +124,81 @@ class _Store:
         tmp.write_text(json.dumps(self._data, ensure_ascii=False, indent=1), encoding="utf-8")
         os.replace(tmp, self.path)
 
-    # --- 1회용 초대 ---
-    @staticmethod
-    def _prune(d: dict) -> None:
-        now = time.time()
-        d["invites"] = [x for x in d["invites"] if x["expires"] > now]
-
-    def invites(self) -> list[dict]:
+    # --- 접속 링크 (여러 번 쓰는 링크 + 비밀번호) ---
+    def links(self) -> list[dict]:
         with self._lock:
             d = self._load()
-            self._prune(d)
-            return [_public(x) for x in d["invites"]]
+            counts: dict[str, int] = {}
+            for dv in d["devices"]:
+                if dv.get("link"):
+                    counts[dv["link"]] = counts.get(dv["link"], 0) + 1
+            return [{**{k: v for k, v in x.items() if k != "pw"}, "devices": counts.get(x["id"], 0)}
+                    for x in d["links"]]
 
-    def create_invite(self, name: str, role: str = "view") -> tuple[str, dict]:
-        """이름을 붙인 1회용 초대 키. 원문은 돌려주기만 하고 해시만 저장한다. role 은 등록될 기기의 권한."""
-        key = secrets.token_urlsafe(18)
-        now = time.time()
-        inv = {"id": uuid.uuid4().hex[:8], "hash": _hash(key),
-               "name": (str(name or "").strip() or "이름 없음")[:40],
-               "role": _role(role),
-               "created": round(now, 3), "expires": round(now + INVITE_DAYS * 86400, 3)}
+    def link_by_code(self, code: str) -> Optional[dict]:
         with self._lock:
-            d = self._load()
-            self._prune(d)
-            d["invites"].append(inv)
+            return next((x for x in self._load()["links"]
+                         if hmac.compare_digest(x["code"], code or "")), None)
+
+    def check_link_password(self, lid: str, password: str) -> bool:
+        with self._lock:
+            stored = next((x["pw"] for x in self._load()["links"] if x["id"] == lid), None)
+        return check_pin(stored, password)
+
+    def create_link(self, label: str, password: str, role: str = "view") -> dict:
+        """링크 주소는 다시 복사할 수 있게 그대로 저장하고, 비밀번호는 scrypt 해시만 남긴다.
+        주소만으로는 못 들어온다 — 비밀번호가 실제 열쇠다."""
+        pw = normalize_password(password)
+        now = round(time.time(), 3)
+        ln = {"id": uuid.uuid4().hex[:8], "code": secrets.token_urlsafe(9),
+              "label": (str(label or "").strip() or "접속 링크")[:40],
+              "role": _role(role), "pw": hash_pin(pw), "created": now, "uses": 0}
+        with self._lock:
+            self._load()["links"].append(ln)
             self._save()
-        return key, _public(inv)
+        return {k: v for k, v in ln.items() if k != "pw"}
 
-    def cancel_invite(self, iid: str) -> None:
+    def update_link(self, lid: str, label: Optional[str], password: Optional[str],
+                    role: Optional[str]) -> dict:
+        pw = hash_pin(normalize_password(password)) if password is not None else None
+        with self._lock:
+            for ln in self._load()["links"]:
+                if ln["id"] == lid:
+                    if label is not None:
+                        ln["label"] = (str(label).strip() or ln["label"])[:40]
+                    if pw is not None:
+                        ln["pw"] = pw
+                    if role is not None:
+                        ln["role"] = _role(role)
+                    self._save()
+                    return {k: v for k, v in ln.items() if k != "pw"}
+        raise KeyError(lid)
+
+    def delete_link(self, lid: str) -> None:
+        """링크를 지운다. 그 링크로 이미 등록한 기기는 그대로 들어온다 (끊으려면 기기를 해제)."""
         with self._lock:
             d = self._load()
-            before = len(d["invites"])
-            d["invites"] = [x for x in d["invites"] if x["id"] != iid]
-            if len(d["invites"]) == before:
-                raise KeyError(iid)
+            before = len(d["links"])
+            d["links"] = [x for x in d["links"] if x["id"] != lid]
+            if len(d["links"]) == before:
+                raise KeyError(lid)
             self._save()
 
-    def redeem(self, key: str, who: dict) -> Optional[tuple[str, dict]]:
-        """초대 키가 맞으면 그 초대를 지우고(1회용) 기기를 등록한다. 기기 이름 = 초대 이름."""
-        h = _hash(key)
+    def join(self, ln: dict, name: str, who: dict) -> tuple[str, dict]:
+        """비밀번호를 확인한 뒤 부른다. 이 브라우저를 '이름' 으로 등록하고 기기 토큰을 돌려준다.
+        같은 이름이 다른 기기로 또 들어오면 기기가 하나 더 생긴다 (폰·노트북)."""
+        token = secrets.token_urlsafe(32)
+        now = round(time.time(), 3)
+        dv = {"id": uuid.uuid4().hex[:8], "hash": _hash(token), "name": name,
+              "role": _role(ln.get("role")), "link": ln["id"],
+              "ua": who["ua"], "created": now, "last": now,
+              "last_ip": who["ip"], "blocked": False}
         with self._lock:
             d = self._load()
-            self._prune(d)
-            inv = next((x for x in d["invites"] if hmac.compare_digest(x["hash"], h)), None)
-            if inv is None:
-                return None
-            d["invites"].remove(inv)
-            token = secrets.token_urlsafe(32)
-            now = round(time.time(), 3)
-            dv = {"id": uuid.uuid4().hex[:8], "hash": _hash(token), "name": inv["name"],
-                  "role": _role(inv.get("role")),
-                  "ua": who["ua"], "created": now, "last": now,
-                  "last_ip": who["ip"], "blocked": False}
             d["devices"].append(dv)
+            for x in d["links"]:
+                if x["id"] == ln["id"]:
+                    x["uses"] = x.get("uses", 0) + 1
             self._save()
         return token, dv
 
@@ -324,10 +359,9 @@ def _denied(who: dict, device: Optional[dict]) -> Optional[str]:
 
 
 _MESSAGES = {
-    "unregistered": "등록되지 않은 기기입니다. 받은 접속 링크로 한 번 열어 주세요.",
+    "unregistered": "등록되지 않은 기기입니다. 받은 접속 링크를 열고 이름과 비밀번호를 넣어 주세요.",
     "blocked": "이 기기는 접속이 차단되었습니다.",
     "user": "허용된 Tailscale 계정의 기기에서만 열 수 있습니다.",
-    "badkey": "이미 사용했거나 만료된 접속 링크입니다. 링크를 다시 받아 주세요.",
 }
 
 
@@ -358,33 +392,140 @@ def _log(who: dict, device: Optional[dict], text: str) -> None:
     print(f"[access] {tag} {who['ip']} {text}", flush=True)
 
 
+# --------------------------------------------------------------------------
+# 접속 링크 화면 (/join/<코드>) — 등록 전 기기가 보는 유일한 화면이라 React 앱 밖에서 그린다
+# --------------------------------------------------------------------------
+_JOIN_HTML = """<!doctype html><html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>접속 — Demucs Web</title>
+<style>
+:root{--bg:#f6f7f9;--panel:#fff;--border:#e2e5ea;--text:#16181d;--muted:#6b7280;--accent:#3b6df6;--err:#c0392b}
+@media (prefers-color-scheme:dark){:root{--bg:#12141a;--panel:#1a1d25;--border:#2b303b;--text:#e8eaf0;--muted:#98a0ae;--accent:#6d92ff;--err:#ff7a6b}}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px;
+ background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Apple SD Gothic Neo","Malgun Gothic",sans-serif}
+form,.box{width:100%;max-width:380px;background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:24px}
+h1{font-size:1.25rem;margin:0 0 4px}
+p{margin:0 0 18px;color:var(--muted);font-size:.92rem}
+label{display:block;font-size:.85rem;color:var(--muted);margin:12px 0 4px}
+input{width:100%;font:inherit;font-size:1.05rem;padding:12px;border-radius:9px;border:1px solid var(--border);
+ background:var(--bg);color:var(--text)}
+input:focus{outline:2px solid var(--accent);border-color:transparent}
+button,a.btn{display:block;width:100%;margin-top:20px;padding:13px;border:0;border-radius:9px;background:var(--accent);
+ color:#fff;font:inherit;font-weight:600;text-align:center;text-decoration:none;cursor:pointer}
+button:disabled{opacity:.6}
+a.sub{background:none;color:var(--muted);font-weight:400;padding:8px;margin-top:8px}
+.err{color:var(--err);font-size:.9rem;margin-top:12px;min-height:1.3em}
+</style></head><body>__BODY__</body></html>"""
+
+_JOIN_FORM = """<form id="f">
+<h1>__LABEL__</h1>
+<p>처음 한 번만 이름과 비밀번호를 넣으면 이 기기가 등록됩니다.</p>
+<label for="n">이름</label>
+<input id="n" name="name" maxlength="40" autocomplete="name" placeholder="예: 철수" required value="__NAME__">
+<label for="p">비밀번호</label>
+<input id="p" name="password" type="password" maxlength="64" autocomplete="current-password" required>
+<button id="b">들어가기</button>
+<div class="err" id="e" role="alert"></div>
+</form>
+<script>
+const f=document.getElementById("f"),e=document.getElementById("e"),b=document.getElementById("b");
+(f.name.value?f.password:f.name).focus();
+f.addEventListener("submit",async(ev)=>{ev.preventDefault();e.textContent="";b.disabled=true;
+ try{const r=await fetch(location.pathname,{method:"POST",headers:{"Content-Type":"application/json"},
+  credentials:"same-origin",body:JSON.stringify({name:f.name.value,password:f.password.value})});
+  const d=await r.json().catch(()=>({}));
+  if(r.ok){location.replace("/");return}
+  e.textContent=d.detail||("들어가지 못했습니다 ("+r.status+")");f.password.value="";f.password.focus();
+ }catch(x){e.textContent="서버에 연결하지 못했습니다."}
+ b.disabled=false});
+</script>"""
+
+
+def _join_page(body: str, status: int = 200) -> HTMLResponse:
+    return HTMLResponse(_JOIN_HTML.replace("__BODY__", body), status_code=status)
+
+
+def _join_box(title: str, text: str, enter: bool = False, again: bool = False) -> str:
+    return ('<div class="box"><h1>' + escape(title) + "</h1><p>" + escape(text) + "</p>"
+            + ('<a class="btn" href="/">들어가기</a>' if enter else "")
+            + ('<a class="btn sub" href="?again=1">다른 이름으로 다시 등록</a>' if again else "")
+            + "</div>")
+
+
+async def _join(request: Request, who: dict, device: Optional[dict]):
+    code = request.url.path[len(JOIN_PREFIX):].strip("/")
+    ln = store.link_by_code(code)
+    if request.method == "GET":
+        if ln is None:
+            return _join_page(_join_box("없는 링크", "지워졌거나 잘못된 접속 링크입니다. 링크를 다시 받아 주세요."), 404)
+        if is_admin(who):
+            # 관리자 기기에 기기 쿠키가 생기면 송 맵 주인이 '관리자' 대신 그 기기로 기록된다
+            return _join_page(_join_box(ln["label"], "이 기기는 관리자 기기라서 등록하지 않아도 들어갈 수 있습니다.", True))
+        if device is not None and not device.get("blocked") and not request.query_params.get("again"):
+            return _join_page(_join_box(ln["label"], f"이 기기는 이미 '{device['name']}' 으로 등록되어 있습니다.",
+                                        True, True))
+        return _join_page(_JOIN_FORM.replace("__LABEL__", escape(ln["label"]))
+                          .replace("__NAME__", escape(device["name"]) if device else ""))
+
+    if request.method != "POST":
+        return JSONResponse({"detail": "허용되지 않는 요청입니다."}, status_code=405)
+    if ln is None:
+        return JSONResponse({"detail": "지워졌거나 잘못된 접속 링크입니다."}, status_code=404)
+    if is_admin(who):
+        return JSONResponse({"detail": "관리자 기기는 등록하지 않아도 됩니다."}, status_code=400)
+    if device is not None and device.get("blocked"):
+        return JSONResponse({"detail": _MESSAGES["blocked"]}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    body = body if isinstance(body, dict) else {}
+    name = " ".join(str(body.get("name") or "").split())[:40]
+    password = str(body.get("password") or "").strip()
+    if not name:
+        return JSONResponse({"detail": "이름을 넣어 주세요."}, status_code=400)
+
+    lk = "join:" + ln["id"]
+    wait = locked_out(lk, who["ip"]) or locked_out(lk, "*", LINK_MAX_FAILS)
+    if wait:
+        return JSONResponse({"detail": f"비밀번호를 여러 번 틀렸습니다. {(wait + 59) // 60}분 뒤에 다시 해 주세요."},
+                            status_code=429)
+    if not store.check_link_password(ln["id"], password):
+        left = record_fail(lk, who["ip"])
+        record_fail(lk, "*", LINK_MAX_FAILS)
+        _log(who, device, f"접속 링크 비밀번호 틀림 ({name} / {ln['label']})")
+        return JSONResponse({"detail": "비밀번호가 맞지 않습니다." + (f" (남은 기회 {left}번)" if left else "")},
+                            status_code=403)
+    clear_fails(lk, who["ip"])
+
+    if device is not None:
+        # 같은 브라우저가 다른 이름으로 다시 등록 — 예전 등록은 지운다
+        try:
+            store.delete(device["id"])
+        except KeyError:
+            pass
+    token, dv = store.join(ln, name, who)
+    resp = JSONResponse({"ok": True, "name": dv["name"]})
+    resp.set_cookie(DEVICE_COOKIE, token, max_age=DEVICE_MAX_AGE, httponly=True,
+                    secure=who["via"] != "direct", samesite="lax")
+    _log(who, dv, f"기기 등록 — {name} (링크 {ln['label']})")
+    return resp
+
+
 async def middleware(request: Request, call_next):
     who = classify(request)
     method, path = request.method, request.url.path
     device = store.device_for(request.cookies.get(DEVICE_COOKIE, ""))
 
-    # 기기 등록: 1회용 초대 키가 맞으면 기기 토큰을 쿠키로 남기고 키를 뺀 주소로 보낸다
-    # (주소창·방문 기록에 키가 남지 않게). 이미 등록된 브라우저가 열면 초대를 쓰지 않는다
-    # — 내가 링크를 시험 삼아 열어도 친구 몫이 사라지지 않게.
-    key = request.query_params.get("key")
-    if key is not None:
-        rest = [(k, v) for k, v in request.query_params.multi_items() if k != "key"]
-        clean = path + ("?" + urlencode(rest) if rest else "")
-        if device is not None:
-            return RedirectResponse(clean, status_code=303)
-        got = store.redeem(key, who)
-        if got:
-            token, device = got
-            resp = RedirectResponse(clean, status_code=303)
-            resp.set_cookie(DEVICE_COOKIE, token, max_age=DEVICE_MAX_AGE, httponly=True,
-                            secure=who["via"] != "direct", samesite="lax")
-            _log(who, device, "기기 등록 (초대 사용)")
-            _remember(who, device, method, path, 303, False)
-            return resp
-        _log(who, device, "기기 등록 실패(없거나 이미 쓴 초대)")
-        if who["via"] == "funnel":
-            _remember(who, device, method, path, 403, True)
-            return PlainTextResponse(_MESSAGES["badkey"], status_code=403)
+    # 접속 링크: 이름 + 비밀번호로 이 브라우저를 등록한다 (등록 전이라 _denied 보다 먼저)
+    if path.startswith(JOIN_PREFIX):
+        resp = await _join(request, who, device)
+        _remember(who, device, method, path, resp.status_code, resp.status_code >= 400)
+        if method != "GET" or resp.status_code >= 400:
+            _log(who, device, f"{method} {JOIN_PREFIX}… {resp.status_code}")
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
 
     reason = _denied(who, device)
     if reason:
