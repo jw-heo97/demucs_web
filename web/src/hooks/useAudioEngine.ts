@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Job } from "../types";
 import { BASE } from "../api";
+import { cachedUrl, download } from "../lib/audioCache";
 import { stemFilesOf } from "../lib/stems";
 
 export interface Track {
@@ -106,6 +107,11 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
   const [muted, setMuted] = useState<boolean[]>([]);
   const [solo, setSolo] = useState<boolean[]>([]);
   const [vol, setVol] = useState<number[]>([]);
+  /** 기기 저장 상태: 확인 중 / 받는 중(pct) / 저장됨 / 스트리밍만(받기 실패) */
+  const [cache, setCache] = useState<{ state: "checking" | "downloading" | "cached" | "stream"; pct: number }>({
+    state: "checking",
+    pct: 0,
+  });
   const onEndedRef = useRef(opts.onEnded);
   onEndedRef.current = opts.onEnded;
   const carryRef = useRef(!!opts.carryMix);
@@ -171,17 +177,81 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
       return;
     }
     // 가상 트랙은 맨 끝이라 audiosRef 의 인덱스는 tracks 의 인덱스와 같다
-    audiosRef.current = real.map((t) => {
+    audiosRef.current = real.map(() => {
       const a = new Audio();
       a.preload = "auto"; // 예비박이 끝나는 순간 바로 소리가 나야 한다
       // 같은 오리진일 때 crossOrigin 을 켜면 불필요하게 CORS 모드로 요청된다.
       // 다른 오리진(앱에서 VITE_API_BASE 를 쓸 때)일 때만 켠다.
       if (BASE) a.crossOrigin = "anonymous";
-      a.src = t.url;
-      // 메타데이터가 오기 전에 정해도 브라우저가 기본 시작 위치로 기억해 둔다
-      if (resumeAt > 0) a.currentTime = resumeAt;
       return a;
     });
+    const created = audiosRef.current;
+
+    // 기기에 받아 둔 파일이 있으면 그걸로(정지·이동·재생 때 네트워크를 안 탄다), 없으면 일단
+    // 서버에서 스트리밍하면서 뒤에서 통째로 받아 두고, 다 받으면 멈춰 있을 때 바꿔 끼운다.
+    let alive = true;
+    const abort = new AbortController();
+    const swapTo: (string | null)[] = real.map(() => null);
+    const trySwap = () => {
+      if (!alive || swapTo.some((u) => !u)) return;
+      if (created.some((a) => !a.paused)) return; // 재생 중이면 다음에 멈출 때
+      const at = created[0].currentTime;
+      created.forEach((a, i) => {
+        a.src = swapTo[i]!;
+        a.currentTime = at;
+      });
+      created[0].removeEventListener("pause", trySwap);
+      setCache({ state: "cached", pct: 100 });
+    };
+    setCache({ state: "checking", pct: 0 });
+    void (async () => {
+      const hits = await Promise.all(real.map((t) => cachedUrl(t.url)));
+      if (!alive) return;
+      created.forEach((a, i) => {
+        a.src = hits[i] ?? real[i].url;
+        // 메타데이터가 오기 전에 정해도 브라우저가 기본 시작 위치로 기억해 둔다
+        if (resumeAt > 0) a.currentTime = resumeAt;
+      });
+      if (hits.every(Boolean)) {
+        setCache({ state: "cached", pct: 100 });
+        return;
+      }
+      const got = real.map(() => 0);
+      const total = real.map(() => 0);
+      let lastPct = -1;
+      const progress = () => {
+        const t = total.reduce((x, y) => x + y, 0);
+        const pct = t ? Math.min(99, Math.floor((got.reduce((x, y) => x + y, 0) / t) * 100)) : 0;
+        if (pct !== lastPct && alive) {
+          lastPct = pct;
+          setCache({ state: "downloading", pct });
+        }
+      };
+      hits.forEach((h, i) => {
+        if (h) swapTo[i] = h;
+      });
+      await Promise.all(
+        real.map(async (t, i) => {
+          if (hits[i]) return;
+          swapTo[i] = await download(
+            t.url,
+            (g, tot) => {
+              got[i] = g;
+              total[i] = tot;
+              progress();
+            },
+            abort.signal,
+          );
+        }),
+      );
+      if (!alive) return;
+      created[0].addEventListener("pause", trySwap);
+      trySwap();
+    })().catch(() => {
+      // 받기에 실패해도 스트리밍으로는 계속 들을 수 있다
+      if (alive) setCache({ state: "stream", pct: 0 });
+    });
+
     const m = audiosRef.current[0];
     const onMeta = () => setDuration(m.duration || j?.duration || 0);
     // 곡이 끝나면 멈춘 상태로 돌린다. 안 그러면 ❚❚ 가 그대로 남아 첫 누름이 헛되이 "일시정지"가 된다.
@@ -193,8 +263,10 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     m.addEventListener("loadedmetadata", onMeta);
     m.addEventListener("ended", onEnded);
     setDuration(j?.duration ?? 0);
-    const created = audiosRef.current;
     return () => {
+      alive = false;
+      abort.abort();
+      m.removeEventListener("pause", trySwap);
       m.removeEventListener("loadedmetadata", onMeta);
       m.removeEventListener("ended", onEnded);
       // src 를 비우면 currentTime 이 0 으로 돌아가므로 그 전에 기억해 둔다
@@ -360,6 +432,7 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     muted,
     solo,
     vol,
+    cache,
     setRate,
     play,
     prime,

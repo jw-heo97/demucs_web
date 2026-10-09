@@ -552,6 +552,16 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
         <span className="time">
           {clock(time)} / {clock(duration)}
         </span>
+        {engine.cache.state === "downloading" && (
+          <span className="meta" title="다 받으면 이 기기에 저장해 두고, 이후로는 정지·이동·재생 때 서버에서 다시 받지 않습니다.">
+            기기에 저장 중 {engine.cache.pct}%
+          </span>
+        )}
+        {engine.cache.state === "cached" && (
+          <span className="meta" title="이 곡은 기기에 저장돼 있어 네트워크 없이 재생·이동합니다.">
+            기기에 저장됨
+          </span>
+        )}
         {showRate && bars[0]?.bpm ? (
           <BpmControl base={bars[0].bpm} rate={rate} onRate={setRateShared} />
         ) : null}
