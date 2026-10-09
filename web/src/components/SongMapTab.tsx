@@ -223,6 +223,37 @@ export function SongMapTab({ jobs, onChanged }: Props) {
     }
   };
 
+  /**
+   * 1마디 1박(과 고정 마디)을 곡 전체의 실제 타격 위치에 맞춘다. 템포·마디는 그대로.
+   * 저장하지 않고 화면에만 반영한다 — 들어 보고 저장하면 된다.
+   */
+  const align = async () => {
+    if (!job || !map) return;
+    setBusy(true);
+    setMsg("박자 위치 맞추는 중…");
+    try {
+      const r = await api.alignMap(job.id, map);
+      // 응답의 구성표를 통째로 쓰지 않고 기준 시각만 옮겨 온다 (편집 중인 다른 값 보존)
+      const pinned = new Map(r.map.ranges.map((x) => [x.from_bar, x.anchor]));
+      setMap({
+        ...map,
+        anchor: r.map.anchor,
+        ranges: map.ranges.map((x) => (x.anchor != null && pinned.get(x.from_bar) != null ? { ...x, anchor: pinned.get(x.from_bar)! } : x)),
+      });
+      const parts = r.groups.map((g) => {
+        const at = g.from_bar === 1 ? "1마디 1박" : `${g.from_bar}마디(고정)`;
+        if (g.offset == null) return `${at} 그대로(근거 부족)`;
+        const ms = Math.round(g.offset * 1000);
+        return `${at} ${ms > 0 ? "+" : ""}${ms}ms`;
+      });
+      setMsg(`맞춤 — ${parts.join(" · ")} (${r.source} 기준). 들어 보고 저장하세요.`);
+    } catch (e) {
+      setMsg((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const detect = async () => {
     if (!job) return;
     setBusy(true);
@@ -497,6 +528,14 @@ export function SongMapTab({ jobs, onChanged }: Props) {
                   <TimeInput value={map.anchor} onChange={(v) => setMap({ ...map, anchor: v })} />
                   <button className="ghost" onClick={() => setMap({ ...map, anchor: +engine.time.toFixed(3) })}>
                     현재
+                  </button>
+                  <button
+                    className="ghost"
+                    disabled={busy}
+                    title="템포는 그대로 두고, 곡 전체의 드럼 타격에 맞춰 1마디 1박(과 고정 마디)을 미세 조정합니다"
+                    onClick={align}
+                  >
+                    자동 맞춤
                   </button>
                 </div>
               </div>

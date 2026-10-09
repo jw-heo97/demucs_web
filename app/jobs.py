@@ -1105,6 +1105,37 @@ class JobStore:
         job.metronome = True
         job.files = self._scan_files(job, out_dir)
 
+    def align_map(self, job: Job, songmap: Any) -> dict:
+        """편집 중인 구성표의 기준 시각들을 실제 타격 위치에 맞춰 돌려준다 (저장은 안 함).
+
+        템포·마디 구성은 그대로 두고 1마디 1박과 고정 마디 시각만 옮긴다.
+        사용자가 들어 보고 저장하도록 화면에만 반영한다.
+        """
+        out_dir = job.out_dir
+        if not out_dir or not out_dir.exists():
+            raise ValueError("결과 폴더가 없습니다.")
+        m = self.normalize_map(songmap, job.duration)
+        # 드럼이 타격 위치가 가장 또렷하다. 없으면 원곡으로 물러선다.
+        src = self._find_stem(out_dir, "drums") or self._find_stem(out_dir, "original")
+        if src is None:
+            raise ValueError("드럼 스템이나 원곡 파일이 없어 맞출 수 없습니다.")
+        sr = separator.get_loaded_model().samplerate
+        audio = audio_io.decode(src, sample_rate=sr)
+        duration = job.duration or audio.shape[-1] / sr
+        groups = separator.align_map(m, audio, sr, duration)
+
+        for g in groups:
+            off = g["offset"]
+            if off is None:
+                continue
+            if g["from_bar"] == 1:
+                m["anchor"] = round(max(0.0, m["anchor"] + off), 4)
+                continue
+            for r in m["ranges"]:
+                if int(r.get("from_bar", 0)) == g["from_bar"] and r.get("anchor") is not None:
+                    r["anchor"] = round(max(0.0, float(r["anchor"]) + off), 4)
+        return {"map": m, "groups": groups, "source": src.stem.rsplit("_", 1)[-1]}
+
     def redetect_map(self, job: Job) -> dict:
         """드럼 스템을 다시 분석해 기본 구성표를 만든다 (사용자 편집 전 출발점)."""
         out_dir = job.out_dir
