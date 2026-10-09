@@ -48,6 +48,8 @@ function learnLatency(lag: number) {
  * 이만큼 앞서 재생해서 다른 사람과 귀에 들리는 순간을 맞춘다. 기기의 성질이라 브라우저에 기억한다.
  */
 const LS_DEVICE = "together.deviceMs";
+/** 반복 구간 끝에서 반복 시작으로 돌아와 예비박을 시작하기 전 쉬는 시간(초) */
+const LOOP_GAP = 0.5;
 /** 함께 연습 버튼 — 아직 다듬는 중이라 숨겨 둔다 (서버도 TOGETHER=1 일 때만 연다) */
 const TOGETHER_ENABLED = false;
 function useDeviceDelay(): [number, (ms: number) => void] {
@@ -260,10 +262,18 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
   // 함께 연습에서는 기기마다 점프 순간이 달라 엉켰다. 함께 연습이면 방(서버)이 끝나는 순간을
   // 알고 있어 모두를 멈추고 맞추고 시작을 다시 돌리므로, 여기서는 멈추기만 한다.
   const loopEndFn = useRef<(lp: Region) => void>(() => {});
+  // 반복 시작으로 돌아오면 LOOP_GAP 만큼 쉬었다가 예비박을 시작한다 — 바로 붙으면 박을 세고
+  // 들어갈 준비를 할 틈이 없다. 쉬는 동안 ▶/❚❚ 를 누르면 반복을 멈춘다.
+  const loopGap = useRef(0);
   loopEndFn.current = (lp) => {
     if (tg.joined) return;
-    void handlePlay({ force: true, from: lp.start, loop: lp });
+    engine.seek(lp.start);
+    loopGap.current = window.setTimeout(() => {
+      loopGap.current = 0;
+      void handlePlay({ force: true, from: lp.start, loop: lp });
+    }, LOOP_GAP * 1000);
   };
+  useEffect(() => () => clearTimeout(loopGap.current), []);
   const setLoopEnd = engine.setLoopEnd;
   useEffect(() => {
     setLoopEnd((lp) => loopEndFn.current(lp));
@@ -402,6 +412,12 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
       void audioCtx().resume();
     } catch {
       /* Web Audio 미지원 — 음악만 재생된다 */
+    }
+    if (loopGap.current) {
+      // 반복 사이 쉬는 중에 누르면 반복을 멈춘다
+      clearTimeout(loopGap.current);
+      loopGap.current = 0;
+      if (!opts.force) return;
     }
     if (tg.joined) {
       // 함께 연습: 방에 알리기만 하고, 실제 재생은 방에서 돌아온 상태로 모두가 같이 한다
@@ -572,9 +588,21 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
           </span>
         )}
         {engine.cache.state === "cached" && (
-          <span className="meta" title="이 곡은 기기에 저장돼 있어 네트워크 없이 재생·이동합니다.">
-            기기에 저장됨
-          </span>
+          <>
+            <span className="meta" title="이 곡은 기기에 저장돼 있어 네트워크 없이 재생·이동합니다.">
+              기기에 저장됨
+            </span>
+            <button
+              className="ghost"
+              onClick={() => {
+                if (confirm("이 곡을 기기에서 지울까요? 이후로는 서버에서 스트리밍합니다 (다시 저장할 수 있습니다)."))
+                  void engine.removeFromDevice();
+              }}
+              title="이 곡의 스템을 이 기기에서 지웁니다."
+            >
+              저장 삭제
+            </button>
+          </>
         )}
         {showRate && bars[0]?.bpm ? (
           <BpmControl base={bars[0].bpm} rate={rate} onRate={setRateShared} />
