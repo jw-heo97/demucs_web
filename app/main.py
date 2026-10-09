@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 
 import access
 import downloader
+import lock as song_lock
 import scores
 import separator
 import together
@@ -79,6 +80,7 @@ def api_me(request: Request):
     dv = getattr(request.state, "device", None)
     return {"via": who["via"], "login": who["login"], "admin": access.is_admin(who),
             "can_edit": access.can_edit(who, dv),
+            "key": access.owner_key(who, dv), "name": access.owner_name(who, dv),
             "device": dv["name"] if dv else None}
 
 
@@ -219,13 +221,74 @@ def get_job(job_id: str):
     return job.to_dict()
 
 
-def _require_job(job_id: str, done: bool = False):
+def _require_job(job_id: str, done: bool = False, unlocked: bool = False):
+    """unlocked: 활성 송 맵 버전이 잠겨 있으면 423 (덮어쓰는 요청에)."""
     job = store.get(job_id)
     if not job:
         raise HTTPException(404, "작업을 찾을 수 없습니다.")
     if done and job.status != "done":
         raise HTTPException(409, "완료된 작업에만 가능합니다.")
+    if unlocked and store._active_locked(job):
+        raise HTTPException(423, "잠긴 송 맵 버전입니다. '새 버전' 으로 복사해서 편집하거나 잠금을 푸세요.")
     return job
+
+
+def _who(request: Request):
+    who = getattr(request.state, "who", None) or access.classify(request)
+    dv = getattr(request.state, "device", None)
+    return who, dv
+
+
+def _version_or_404(job, vid: str) -> dict:
+    v = next((x for x in job.map_versions if x["id"] == vid), None)
+    if not v:
+        raise HTTPException(404, "그 버전을 찾을 수 없습니다.")
+    return v
+
+
+def _check_pin(job_id: str, v: dict, pin: str, who_key: str) -> None:
+    left = song_lock.locked_out(job_id + ":" + v["id"], who_key)
+    if left:
+        raise HTTPException(429, f"PIN 을 여러 번 틀렸습니다. {left}초 뒤에 다시 해 보세요.")
+    if not song_lock.check_pin(v.get("pin_hash"), pin):
+        n = song_lock.record_fail(job_id + ":" + v["id"], who_key)
+        raise HTTPException(403, f"PIN 이 틀립니다. (남은 기회 {n}번)" if n else
+                            f"PIN 을 {song_lock.MAX_FAILS}번 틀려 {song_lock.LOCK_SEC // 60}분 동안 막힙니다.")
+    song_lock.clear_fails(job_id + ":" + v["id"], who_key)
+
+
+# --- 송 맵 버전 잠금 · PIN (app/lock.py) ---
+@app.post("/api/jobs/{job_id}/map/versions/{vid}/lock")
+def lock_version(job_id: str, vid: str, request: Request, payload: dict = Body(...)):
+    """{locked: true, pin?} 잠그기 — 만든 사람·관리자. pin 을 주면 풀 때 그 PIN 이 필요하다(주인도).
+    {locked: false, pin?} 풀기 — PIN 이 있으면 PIN 으로 누구든(수정 가능 기기), 없으면 만든 사람·관리자만.
+    풀면 PIN 도 지워진다 (다시 잠글 때 새로 정한다)."""
+    job = _require_job(job_id, done=True)
+    v = _version_or_404(job, vid)
+    who, dv = _who(request)
+    owner = access.is_owner(v.get("owner"), who, dv)
+    if payload.get("locked"):
+        if not owner:
+            raise HTTPException(403, "이 버전을 만든 사람만 잠글 수 있습니다.")
+        pin = str(payload.get("pin") or "").strip()
+        if pin:
+            try:
+                v["pin_hash"] = song_lock.hash_pin(song_lock.normalize_pin(pin))
+            except ValueError as e:
+                raise HTTPException(400, str(e)) from e
+        else:
+            v["pin_hash"] = None
+        v["locked"] = True
+    else:
+        if v.get("pin_hash"):
+            _check_pin(job_id, v, str(payload.get("pin") or ""), access.owner_key(who, dv))
+        elif not owner:
+            raise HTTPException(403, "이 버전을 만든 사람만 풀 수 있습니다 (PIN 이 없습니다).")
+        v["locked"] = False
+        v["pin_hash"] = None
+    store._save_meta(job)
+    print(f"[lock] {job.folder} / {v['name']}: {'잠금' if v['locked'] else '해제'} by {access.owner_name(who, dv)}", flush=True)
+    return {"version": store.version_view(v), "job": job.to_dict()}
 
 
 @app.get("/api/jobs/{job_id}/map")
@@ -243,8 +306,7 @@ def get_map(job_id: str):
         "accents": job.accents,
         "sounds": job.sounds,
         "bars": job.bars,
-        "versions": [{"id": v["id"], "name": v["name"], "updated": v.get("updated")}
-                     for v in job.map_versions],
+        "versions": [store.version_view(v) for v in job.map_versions],
         "active": job.map_active,
         "history": store.map_history(job),
         "markers": store.marker_times(job),
@@ -262,7 +324,7 @@ def put_map(job_id: str, payload: dict = Body(...)):
     구성표가 박자·마디·메트로놈·예비박의 단일 원천이다. 검출이 틀려도
     사용자가 첫 박 위치와 BPM 을 직접 잡으면 전부 해결된다.
     """
-    job = _require_job(job_id, done=True)
+    job = _require_job(job_id, done=True, unlocked=True)
     try:
         result = store.apply_map(job, payload.get("map") or payload)
     except ValueError as e:
@@ -273,7 +335,7 @@ def put_map(job_id: str, payload: dict = Body(...)):
 @app.post("/api/jobs/{job_id}/map/detect")
 def detect_map(job_id: str):
     """드럼 스템을 다시 분석해 기본 구성표를 만든다 (편집 출발점)."""
-    job = _require_job(job_id, done=True)
+    job = _require_job(job_id, done=True, unlocked=True)
     try:
         result = store.redetect_map(job)
     except ValueError as e:
@@ -292,12 +354,14 @@ def align_map(job_id: str, payload: dict = Body(...)):
 
 
 @app.post("/api/jobs/{job_id}/map/versions")
-def create_map_version(job_id: str, payload: dict = Body(default={})):
-    """새 구성표 버전을 만들고 활성화한다. 메트로놈 파일도 버전 이름으로 함께 구워진다."""
+def create_map_version(job_id: str, request: Request, payload: dict = Body(default={})):
+    """새 구성표 버전을 만들고 활성화한다. 메트로놈 파일도 버전 이름으로 함께 구워진다.
+    잠긴 버전이 활성이어도 된다 — 잠긴 것을 복사해 내 버전으로 편집하는 길이다."""
     job = _require_job(job_id, done=True)
+    who, dv = _who(request)
     try:
         v = store.create_version(job, payload.get("name") or "새 버전",
-                                 payload.get("map"))
+                                 payload.get("map"), access.owner_key(who, dv), access.owner_name(who, dv))
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     return {"version": {"id": v["id"], "name": v["name"]}, "job": job.to_dict()}
@@ -316,6 +380,8 @@ def activate_map_version(job_id: str, vid: str):
 @app.patch("/api/jobs/{job_id}/map/versions/{vid}")
 def rename_map_version(job_id: str, vid: str, payload: dict = Body(...)):
     job = _require_job(job_id, done=True)
+    if _version_or_404(job, vid).get("locked"):
+        raise HTTPException(423, "잠긴 송 맵 버전입니다. 잠금을 풀어야 바꿀 수 있습니다.")
     try:
         v = store.rename_version(job, vid, payload.get("name"))
     except ValueError as e:
@@ -326,6 +392,8 @@ def rename_map_version(job_id: str, vid: str, payload: dict = Body(...)):
 @app.delete("/api/jobs/{job_id}/map/versions/{vid}")
 def delete_map_version(job_id: str, vid: str):
     job = _require_job(job_id, done=True)
+    if _version_or_404(job, vid).get("locked"):
+        raise HTTPException(423, "잠긴 송 맵 버전입니다. 잠금을 풀어야 바꿀 수 있습니다.")
     try:
         store.delete_version(job, vid)
     except ValueError as e:
@@ -336,7 +404,7 @@ def delete_map_version(job_id: str, vid: str):
 @app.post("/api/jobs/{job_id}/map/restore")
 def restore_map(job_id: str, payload: dict = Body(...)):
     """이력에 보관된 이전 구성표로 되돌린다."""
-    job = _require_job(job_id, done=True)
+    job = _require_job(job_id, done=True, unlocked=True)
     try:
         result = store.restore_map(job, int(payload.get("index", -1)))
     except (ValueError, TypeError) as e:
@@ -400,6 +468,9 @@ def mixdown(job_id: str, payload: dict = Body(...)):
 
 @app.delete("/api/jobs/{job_id}")
 def delete_job(job_id: str):
+    j = store.get(job_id)
+    if j and any(v.get("locked") for v in j.map_versions):
+        raise HTTPException(423, "잠긴 송 맵 버전이 있는 곡은 지울 수 없습니다. 먼저 잠금을 푸세요.")
     try:
         found = store.delete(job_id)
     except RuntimeError as e:      # 진행 중인 작업

@@ -40,6 +40,13 @@ export interface MapVersion {
   id: string;
   name: string;
   updated?: number;
+  /** 만든 사람 (Me.key 와 비교). 없으면 관리자 것(예전 버전) */
+  owner?: string | null;
+  owner_name?: string | null;
+  /** 잠김: 덮어쓰기·이름 변경·삭제·재검출·이력 복원이 막힌다 */
+  locked?: boolean;
+  /** 풀 때 PIN 이 필요한가 */
+  has_pin?: boolean;
 }
 
 export interface MapPayload {
@@ -96,6 +103,8 @@ export interface Job {
   beat_count: number;
   files: JobFile[];
   tracks?: JobTrack[];
+  /** 잠긴 송 맵 버전 수 (하나라도 있으면 곡을 지울 수 없다) */
+  locked_versions?: number;
   created_at: number;
   elapsed: number;
 }

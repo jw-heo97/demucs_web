@@ -3,7 +3,7 @@ import { api } from "../api";
 import { useAudioEngine } from "../hooks/useAudioEngine";
 import { sectionAt } from "../lib/sectionColors";
 import { barAtTime, barsFromMap, emptyRange, nearestBar, stepOf } from "../lib/songmap";
-import { useMe } from "../lib/me";
+import { ownsVersion, useMe } from "../lib/me";
 import { stemFilesOf } from "../lib/stems";
 import { showTime } from "../lib/time";
 import type { Job, MapPayload, MapRange, MapVersion, ScoreData, SongMap } from "../types";
@@ -29,7 +29,8 @@ interface Props {
 }
 
 export function SongMapTab({ jobs, onChanged, pick }: Props) {
-  const { canEdit } = useMe();
+  const me = useMe();
+  const { canEdit } = me;
   const done = useMemo(() => jobs.filter((j) => j.status === "done"), [jobs]);
   const [jobId, setJobId] = useState(pick?.id ?? "");
   // 보관함에서 곡을 누르면 그 곡으로 (같은 곡을 다시 눌러도 n 이 올라가 다시 반영된다)
@@ -132,6 +133,31 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
 
   const versions: MapVersion[] = payload?.versions ?? [];
   const active = payload?.active ?? null;
+  const activeVer = versions.find((v) => v.id === active) ?? null;
+  // 잠긴 버전이 활성이면 덮어쓰지 못한다 — 저장은 '새 버전으로 저장' 이 된다
+  const locked = !!activeVer?.locked;
+  const mine = ownsVersion(me, activeVer?.owner);
+
+  /** 잠그기: PIN 은 선택. 비우면 만든 사람만 풀 수 있다 */
+  const lockActive = async () => {
+    if (!job || !active) return;
+    const pin = prompt(
+      "이 버전을 잠급니다. 풀 때 쓸 PIN(4~12자)을 정하세요.\n비워 두면 PIN 없이, 만든 사람만 풀 수 있습니다.",
+      "",
+    );
+    if (pin === null) return;
+    await verAction(() => api.lockVersion(job.id, active, { locked: true, pin: pin.trim() }), "이 버전을 잠갔습니다. 덮어쓰기·삭제가 막힙니다.");
+  };
+  const unlockActive = async () => {
+    if (!job || !active || !activeVer) return;
+    let pin = "";
+    if (activeVer.has_pin) {
+      const v = prompt("잠금을 풀려면 이 버전의 PIN 을 입력하세요.");
+      if (v === null) return;
+      pin = v.trim();
+    } else if (!confirm("잠금을 풀까요? 이후 저장하면 이 버전이 덮어써집니다.")) return;
+    await verAction(() => api.lockVersion(job.id, active, { locked: false, pin }), "잠금을 풀었습니다.");
+  };
 
   // ---------------- 파형 조작 ----------------
   /** 클릭한 자리를 그 마디의 첫박으로 고정한다. 녹음물은 박자가 미세하게 움직인다. */
@@ -222,11 +248,20 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
   // ---------------- 저장 ----------------
   const save = async () => {
     if (!job || !map) return;
+    if (locked) {
+      // 잠긴 버전은 덮어쓰지 않는다 — 지금 내용을 내 새 버전으로
+      const name = prompt("잠긴 버전입니다. 지금 내용을 새 버전으로 저장합니다. 이름:", `${activeVer?.name ?? "버전"} 수정`);
+      if (name === null) return;
+      await verAction(() => api.createVersion(job.id, name, map), `'${name}' 버전으로 저장했습니다.`);
+      return;
+    }
     setBusy(true);
     setMsg("저장 중… (다운로드용 클릭 파일도 함께 만듭니다)");
+    let saved = false;
     try {
       const r = await api.saveMap(job.id, map);
       setMsg(`저장 완료 — ♩=${r.bpm} · ${r.bars}마디 · 박자 ${r.beats}개`);
+      saved = true;
       await load(job.id);
       onChanged();
     } catch (e) {
@@ -234,6 +269,9 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
     } finally {
       setBusy(false);
     }
+    // 다 잡은 송 맵은 바로 잠가 두게 — 실수로 덮어쓰는 것을 막는 가장 쉬운 길
+    if (saved && mine && confirm("저장했습니다. 이 버전을 잠글까요? (덮어쓰기·삭제가 막히고, 풀 때 PIN 을 쓸 수 있습니다)"))
+      await lockActive();
   };
 
   /**
@@ -491,10 +529,34 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
                     verAction(() => api.activateVersion(job.id, v.id), "버전을 전환했습니다.")
                   }
                 >
+                  {v.locked ? "🔒 " : ""}
                   {v.name}
                 </button>
               ))}
               <span style={{ flex: 1 }} />
+              {active && activeVer && (
+                locked ? (
+                  <button
+                    className="ghost on"
+                    disabled={!canEdit}
+                    onClick={() => void unlockActive()}
+                    title={`${activeVer.owner_name ?? "관리자"} 이(가) 잠근 버전. ${activeVer.has_pin ? "PIN 으로 풉니다." : "만든 사람만 풀 수 있습니다."}`}
+                  >
+                    🔒 잠김 — 풀기
+                  </button>
+                ) : (
+                  mine && (
+                    <button
+                      className="ghost"
+                      disabled={!canEdit}
+                      onClick={() => void lockActive()}
+                      title="이 버전을 잠급니다. 덮어쓰기·이름 변경·삭제·재검출·이력 복원이 막힙니다. 다른 사람은 '새 버전' 으로 복사해 편집할 수 있습니다."
+                    >
+                      🔓 잠그기
+                    </button>
+                  )
+                )
+              )}
               <button
                 className="ghost"
                 disabled={!canEdit}
@@ -509,7 +571,7 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
               {active && (
                 <button
                   className="ghost"
-                  disabled={!canEdit}
+                  disabled={!canEdit || locked}
                   onClick={() => {
                     const cur = versions.find((v) => v.id === active);
                     const name = prompt("버전 이름", cur?.name ?? "");
@@ -523,7 +585,7 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
               {versions.length > 1 && active && (
                 <button
                   className="ghost"
-                  disabled={!canEdit}
+                  disabled={!canEdit || locked}
                   onClick={() =>
                     confirm("이 버전과 메트로놈 파일을 삭제합니다.") &&
                     verAction(() => api.deleteVersion(job.id, active), "버전 삭제")
@@ -535,7 +597,7 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
               {!!payload?.history?.length && (
                 <button
                   className="ghost"
-                  disabled={!canEdit}
+                  disabled={!canEdit || locked}
                   onClick={() => {
                     const lines = payload.history
                       .map(
@@ -826,7 +888,7 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
               >
                 추가
               </button>
-              <button className="ghost" onClick={detect} disabled={busy || !canEdit}>
+              <button className="ghost" onClick={detect} disabled={busy || !canEdit || locked}>
                 자동 재검출
               </button>
               <span style={{ flex: 1 }} />
@@ -838,14 +900,23 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
               <button
                 onClick={save}
                 disabled={busy || !canEdit || dupBars.size > 0}
-                title="메트로놈은 저장하지 않아도 편집한 대로 바로 들립니다. 저장하면 맵이 남고 다운로드용 클릭 파일이 갱신됩니다."
+                title={
+                  locked
+                    ? "잠긴 버전은 덮어쓰지 않습니다. 지금 내용을 새 버전으로 저장합니다."
+                    : "메트로놈은 저장하지 않아도 편집한 대로 바로 들립니다. 저장하면 맵이 남고 다운로드용 클릭 파일이 갱신됩니다."
+                }
               >
-                저장
+                {locked ? "새 버전으로 저장" : "저장"}
               </button>
             </div>
             {!canEdit && (
               <div className="meta" style={{ marginTop: 8 }}>
                 보기 전용 기기라 구성표를 저장할 수 없습니다. 편집한 메트로놈은 이 화면에서만 들립니다.
+              </div>
+            )}
+            {canEdit && locked && (
+              <div className="meta" style={{ marginTop: 8 }}>
+                🔒 {activeVer?.owner_name ?? "관리자"} 이(가) 잠근 버전입니다. 표를 고쳐 들어볼 수는 있고, 저장은 새 버전으로 됩니다.
               </div>
             )}
             {msg && <div className="meta" style={{ marginTop: 8 }}>{msg}</div>}

@@ -3,7 +3,7 @@
  *
  * 인증은 없다 — 접근 제어는 Tailscale 이 맡는다 (README 참고).
  */
-import type { Job, JobTrack, MapPayload, Playlist, ScoreData, SearchItem, SongMap } from "./types";
+import type { Job, JobTrack, MapPayload, MapVersion, Playlist, ScoreData, SearchItem, SongMap } from "./types";
 
 /** 앱에서는 다른 오리진의 서버를 봐야 하므로 베이스 URL 을 바꿀 수 있게 한다. */
 export const BASE =
@@ -96,7 +96,7 @@ export interface AccessClient {
 export const api = {
   // --- 접속자 관리 ---
   me: () =>
-    get<{ via: string; login: string; admin: boolean; can_edit: boolean; device: string | null }>("/api/me"),
+    get<{ via: string; login: string; admin: boolean; can_edit: boolean; key: string; device: string | null }>("/api/me"),
   access: () =>
     get<{
       devices: AccessDevice[];
@@ -174,6 +174,9 @@ export const api = {
   renameVersion: (id: string, vid: string, name: string) =>
     patch(`/api/jobs/${id}/map/versions/${vid}`, { name }),
   deleteVersion: (id: string, vid: string) => del(`/api/jobs/${id}/map/versions/${vid}`),
+  /** 잠그기 {locked:true, pin?} / 풀기 {locked:false, pin?} */
+  lockVersion: (id: string, vid: string, body: { locked: boolean; pin?: string }) =>
+    post<{ version: MapVersion; job: Job }>(`/api/jobs/${id}/map/versions/${vid}/lock`, body),
   restoreMap: (id: string, index: number) => post(`/api/jobs/${id}/map/restore`, { index }),
 
   // --- 파형 ---

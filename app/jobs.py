@@ -166,8 +166,8 @@ class Job:
             "bpm_manual": self.bpm_manual,
             "metronome": self.metronome,
             "songmap": self.songmap,
-            "map_versions": [{"id": v["id"], "name": v["name"],
-                              "updated": v.get("updated")} for v in self.map_versions],
+            "map_versions": [JobStore.version_view(v) for v in self.map_versions],
+            "locked_versions": sum(1 for v in self.map_versions if v.get("locked")),
             "map_active": self.map_active,
             "bar_count": len(self.bars),
             "beat_count": len(self.beats),
@@ -401,6 +401,7 @@ class JobStore:
         # 버전의 구성표 내용까지 저장한다. to_dict 는 목록 폴링용이라 이름만 싣는데,
         # 예전엔 그걸 그대로 저장해서 활성이 아닌 버전의 내용이 재시작하면 사라졌다.
         data["map_versions"] = [dict(v) for v in job.map_versions]
+        data.pop("locked_versions", None)
         # 박자 배열은 저장하지 않는다 — 구성표에서 언제든 다시 만들 수 있고,
         # 곡당 수백~수천 개라 메타 파일만 커진다.
         # 임시 파일에 쓰고 교체한다 — 쓰는 도중 죽어도 파일이 깨지지 않는다.
@@ -900,11 +901,27 @@ class JobStore:
         return n
 
     @classmethod
-    def _make_version(cls, name: str, songmap: dict) -> dict:
+    def _make_version(cls, name: str, songmap: dict, owner: Optional[str] = None,
+                      owner_name: Optional[str] = None) -> dict:
         return {"id": uuid.uuid4().hex[:8],
                 "name": cls._version_name(name),
                 "map": songmap,
-                "updated": round(time.time(), 3)}
+                "updated": round(time.time(), 3),
+                # 만든 사람(access.owner_key). 없으면 관리자 것(예전 버전).
+                "owner": owner, "owner_name": owner_name,
+                # 잠금: 덮어쓰기·이름 변경·삭제·재검출·이력 복원을 막는다. PIN 은 scrypt 해시 (app/lock.py)
+                "locked": False, "pin_hash": None}
+
+    @staticmethod
+    def version_view(v: dict) -> dict:
+        """화면에 내려보내는 버전 정보 (구성표 내용·PIN 해시는 뺀다)."""
+        return {"id": v["id"], "name": v["name"], "updated": v.get("updated"),
+                "owner": v.get("owner"), "owner_name": v.get("owner_name"),
+                "locked": bool(v.get("locked")), "has_pin": bool(v.get("pin_hash"))}
+
+    def _active_locked(self, job: Job) -> bool:
+        v = self._active_version(job)
+        return bool(v and v.get("locked"))
 
     def ensure_versions(self, job: Job) -> None:
         """버전 목록이 없으면 현재 구성표를 '기본' 버전으로 만든다 (구버전 이관)."""
@@ -920,7 +937,8 @@ class JobStore:
                 return v
         return job.map_versions[0] if job.map_versions else None
 
-    def create_version(self, job: Job, name: str, songmap: Any = None) -> dict:
+    def create_version(self, job: Job, name: str, songmap: Any = None,
+                       owner: Optional[str] = None, owner_name: Optional[str] = None) -> dict:
         """새 버전을 만들고 활성화한다. songmap 을 생략하면 현재 것을 복사한다."""
         if job.status != "done":
             raise ValueError("완료된 작업에만 버전을 만들 수 있습니다.")
@@ -929,7 +947,7 @@ class JobStore:
             raise ValueError(f"버전은 {self.MAX_VERSIONS}개까지만 만들 수 있습니다.")
         base = songmap if songmap is not None else copy.deepcopy(job.songmap)
         normalized = self.normalize_map(base, job.duration)
-        v = self._make_version(name, normalized)
+        v = self._make_version(name, normalized, owner, owner_name)
         job.map_versions.append(v)
         job.map_active = v["id"]
         job.songmap = copy.deepcopy(normalized)
@@ -1070,7 +1088,7 @@ class JobStore:
         self._save_meta(job)
         return {"map": job.songmap, "bpm": job.bpm, "beats": len(job.beats),
                 "bars": len(job.bars), "active": job.map_active,
-                "versions": [{"id": v["id"], "name": v["name"]} for v in job.map_versions]}
+                "versions": [self.version_view(v) for v in job.map_versions]}
 
     def _render_all_clicks(self, job: Job) -> None:
         """활성 버전 파일(`_click`)과 그 버전 이름이 붙은 파일을 함께 굽는다.

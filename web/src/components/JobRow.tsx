@@ -52,6 +52,11 @@ export function JobRow({
         {onOpen ? <span className="caret" style={{ transform: "none" }}>♪</span> : <span className="caret">▶</span>}
         <span className="job-title" title={name}>{name}</span>
         <span className="chips">
+          {!!job.locked_versions && (
+            <span className="chip" title={`잠긴 송 맵 버전 ${job.locked_versions}개 — 곡을 지울 수 없습니다`}>
+              🔒
+            </span>
+          )}
           {job.bpm ? <span className="chip">♩={job.bpm}</span> : null}
           {job.duration ? <span className="chip">{clock(job.duration)}</span> : null}
           {done && job.files?.length ? <span className="chip">{job.files.length}개 · {fmtSize(size)}</span> : null}
@@ -121,6 +126,8 @@ export function JobRow({
             {done && canEdit && (
               <button
                 className="ghost"
+                disabled={!!job.locked_versions}
+                title={job.locked_versions ? "잠긴 송 맵 버전이 있어 지울 수 없습니다. 송 맵에서 잠금을 먼저 푸세요." : undefined}
                 onClick={async () => {
                   if (!confirm("결과 폴더까지 완전히 삭제합니다. 계속할까요?")) return;
                   try {

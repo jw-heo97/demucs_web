@@ -275,6 +275,33 @@ def is_mutation(method: str, path: str) -> bool:
     return not path.endswith(_VIEW_OK)
 
 
+def owner_key(who: dict, device: Optional[dict]) -> str:
+    """'누가' 를 한 문자열로 — 송 맵 버전의 주인을 기록·비교하는 데 쓴다.
+    등록 기기는 기기 id, tailnet 계정은 로그인, 이 PC·태그 기기는 관리자."""
+    if device is not None:
+        return f"device:{device['id']}"
+    if who["via"] == "tailnet" and who["login"]:
+        return f"login:{who['login'].lower()}"
+    return "admin"
+
+
+def owner_name(who: dict, device: Optional[dict]) -> str:
+    if device is not None:
+        return device["name"]
+    if who["via"] == "tailnet":
+        return who.get("name") or who["login"]
+    return "관리자"
+
+
+def is_owner(owner: Optional[str], who: dict, device: Optional[dict]) -> bool:
+    """그 버전을 만든 사람인가. 주인이 기록되지 않은 예전 버전은 관리자 것. 관리자는 모두 다룰 수 있다."""
+    if is_admin(who):
+        return True
+    if not owner or owner == "admin":
+        return False
+    return owner == owner_key(who, device)
+
+
 def is_admin(who: dict) -> bool:
     """접속자 관리 화면을 볼 수 있는가: 허용 계정의 tailnet 기기, 이 PC 직접."""
     if who["via"] == "direct":
