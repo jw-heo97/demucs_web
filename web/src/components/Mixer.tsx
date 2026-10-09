@@ -252,7 +252,8 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
   const [devLat, setDevLat] = useState<DeviceLatency | null>(readDeviceLatency);
   const clickOffset = userOffset + (devLat?.ms ?? 0);
   const measuringRef = useRef(false);
-  /** 기기 측정 (제스처 안에서 부른다). 처음 재생할 때 자동으로, 또는 버튼으로 다시 */
+  /** 기기 측정 (제스처 안에서 부른다). 처음 재생할 때 화면에 드러내지 않고 자동으로 —
+   *  확정 버전의 메트로놈은 파일이라 필요 없고, 예비박·편집 중 즉석 클릭에만 쓰인다 */
   const measureDevice = (announce: boolean) => {
     if (measuringRef.current) return;
     measuringRef.current = true;
@@ -910,19 +911,6 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
             </button>
             ms
           </label>
-        )}
-        {(hasMetronome || countIn > 0) && (
-          <button
-            className="ghost"
-            onClick={() => measureDevice(true)}
-            title={
-              "이 기기의 재생 위치가 실제 소리보다 얼마나 뒤처지는지 소리 없이 재서 클릭에 더합니다 " +
-              "(아이패드 약 0.1초). 처음 재생할 때 자동으로 재고, 이 기기에 기억합니다. 누르면 다시 잽니다." +
-              (devLat ? ` 지금 ${devLat.ms}ms (클릭 ${devLat.n}개, 흔들림 ${devLat.spread}ms).` : "")
-            }
-          >
-            기기 {devLat ? `${devLat.ms > 0 ? "+" : ""}${devLat.ms}ms` : "측정"}
-          </button>
         )}
         {voice.available && (
           <button
