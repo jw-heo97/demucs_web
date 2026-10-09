@@ -14,7 +14,7 @@ interface ClickEvent {
 
 /** 이만큼 앞까지 미리 예약한다(곡 시간 기준, 초) */
 const LOOKAHEAD = 0.15;
-const TICK_MS = 25;
+const TICK_MS = 15;
 /** 예측한 곡 시각과 실제 재생 위치가 이보다 벌어지면 시계를 다시 맞춘다 (탐색·구간 반복·끊김) */
 const RESYNC = 0.05;
 
@@ -43,7 +43,7 @@ function lowerBound(ev: ClickEvent[], t: number) {
  * (탐색·구간 반복·버퍼링) 다시 잡는다.
  */
 export function useLiveMetronome(engine: Engine, bars: Bar[]) {
-  const { tracks, playing, rate, duration } = engine;
+  const { tracks, rate, duration } = engine;
   const ci = tracks.findIndex((t) => t.virtual);
   const mix = ci >= 0 ? engine.mixOf(ci) : { on: false, vol: 0 };
 
@@ -78,7 +78,10 @@ export function useLiveMetronome(engine: Engine, bars: Bar[]) {
 
   const enabled = ci >= 0;
   useEffect(() => {
-    if (!playing || !enabled) return;
+    // 재생 상태(playing)를 기다리지 않고 <audio> 를 직접 지켜본다. playing 은 play() 가
+    // 끝난 뒤에야 켜져서, 그 사이(수백 ms) 지나간 첫 박 — 곡 맨 앞이나 예비박 직후의
+    // 1마디 1박 — 이 빠졌다.
+    if (!enabled) return;
     const ctx = audioCtx();
     if (!gainRef.current) {
       gainRef.current = ctx.createGain();
@@ -88,6 +91,12 @@ export function useLiveMetronome(engine: Engine, bars: Bar[]) {
     out.gain.setValueAtTime(levelRef.current, ctx.currentTime);
 
     let anchor: { ctx: number; song: number; rate: number } | null = null;
+    // 재생을 눌러도 <audio> 는 수십 ms 뒤에야 실제로 움직인다. 그 전에 기준점을 잡으면
+    // 첫 클릭들이 음악보다 그만큼 일찍 울리므로, 재생 위치가 처음 움직인 뒤에 잡는다.
+    let startPos: number | null = null;
+    // 멈춰 있던 위치. 재생을 처음 알아챈 순간에는 이미 몇 ms 진행돼 있으므로 여기서부터 센다.
+    let restPos: number | null = null;
+    let watched: HTMLAudioElement | null = null;
     let next = 0;
     const live: { osc: OscillatorNode; when: number }[] = [];
 
@@ -107,19 +116,45 @@ export function useLiveMetronome(engine: Engine, bars: Bar[]) {
 
     const tick = () => {
       const a = engine.audios.current[0];
-      if (!a || a.paused) return;
+      if (!a || a.paused || a !== watched) {
+        // 멈췄거나 곡이 바뀌면 처음부터 다시 맞춘다
+        if (anchor || startPos !== null) {
+          anchor = null;
+          startPos = null;
+          cancelFuture();
+        }
+        if (a !== watched) restPos = null;
+        watched = a ?? null;
+        if (!a || a.paused) {
+          restPos = a ? a.currentTime : null;
+          return;
+        }
+      }
       const now = ctx.currentTime;
       const r = rateRef.current || 1;
       const actual = a.currentTime;
       const ev = eventsRef.current;
 
+      if (!anchor) {
+        if (startPos === null) {
+          // 멈춘 자리에서 이어 재생하는 경우만 믿는다 (자동 다음 곡처럼 바로 재생 중인 새 곡은 지금 위치)
+          startPos = restPos !== null && actual - restPos >= 0 && actual - restPos < 0.3 ? restPos : actual;
+        }
+        if (actual === startPos) return;
+      }
       let pred = anchor ? anchor.song + (now - anchor.ctx) * r : actual;
       const err = actual - pred;
+      // 막 재생을 시작했으면 시작 위치부터 센다 — 움직임을 알아챈 순간에는 이미 첫 박
+      // (곡 맨 앞, 예비박 직후의 1마디 1박)을 수십 ms 지나 있어서 빠뜨리게 된다.
+      // 그 박은 아래에서 '지금' 울린다. 탐색 등으로 다시 맞출 때는 지난 박을 울리지 않는다.
+      let from = actual;
+      if (!anchor && startPos !== null) from = Math.min(startPos, actual);
       if (!anchor || Math.abs(err) > RESYNC || anchor.rate !== r) {
         anchor = { ctx: now, song: actual, rate: r };
         pred = actual;
         cancelFuture();
-        next = lowerBound(ev, actual);
+        next = lowerBound(ev, from);
+        dirtyRef.current = false; // 방금 최신 박으로 다시 셌다
       } else if (Math.abs(err) > 0.004) {
         // 작은 오차는 조금씩만 따라간다 — 재생 위치 값 자체가 몇 ms 씩 흔들린다
         anchor.song += err * 0.1;
@@ -134,8 +169,10 @@ export function useLiveMetronome(engine: Engine, bars: Bar[]) {
       const horizon = pred + LOOKAHEAD * r;
       while (next < ev.length && ev[next].t < horizon) {
         const e = ev[next++];
-        const when = anchor.ctx + (e.t - anchor.song) / r;
-        if (when < now) continue;
+        let when = anchor.ctx + (e.t - anchor.song) / r;
+        // 시작하며 살짝 지나친 박은 바로 울린다 (그 밖에 지난 박은 위에서 이미 걸러졌다)
+        if (when < now - 0.15) continue;
+        when = Math.max(when, now);
         live.push({ osc: scheduleClick(ctx, when, e.accent ? 1500 : 1000, out), when });
       }
       // 끝난 것은 놓아준다
@@ -148,5 +185,5 @@ export function useLiveMetronome(engine: Engine, bars: Bar[]) {
       window.clearInterval(id);
       cancelFuture();
     };
-  }, [playing, enabled, engine.audios]);
+  }, [enabled, engine.audios]);
 }
