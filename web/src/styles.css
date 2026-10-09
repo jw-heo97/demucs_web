@@ -81,6 +81,9 @@ button.ghost.on { background: var(--accent); color: #fff; border-color: var(--ac
 .playbtn { width: 38px; height: 38px; border-radius: 50%; padding: 0; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .seek { flex: 1; min-width: 120px; accent-color: var(--accent); height: 4px; }
 .time { font-size: .76rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 98px; text-align: right; }
+.bpmctl { display: flex; align-items: center; gap: 4px; }
+.bpmctl input { width: 64px; text-align: center; padding: 5px 4px; }
+.bpmctl button { padding: 4px 8px; font-size: .78rem; }
 .sectbar { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; min-height: 22px; margin: 8px 0 4px; font-size: .79rem; }
 .nowsec { font-weight: 600; color: var(--accent); }
 .trk { display: grid; grid-template-columns: 70px auto 1fr 42px; align-items: center; gap: 9px; padding: 3px 0; font-size: .8rem; }

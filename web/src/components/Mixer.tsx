@@ -141,6 +141,12 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
   }
 
   useEffect(() => () => cancelCount(), []);
+  // 곡이 바뀌면 원곡 속도로 (목표 BPM 은 곡마다 다르다)
+  const setRate = engine.setRate;
+  useEffect(() => {
+    if (showRate) setRate(1);
+  }, [jobId, showRate, setRate]);
+
   // 곡이 바뀌면 진행 중이던 예비박을 버린다 (안 그러면 타이머가 새 곡을 엉뚱한 위치에서 튼다)
   useEffect(() => cancelCount(), [jobId]);
 
@@ -307,22 +313,9 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
         <span className="time">
           {clock(time)} / {clock(duration)}
         </span>
-        {showRate && (
-          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span className="meta">속도</span>
-            <select
-              style={{ width: 82 }}
-              value={String(rate)}
-              onChange={(e) => engine.setRate(Number(e.target.value))}
-            >
-              {[0.5, 0.6, 0.75, 0.85, 1, 1.15, 1.25].map((r) => (
-                <option key={r} value={r}>
-                  {r}×
-                </option>
-              ))}
-            </select>
-          </span>
-        )}
+        {showRate && bars[0]?.bpm ? (
+          <BpmControl base={bars[0].bpm} rate={rate} onRate={engine.setRate} />
+        ) : null}
         <select
           style={{ width: 112 }}
           value={String(countIn)}
@@ -428,4 +421,50 @@ function nextBeatAfter(bars: Bar[], pos: number) {
     }
   }
   return pos;
+}
+
+/** 재생 속도가 이 범위를 벗어나면 음질이 크게 나빠진다 */
+const MIN_RATE = 0.5;
+const MAX_RATE = 1.5;
+
+/**
+ * 재생 속도를 BPM 으로 고른다. 연습은 120 → 130 → 140 처럼 템포로 올려가므로 배수보다
+ * 목표 BPM 이 자연스럽다. 속도 = 목표 / 원곡(송 맵 기본 BPM). 음정은 유지된다.
+ */
+function BpmControl({ base, rate, onRate }: { base: number; rate: number; onRate: (r: number) => void }) {
+  const cur = Math.round(base * rate);
+  const [draft, setDraft] = useState(String(cur));
+  useEffect(() => setDraft(String(cur)), [cur]);
+  const apply = (bpm: number) => {
+    if (!Number.isFinite(bpm) || bpm <= 0) return setDraft(String(cur));
+    const r = Math.min(MAX_RATE, Math.max(MIN_RATE, bpm / base));
+    onRate(Math.abs(r - 1) < 0.002 ? 1 : r);
+    setDraft(String(Math.round(base * r)));
+  };
+  // 5 단위로 맞춰 올리고 내린다 (143 에서 +5 → 145)
+  const step = (d: number) => apply(d > 0 ? Math.floor(cur / 5) * 5 + 5 : Math.ceil(cur / 5) * 5 - 5);
+  const off = Math.abs(rate - 1) >= 0.002;
+  return (
+    <span className="bpmctl" title={`원곡 ♩=${Math.round(base * 100) / 100} 기준. 음정은 그대로입니다.`}>
+      <span className="meta">♩</span>
+      <button className="ghost" onClick={() => step(-1)} disabled={rate <= MIN_RATE + 1e-3}>
+        −5
+      </button>
+      <input
+        type="number"
+        inputMode="numeric"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => apply(Number(draft))}
+        onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+      />
+      <button className="ghost" onClick={() => step(1)} disabled={rate >= MAX_RATE - 1e-3}>
+        +5
+      </button>
+      <button className={`ghost${off ? "" : " on"}`} onClick={() => onRate(1)} title="원곡 속도로">
+        원곡
+      </button>
+      {off && <span className="meta">{Math.round(rate * 100)}%</span>}
+    </span>
+  );
 }
