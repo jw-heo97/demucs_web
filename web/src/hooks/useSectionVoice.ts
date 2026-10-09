@@ -87,8 +87,9 @@ export function useSectionVoice(engine: Engine, bars: Bar[]) {
   }, [enabled]);
 
   /**
-   * 예비박을 시작할 때 부른다. pos 에서 곧 시작하는 구간(예: 곡 맨 앞 Intro)은
-   * 음악이 시작되기 전, 예비박 동안 미리 읽는다.
+   * 예비박을 시작할 때 부른다. pos 에서 곧 시작하는 구간(곡 맨 앞 Intro, 반복 구간 등)은
+   * 읽지 않고 읽은 것으로 쳐 둔다 — 예비박 동안 읽으면 클릭과 겹쳐 박을 세기 어렵다.
+   * 어느 구간에서 시작하는지는 누른 사람이 이미 안다.
    */
   const cueAt = useCallback(
     (pos: number, within: number) => {
@@ -97,7 +98,6 @@ export function useSectionVoice(engine: Engine, bars: Bar[]) {
       const i = ss.findIndex((s) => s.start >= pos - 0.05);
       if (i < 0 || ss[i].start - pos > within) return;
       said.current.add(i);
-      speak(ss[i].name);
     },
     [enabled],
   );
@@ -117,14 +117,12 @@ export function useSectionVoice(engine: Engine, bars: Bar[]) {
       const t = a.currentTime;
       const ss = sectionsRef.current;
       if (!wasPlaying) {
-        // 막 재생을 시작했다: 지금 위치가 어느 구간의 '안내 시점 ~ 시작' 사이면 바로 읽는다
+        // 막 재생을 시작했다: 지금 위치가 어느 구간의 '안내 시점 ~ 시작' 사이면 그 구간은
+        // 읽지 않는다 — 재생 직후(예비박 끝)에 읽으면 첫 박과 겹친다. 다음 구간부터 읽는다.
         wasPlaying = true;
         const from = last ?? t;
         ss.forEach((s, i) => {
-          if (from >= s.cue && from < s.start - 0.3 && !said.current.has(i)) {
-            said.current.add(i);
-            speak(s.name);
-          }
+          if (from >= s.cue && from < s.start - 0.3) said.current.add(i);
         });
       } else if (last !== null && (t < last || t - last > 1)) {
         // 탐색·구간 반복: 다시 읽을 수 있게 비운다
