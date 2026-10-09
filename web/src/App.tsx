@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { LibraryTab } from "./components/LibraryTab";
+import { PlaylistTab } from "./components/PlaylistTab";
 import { SearchTab } from "./components/SearchTab";
 import { SongMapTab } from "./components/SongMapTab";
 import { WorkTab } from "./components/WorkTab";
 import type { Job } from "./types";
 
-type TabKey = "work" | "library" | "map" | "tube";
+type TabKey = "work" | "library" | "playlist" | "map" | "tube";
 
 export function App() {
   const [tab, setTab] = useState<TabKey>("work");
@@ -52,6 +53,7 @@ export function App() {
           [
             ["work", "분리 작업"],
             ["library", "보관함"],
+            ["playlist", "플레이리스트"],
             ["map", "송 맵"],
             ["tube", "YouTube 검색"],
           ] as [TabKey, string][]
@@ -72,6 +74,7 @@ export function App() {
         <WorkTab jobs={jobs} onChanged={refresh} picked={pick} onPickedUsed={() => setPick(null)} />
       )}
       {tab === "library" && <LibraryTab jobs={jobs} onChanged={refresh} />}
+      {tab === "playlist" && <PlaylistTab jobs={jobs} onChanged={refresh} />}
       {tab === "map" && <SongMapTab jobs={jobs} onChanged={refresh} />}
       {tab === "tube" && (
         <SearchTab

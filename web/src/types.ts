@@ -96,3 +96,12 @@ export interface SearchItem {
   live: boolean;
   thumbnail: string;
 }
+
+export interface Playlist {
+  id: string;
+  name: string;
+  /** 보관함 작업 id, 재생 순서대로 */
+  items: string[];
+  created_at: number;
+  updated_at: number;
+}

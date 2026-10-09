@@ -19,6 +19,7 @@ import separator
 from config import CORS_ORIGINS, MAX_DURATION_SEC, METRONOME_DEFAULT, OUTPUT_DIR, WORK_DIR
 from downloader import DownloadError
 from jobs import FORMATS, MAX_TITLE_LEN, STEMS, store
+from playlists import playlists
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -303,7 +304,52 @@ def delete_job(job_id: str):
         raise HTTPException(409, str(e)) from e
     if not found:
         raise HTTPException(404, "작업을 찾을 수 없습니다.")
+    playlists.remove_job(job_id)
     return JSONResponse({"deleted": job_id})
+
+
+# --- 플레이리스트 ---
+
+@app.get("/api/playlists")
+def list_playlists():
+    try:
+        return {"playlists": playlists.list()}
+    except RuntimeError as e:
+        raise HTTPException(500, str(e)) from e
+
+
+@app.post("/api/playlists", status_code=201)
+def create_playlist(payload: dict = Body(...)):
+    try:
+        return playlists.create(payload.get("name"), payload.get("items"))
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(500, str(e)) from e
+
+
+@app.put("/api/playlists/{pid}")
+def update_playlist(pid: str, payload: dict = Body(...)):
+    try:
+        p = playlists.update(pid, payload.get("name"), payload.get("items"))
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(500, str(e)) from e
+    if not p:
+        raise HTTPException(404, "플레이리스트를 찾을 수 없습니다.")
+    return p
+
+
+@app.delete("/api/playlists/{pid}")
+def delete_playlist(pid: str):
+    try:
+        found = playlists.delete(pid)
+    except RuntimeError as e:
+        raise HTTPException(500, str(e)) from e
+    if not found:
+        raise HTTPException(404, "플레이리스트를 찾을 수 없습니다.")
+    return {"deleted": pid}
 
 
 # 브라우저가 <audio> 로 바로 재생할 수 있는 타입.

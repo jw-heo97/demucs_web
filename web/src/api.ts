@@ -3,7 +3,7 @@
  *
  * 인증은 없다 — 접근 제어는 Tailscale 이 맡는다 (README 참고).
  */
-import type { Job, MapPayload, SearchItem, SongMap } from "./types";
+import type { Job, MapPayload, Playlist, SearchItem, SongMap } from "./types";
 
 /** 앱에서는 다른 오리진의 서버를 봐야 하므로 베이스 URL 을 바꿀 수 있게 한다. */
 export const BASE =
@@ -128,6 +128,14 @@ export const api = {
       `/api/jobs/${id}/mixdown`,
       body,
     ),
+
+  // --- 플레이리스트 ---
+  playlists: () => get<{ playlists: Playlist[] }>("/api/playlists"),
+  createPlaylist: (name: string, items: string[] = []) =>
+    post<Playlist>("/api/playlists", { name, items }),
+  updatePlaylist: (id: string, body: { name?: string; items?: string[] }) =>
+    put<Playlist>(`/api/playlists/${id}`, body),
+  deletePlaylist: (id: string) => del(`/api/playlists/${id}`),
 
   fileUrl: (u: string, download = false) => BASE + u + (download ? "?download=1" : ""),
 };

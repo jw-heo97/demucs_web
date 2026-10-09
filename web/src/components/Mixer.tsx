@@ -18,6 +18,11 @@ interface Props {
   showRate?: boolean;
   countIn: number;
   onCountInChange: (n: number) => void;
+  /**
+   * 값이 바뀌면 이 곡을 재생 버튼을 누른 것처럼 시작한다(예비박 포함).
+   * 플레이리스트가 다음 곡으로 넘어갈 때 쓴다.
+   */
+  autoStart?: number;
 }
 
 let sharedCtx: AudioContext | null = null;
@@ -29,7 +34,7 @@ const audioCtx = () => (sharedCtx ??= new AudioContext());
  * 예비박은 파일에 굽지 않고 Web Audio 로 즉석에서 만든다. 파일에 넣으려면 모든 스템 앞에
  * 같은 길이의 무음을 붙여 전부 재인코딩해야 하고, 곡 중간부터 연습할 때는 쓸 수 없다.
  */
-export function Mixer({ engine, bars, jobId, onChanged, showRate, countIn, onCountInChange }: Props) {
+export function Mixer({ engine, bars, jobId, onChanged, showRate, countIn, onCountInChange, autoStart }: Props) {
   const { tracks, playing, time, duration, rate, muted, solo, vol } = engine;
   const [counting, setCounting] = useState(0);
   const [hint, setHint] = useState("");
@@ -87,6 +92,18 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, countIn, onCou
   }
 
   useEffect(() => () => cancelCount(), []);
+  // 곡이 바뀌면 진행 중이던 예비박을 버린다 (안 그러면 타이머가 새 곡을 엉뚱한 위치에서 튼다)
+  useEffect(() => cancelCount(), [jobId]);
+
+  // 다음 곡 자동 시작. 새 곡의 트랙이 실제로 올라온 뒤에만 누른다.
+  const startedFor = useRef(autoStart);
+  useEffect(() => {
+    if (autoStart === undefined || autoStart === startedFor.current) return;
+    if (engine.loadedId !== jobId || !tracks.length) return;
+    startedFor.current = autoStart;
+    void handlePlay();
+    // handlePlay 는 매 렌더 새로 만들어지지만 여기서는 시작 신호만 보면 된다
+  }, [autoStart, engine.loadedId, jobId, tracks]);
 
   // 스페이스바 = 재생/일시정지. 입력칸에 있을 때는 원래 동작(공백 입력)을 살린다.
   useEffect(() => {

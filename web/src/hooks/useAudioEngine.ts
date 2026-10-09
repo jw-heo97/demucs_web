@@ -55,7 +55,18 @@ const liveEngines = new Set<{ stop: () => void }>();
  * 첫 트랙을 마스터 시계로 삼고, 0.15초 이상 벌어진 트랙만 맞춘다
  * (매 프레임 맞추면 오히려 소리가 튄다).
  */
-export function useAudioEngine(job: Job | null) {
+export interface EngineOptions {
+  /** 곡 끝까지 재생됐을 때 (플레이리스트의 자동 다음 곡) */
+  onEnded?: () => void;
+  /**
+   * 곡이 바뀌어도 음소거·솔로·볼륨을 트랙 이름(드럼, 베이스…)별로 이어간다.
+   * 플레이리스트에서 드럼을 끄고 연습하는데 곡마다 다시 끄지 않아도 되게.
+   * 같은 곡의 파일만 바뀐 경우(메트로놈 재생성)에는 이 값과 상관없이 항상 이어간다.
+   */
+  carryMix?: boolean;
+}
+
+export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
   /**
    * 작업 목록은 1~8초마다 폴링돼 **매번 새 객체**로 온다.
    * `job` 을 그대로 의존성에 두면 폴링할 때마다 오디오 요소를 파괴하고 다시 만들어
@@ -71,6 +82,9 @@ export function useAudioEngine(job: Job | null) {
   const prevJobId = useRef<string | null>(null);
   const lastTime = useRef(0);
   const [tracks, setTracks] = useState<Track[]>([]);
+  // tracks 가 어느 곡의 것인지. 곡을 바꾼 직후 한 번은 이전 곡 트랙이 남아 있어서,
+  // 자동 재생이 엉뚱한 곡을 틀지 않도록 확인하는 데 쓴다.
+  const [loadedId, setLoadedId] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -78,6 +92,10 @@ export function useAudioEngine(job: Job | null) {
   const [muted, setMuted] = useState<boolean[]>([]);
   const [solo, setSolo] = useState<boolean[]>([]);
   const [vol, setVol] = useState<number[]>([]);
+  const onEndedRef = useRef(opts.onEnded);
+  onEndedRef.current = opts.onEnded;
+  const carryRef = useRef(!!opts.carryMix);
+  carryRef.current = !!opts.carryMix;
   // 트랙이 바뀌는 순간 직전 믹스 상태를 읽기 위한 사본
   const mixRef = useRef({ tracks, muted, solo, vol });
   mixRef.current = { tracks, muted, solo, vol };
@@ -109,8 +127,7 @@ export function useAudioEngine(job: Job | null) {
     const sameJob = !!j && prevJobId.current === j.id;
     const resumeAt = sameJob ? lastTime.current : 0;
     const prevMix = new Map<string, { muted: boolean; solo: boolean; vol: number }>();
-    // 같은 곡의 파일만 바뀐 경우(메트로놈 재생성)에는 음소거·솔로·볼륨도 이어간다
-    if (sameJob) {
+    if (sameJob || carryRef.current) {
       const m = mixRef.current;
       m.tracks.forEach((t, i) =>
         prevMix.set(t.key, { muted: !!m.muted[i], solo: !!m.solo[i], vol: m.vol[i] ?? 1 }),
@@ -128,6 +145,7 @@ export function useAudioEngine(job: Job | null) {
 
     const ts = j ? tracksOf(j) : [];
     setTracks(ts);
+    setLoadedId(j?.id ?? null);
     setMuted(ts.map((t) => prevMix.get(t.key)?.muted ?? false));
     setSolo(ts.map((t) => prevMix.get(t.key)?.solo ?? false));
     setVol(ts.map((t) => prevMix.get(t.key)?.vol ?? 1));
@@ -152,6 +170,7 @@ export function useAudioEngine(job: Job | null) {
     const onEnded = () => {
       audiosRef.current.forEach((a) => a.pause());
       setPlaying(false);
+      onEndedRef.current?.();
     };
     m.addEventListener("loadedmetadata", onMeta);
     m.addEventListener("ended", onEnded);
@@ -291,6 +310,7 @@ export function useAudioEngine(job: Job | null) {
 
   return {
     tracks,
+    loadedId,
     playing,
     time,
     duration,
