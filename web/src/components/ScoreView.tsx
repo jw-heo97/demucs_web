@@ -14,7 +14,12 @@ export function measureOfBar(score: ScoreData, bar: number): number | null {
 
 const imgCache = new Map<string, HTMLImageElement>();
 function useImage(url: string | null) {
-  const [img, setImg] = useState<HTMLImageElement | null>(() => (url ? imgCache.get(url) ?? null : null));
+  // 다 받은 그림만 처음부터 쓴다. 받는 중인 것을 미리 쥐고 있으면 load 때 같은 객체라
+  // 상태가 안 바뀌어 다시 그리지 않는다 — 쪽이 넘어가는 순간 줄이 빈 채로 남았다.
+  const [img, setImg] = useState<HTMLImageElement | null>(() => {
+    const hit = url ? imgCache.get(url) : undefined;
+    return hit?.complete ? hit : null;
+  });
   useEffect(() => {
     if (!url) return setImg(null);
     const hit = imgCache.get(url);
