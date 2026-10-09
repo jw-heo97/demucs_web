@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
@@ -66,10 +67,59 @@ def healthz():
     return {"ok": True, "queue": store.queue_depth()}
 
 
-@app.get("/api/clients")
-def api_clients():
-    """최근 접속자 (경로·실제 IP·Tailscale 계정·마지막 요청). 재시작하면 비워진다."""
-    return {"clients": access.recent_clients()}
+@app.get("/api/me")
+def api_me(request: Request):
+    """지금 접속한 경로와 관리 화면을 볼 수 있는지 (탭 표시용)."""
+    who = getattr(request.state, "who", None) or access.classify(request)
+    dv = getattr(request.state, "device", None)
+    return {"via": who["via"], "login": who["login"], "admin": access.is_admin(who),
+            "device": dv["name"] if dv else None}
+
+
+# --- 접속자 관리 (허용 계정의 tailnet 기기·이 PC 만 — 미들웨어가 /api/admin/* 를 막는다) ---
+def _invite_url(request: Request, key) -> Optional[str]:
+    if not key:
+        return None
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+    # tailnet 으로 들어왔으면 그 주소(…ts.net)가 funnel 주소와 같다. 이 PC 에서 직접이면 모른다.
+    if not host or host.startswith(("127.0.0.1", "localhost")):
+        return f"/?key={key}"
+    return f"https://{host}/?key={key}"
+
+
+@app.get("/api/admin/access")
+def admin_access(request: Request):
+    key = access.store.invite_key()
+    return {"devices": access.store.devices(), "clients": access.recent_clients(),
+            "invite_url": _invite_url(request, key), "invite_enabled": bool(key),
+            "allow_users": sorted(access.TAILSCALE_ALLOW_USERS)}
+
+
+@app.post("/api/admin/invite")
+def admin_invite(request: Request, payload: dict = Body(default={})):
+    """{enabled} — 새 초대 링크를 만들거나(이전 링크는 무효) 초대를 끈다. 등록된 기기는 그대로."""
+    key = access.store.set_invite(bool(payload.get("enabled", True)))
+    return {"invite_url": _invite_url(request, key), "invite_enabled": bool(key)}
+
+
+@app.patch("/api/admin/devices/{did}")
+def admin_device_update(did: str, payload: dict = Body(...)):
+    """{name?, blocked?}"""
+    try:
+        return access.store.update(did, payload.get("name"),
+                                   payload.get("blocked") if "blocked" in payload else None)
+    except KeyError:
+        raise HTTPException(404, "그 기기를 찾을 수 없습니다.")
+
+
+@app.delete("/api/admin/devices/{did}")
+def admin_device_delete(did: str):
+    """등록 해제 — 그 기기는 초대 링크로 다시 등록해야 들어온다."""
+    try:
+        access.store.delete(did)
+    except KeyError:
+        raise HTTPException(404, "그 기기를 찾을 수 없습니다.")
+    return {"ok": True}
 
 
 @app.get("/api/info")

@@ -55,7 +55,49 @@ const patch = <T,>(p: string, body: unknown) =>
   request<T>(p, { method: "PATCH", body: JSON.stringify(body) });
 const del = <T,>(p: string) => request<T>(p, { method: "DELETE" });
 
+export interface AccessDevice {
+  id: string;
+  name: string;
+  ua: string;
+  created: number;
+  last: number;
+  last_ip: string;
+  blocked: boolean;
+}
+
+export interface AccessClient {
+  via: "funnel" | "tailnet" | "proxy" | "direct";
+  ip: string;
+  login: string;
+  name: string;
+  ua: string;
+  first: number;
+  last: number;
+  requests: number;
+  denied: number;
+  last_path: string;
+  last_status: number;
+  device: string | null;
+  device_id: string | null;
+}
+
 export const api = {
+  // --- 접속자 관리 ---
+  me: () => get<{ via: string; login: string; admin: boolean; device: string | null }>("/api/me"),
+  access: () =>
+    get<{
+      devices: AccessDevice[];
+      clients: AccessClient[];
+      invite_url: string | null;
+      invite_enabled: boolean;
+      allow_users: string[];
+    }>("/api/admin/access"),
+  setInvite: (enabled: boolean) =>
+    post<{ invite_url: string | null; invite_enabled: boolean }>("/api/admin/invite", { enabled }),
+  updateDevice: (id: string, body: { name?: string; blocked?: boolean }) =>
+    patch<AccessDevice>(`/api/admin/devices/${id}`, body),
+  deleteDevice: (id: string) => del(`/api/admin/devices/${id}`),
+
   // --- 정보 ---
   info: () =>
     get<{
