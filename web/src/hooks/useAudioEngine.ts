@@ -19,6 +19,8 @@ export interface Track {
   virtual?: boolean;
   /** 사용자 트랙(녹음·반주)이면 그 id. 이름 바꾸기·오프셋·삭제에 쓴다 */
   trackId?: string;
+  /** 고정 오프셋(ms) — 확정(잠긴) 버전의 메트로놈 파일에 잠근 기기의 클릭 보정을 싣는다 */
+  offsetMs?: number;
 }
 
 const LABEL: Record<string, string> = {
@@ -64,9 +66,27 @@ export function tracksOf(job: Job): Track[] {
       trackId: t.id,
     });
   }
-  // 메트로놈은 송 맵이 있으면 언제나 쓸 수 있다 (클릭 파일은 다운로드·믹스 받기용)
+  // 메트로놈.
+  //  - 확정(잠긴) 버전: 서버가 그 버전으로 구운 클릭 파일을 스템과 똑같은 트랙으로 재생한다.
+  //    같은 방식으로 같이 재생되므로 기기마다 클릭 타이밍이 달라질 일이 없다(즉석 클릭은 기기가
+  //    알려주는 재생 위치를 보고 찍어서, 아이패드처럼 그 값이 늦은 기기에선 밀렸다).
+  //    잠근 기기의 클릭 보정은 트랙 오프셋으로 싣는다.
+  //  - 그 밖: 송 맵에서 즉석으로 만든다 (고치면 저장 전에도 바로 들린다)
+  const active = job.map_versions?.find((v) => v.id === job.map_active);
+  const clickFile = best.get("click");
+  if (active?.locked && clickFile) {
+    tracks.push({
+      key: "click",
+      label: `${LABEL.click} (확정)`,
+      url: `${BASE}${clickFile.url}?v=${clickFile.mtime ?? 0}`,
+      rel: clickFile.rel,
+      mtime: clickFile.mtime ?? 0,
+      offsetMs: typeof active.click_offset_ms === "number" ? active.click_offset_ms : 0,
+    });
+    return tracks;
+  }
   const hasMap = !!(job.songmap as { ranges?: unknown[] } | undefined)?.ranges?.length;
-  if (hasMap || best.has("click")) {
+  if (hasMap || clickFile) {
     tracks.push({ key: "click", label: LABEL.click, url: "", rel: "", mtime: 0, virtual: true });
   }
   return tracks;
@@ -163,6 +183,8 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
   const realRef = useRef<Track[]>([]);
   /** 트랙 i 의 오프셋(초): 트랙의 0초가 곡의 몇 초인지. 스템은 0. job.tracks 에서 그때그때 읽는다 */
   const offOf = (i: number) => {
+    const fixed = realRef.current[i]?.offsetMs;
+    if (typeof fixed === "number") return fixed / 1000;
     const id = realRef.current[i]?.trackId;
     if (!id) return 0;
     const t = jobRef.current?.tracks?.find((x) => x.id === id);
@@ -220,7 +242,7 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     setMuted(ts.map((t) => prevMix.get(t.key)?.muted ?? false));
     setSolo(ts.map((t) => prevMix.get(t.key)?.solo ?? false));
     // 스템은 50 에서 시작한다 — 4개를 다 켜면 메트로놈 클릭이 묻힌다. 메트로놈은 100.
-    setVol(ts.map((t) => prevMix.get(t.key)?.vol ?? (t.virtual ? 1 : DEFAULT_STEM_VOL)));
+    setVol(ts.map((t) => prevMix.get(t.key)?.vol ?? (t.key === "click" ? 1 : DEFAULT_STEM_VOL)));
     const real = ts.filter((t) => !t.virtual);
     realRef.current = real;
     if (!real.length) {
@@ -416,7 +438,7 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
         g.gain.setTargetAtTime(m.on ? m.vol : 0, g.context.currentTime, 0.01);
       } else {
         a.muted = !m.on;
-        a.volume = m.vol;
+        a.volume = Math.min(1, m.vol); // <audio> 는 1 을 넘을 수 없다 (메트로놈은 600% 까지)
       }
     });
   }, [mixOf]);
