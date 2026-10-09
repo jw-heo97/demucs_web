@@ -29,6 +29,10 @@ export function SongMapTab({ jobs, onChanged }: Props) {
   const done = useMemo(() => jobs.filter((j) => j.status === "done"), [jobs]);
   const [jobId, setJobId] = useState("");
   const job = useMemo(() => done.find((j) => j.id === jobId) ?? null, [done, jobId]);
+  // 지금 보고 있는 곡. 응답이 늦게 온 이전 곡의 구성표가 새 곡 화면에 덮이지 않게 한다
+  // — 그 상태로 저장하면 다른 곡의 구성표가 이 곡에 저장된다 (Summer time → 라시사 에서 실제로 있었다).
+  const jobIdRef = useRef(jobId);
+  jobIdRef.current = jobId;
 
   const [map, setMap] = useState<SongMap | null>(null);
   const [payload, setPayload] = useState<MapPayload | null>(null);
@@ -78,6 +82,7 @@ export function SongMapTab({ jobs, onChanged }: Props) {
 
   const load = useCallback(async (id: string) => {
     const d = await api.map(id);
+    if (id !== jobIdRef.current) return;
     setPayload(d);
     setMap(
       d.map?.ranges?.length
@@ -233,6 +238,7 @@ export function SongMapTab({ jobs, onChanged }: Props) {
     setMsg("박자 위치 맞추는 중…");
     try {
       const r = await api.alignMap(job.id, map);
+      if (job.id !== jobIdRef.current) return;
       // 응답의 구성표를 통째로 쓰지 않고 기준 시각만 옮겨 온다 (편집 중인 다른 값 보존)
       const pinned = new Map(r.map.ranges.map((x) => [x.from_bar, x.anchor]));
       setMap({
