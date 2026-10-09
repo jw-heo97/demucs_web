@@ -17,6 +17,7 @@ import {
   type ClickSound,
 } from "../lib/audioCtx";
 import { ScrollDial } from "./ScrollDial";
+import { measureDeviceLatency, readDeviceLatency, type DeviceLatency } from "../lib/deviceLatency";
 import type { Bar } from "../types";
 import { barAtTime, stepOf } from "../lib/songmap";
 import { clock } from "../lib/time";
@@ -243,7 +244,25 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
   const activeVer = engine.job?.map_versions?.find((v) => v.id === engine.job?.map_active);
   const lockedOffset =
     activeVer?.locked && typeof activeVer.click_offset_ms === "number" ? activeVer.click_offset_ms : null;
-  const clickOffset = lockedOffset ?? localOffset;
+  // 내가 정한 값(잠긴 버전이면 잠근 기기의 값) + 이 기기의 자동 측정값(재생 위치가 실제 소리보다
+  // 뒤처지는 만큼 — 아이패드 약 0.1초). 칸에는 앞의 것만 보인다
+  const userOffset = lockedOffset ?? localOffset;
+  const [devLat, setDevLat] = useState<DeviceLatency | null>(readDeviceLatency);
+  const clickOffset = userOffset + (devLat?.ms ?? 0);
+  const measuringRef = useRef(false);
+  /** 기기 측정 (제스처 안에서 부른다). 처음 재생할 때 자동으로, 또는 버튼으로 다시 */
+  const measureDevice = (announce: boolean) => {
+    if (measuringRef.current) return;
+    measuringRef.current = true;
+    void measureDeviceLatency()
+      .then((r) => {
+        if (r) {
+          setDevLat(r);
+          if (announce) setHint(`이 기기 보정 ${r.ms > 0 ? "+" : ""}${r.ms}ms 로 맞췄습니다 (클릭 ${r.n}개, 흔들림 ${r.spread}ms).`);
+        } else if (announce) setHint("기기 보정을 재지 못했습니다. 다시 눌러 주세요.");
+      })
+      .finally(() => (measuringRef.current = false));
+  };
   const metro = useLiveMetronome(engine, bars, subdiv, clickOffset);
   // 구간 이름을 한 마디 전에 읽어 준다 (음성 합성)
   const voice = useSectionVoice(engine, bars);
@@ -588,6 +607,8 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
     } catch {
       /* Web Audio 미지원 — 음악만 재생된다 */
     }
+    // 이 기기를 아직 안 쟀으면 첫 재생 때 소리 없이 잰다 (제스처 안이어야 해서 여기서)
+    if (!devLat) measureDevice(false);
     if (loopGap.current) {
       // 반복 사이 쉬는 중에 누르면 반복을 멈춘다
       clearTimeout(loopGap.current);
@@ -830,8 +851,8 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
             {lockedOffset != null ? "🔒 클릭" : "클릭"}
             <button
               className="ghost"
-              onClick={() => setClickOffset(clickOffset - 5)}
-              disabled={lockedOffset != null || clickOffset <= -OFFSET_LIMIT}
+              onClick={() => setClickOffset(userOffset - 5)}
+              disabled={lockedOffset != null || userOffset <= -OFFSET_LIMIT}
               aria-label="클릭 5ms 앞당기기"
             >
               −
@@ -842,20 +863,33 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
               min={-OFFSET_LIMIT}
               max={OFFSET_LIMIT}
               step={5}
-              value={clickOffset}
+              value={userOffset}
               disabled={lockedOffset != null}
               onChange={(e) => setClickOffset(Number(e.target.value))}
             />
             <button
               className="ghost"
-              onClick={() => setClickOffset(clickOffset + 5)}
-              disabled={lockedOffset != null || clickOffset >= OFFSET_LIMIT}
+              onClick={() => setClickOffset(userOffset + 5)}
+              disabled={lockedOffset != null || userOffset >= OFFSET_LIMIT}
               aria-label="클릭 5ms 늦추기"
             >
               +
             </button>
             ms
           </label>
+        )}
+        {(hasMetronome || countIn > 0) && (
+          <button
+            className="ghost"
+            onClick={() => measureDevice(true)}
+            title={
+              "이 기기의 재생 위치가 실제 소리보다 얼마나 뒤처지는지 소리 없이 재서 클릭에 더합니다 " +
+              "(아이패드 약 0.1초). 처음 재생할 때 자동으로 재고, 이 기기에 기억합니다. 누르면 다시 잽니다." +
+              (devLat ? ` 지금 ${devLat.ms}ms (클릭 ${devLat.n}개, 흔들림 ${devLat.spread}ms).` : "")
+            }
+          >
+            기기 {devLat ? `${devLat.ms > 0 ? "+" : ""}${devLat.ms}ms` : "측정"}
+          </button>
         )}
         {voice.available && (
           <button
