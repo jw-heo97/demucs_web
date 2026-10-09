@@ -36,10 +36,9 @@ const FEED_MS = 150;
  * decodeAudioData 는 통째로만 풀 수 있어 그 순간엔 float32 전체(5분 ~115MB)가 잠깐 산다 —
  * 그래서 트랙을 한 번에 하나씩 푼다 (부르는 쪽이 순서대로).
  */
-export async function decodePcm(ctx: BaseAudioContext, url: string, signal?: AbortSignal): Promise<Pcm> {
-  const res = await fetch(url, { signal });
-  if (!res.ok) throw new Error(`트랙을 읽지 못했습니다 (${res.status})`);
-  const audio = await ctx.decodeAudioData(await res.arrayBuffer());
+export async function decodePcm(ctx: BaseAudioContext, src: Blob, signal?: AbortSignal): Promise<Pcm> {
+  if (signal?.aborted) throw new DOMException("취소", "AbortError");
+  const audio = await ctx.decodeAudioData(await src.arrayBuffer());
   const frames = audio.length;
   const c0 = audio.getChannelData(0);
   let mono = audio.numberOfChannels === 1;

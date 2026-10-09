@@ -12,7 +12,10 @@
  */
 import { decodePcm, type Pcm } from "./bufferTransport";
 
-const BUDGET = 480 * 1024 * 1024;
+// 기기 메모리를 알면(크롬·엣지의 deviceMemory, GB, 최대 8) 더 쓴다 — PC 에선 앞뒤 곡까지 세 곡쯤.
+// 사파리(아이패드)는 알 수 없어 480MB: 지금 곡 + 다음 곡 정도. 이전 곡은 밀려나 다시 풀어야 한다.
+const DEVICE_GB = (navigator as { deviceMemory?: number }).deviceMemory ?? 0;
+const BUDGET = (DEVICE_GB >= 8 ? 1200 : DEVICE_GB >= 4 ? 720 : 480) * 1024 * 1024;
 
 interface Entry {
   pcm: Pcm;
@@ -30,9 +33,9 @@ export const hasPcm = (url: string) => entries.has(url);
 
 /**
  * 트랙을 (캐시에 있으면 그대로, 없으면 풀어서) 돌려준다. 푸는 것은 전역으로 직렬이다.
- * key 는 서버 주소(?v= 포함 — 파일이 바뀌면 다른 키), src 는 실제로 읽을 곳(기기에 받아 둔 blob: 주소).
+ * key 는 서버 주소(?v= 포함 — 파일이 바뀌면 다른 키), src 는 기기에 받아 둔 파일(Blob).
  */
-export function getPcm(ctx: BaseAudioContext, key: string, src: string, signal?: AbortSignal): Promise<Pcm> {
+export function getPcm(ctx: BaseAudioContext, key: string, src: Blob, signal?: AbortSignal): Promise<Pcm> {
   const hit = entries.get(key);
   if (hit) {
     hit.last = performance.now();

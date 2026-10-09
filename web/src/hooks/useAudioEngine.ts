@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Job } from "../types";
 import { BASE } from "../api";
-import { cachedUrl, download, removeFromDevice } from "../lib/audioCache";
+import { cachedBlob, download, removeFromDevice } from "../lib/audioCache";
 import { audioCtx } from "../lib/audioCtx";
 import { stemFilesOf } from "../lib/stems";
 import { useSubdiv } from "./useLiveMetronome";
@@ -125,11 +125,13 @@ const DEFAULT_STEM_VOL = 0.5;
 /** 한 곡의 재생 자원: 받은 파일 → 풀어 둔 PCM → 재생기 */
 interface Loaded {
   real: Track[];
-  /** 트랙별 blob: 주소 (기기에 저장된 것). 다 받기 전엔 null */
-  urls: (string | null)[];
+  /** 트랙별 받아 둔 파일. 다 받기 전엔 null */
+  blobs: (Blob | null)[];
   tp: BufferTransport | null;
   building: Promise<BufferTransport | null> | null;
   alive: boolean;
+  /** 곡을 떠나면 끊는다 — 아직 안 푼 트랙은 풀지 않는다 (풀기는 전역으로 하나씩이라 다음 곡을 막는다) */
+  signal: AbortSignal;
 }
 
 export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
@@ -263,7 +265,8 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     setDuration(j?.duration ?? 0);
     setPreparing(null);
     setReady(false);
-    const loaded: Loaded = { real, urls: real.map(() => null), tp: null, building: null, alive: true };
+    const abort = new AbortController();
+    const loaded: Loaded = { real, blobs: real.map(() => null), tp: null, building: null, alive: true, signal: abort.signal };
     loadedRef.current = loaded;
     if (!real.length) {
       setCache({ state: "none", pct: 0 });
@@ -277,14 +280,13 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     endedRef.current = onEnded;
 
     // 기기에 받아 둔 파일이 있는지 본다. 없으면 '기기에 저장' 을 누르거나 ▶ 를 누를 때 받는다.
-    const abort = new AbortController();
     // 확정 메트로놈은 4비트·8비트 파일이 따로라, 안 쓰는 쪽도 받아 둔다 (바꿔도 다시 안 받게)
     const prefetchAltClick = async () => {
       if (!j) return;
       const mine = real.find((t) => t.key === "click")?.url;
       const other = tracksOf(j, subdivRef.current === 2 ? 1 : 2).find((t) => t.key === "click" && !t.virtual);
       if (!other || other.url === mine || !loaded.alive) return;
-      if (await cachedUrl(other.url)) return;
+      if (await cachedBlob(other.url)) return;
       try {
         await download(other.url, undefined, abort.signal, "low");
       } catch {
@@ -300,9 +302,9 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
         try {
           for (let i = 0; i < n; i++) {
             if (!loaded.alive) return false;
-            if (loaded.urls[i]) continue;
+            if (loaded.blobs[i]) continue;
             setCache({ state: "downloading", pct: Math.min(99, Math.floor((i / n) * 100)) });
-            loaded.urls[i] = await download(
+            loaded.blobs[i] = await download(
               real[i].url,
               (g, tot) =>
                 loaded.alive &&
@@ -328,9 +330,9 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     saveRef.current = save;
     setCache({ state: "checking", pct: 0 });
     void (async () => {
-      const hits = await Promise.all(real.map((t) => cachedUrl(t.url)));
+      const hits = await Promise.all(real.map((t) => cachedBlob(t.url)));
       if (!loaded.alive) return;
-      hits.forEach((h, i) => (loaded.urls[i] = h));
+      hits.forEach((h, i) => (loaded.blobs[i] = h));
       if (hits.every(Boolean)) {
         setCache({ state: "cached", pct: 100 });
         void prefetchAltClick();
@@ -384,7 +386,7 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     if (l.tp) return l.tp;
     if (l.building) return l.building;
     const job = (async () => {
-      if (l.urls.some((u) => !u)) {
+      if (l.blobs.some((b) => !b)) {
         const ok = await (saveRef.current?.() ?? Promise.resolve(false));
         if (!ok || !l.alive) return null;
       }
@@ -394,7 +396,7 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
       const pcms: Pcm[] = [];
       // 캐시(lib/pcmCache)에 있으면 바로, 없으면 푼다 — 푸는 것은 전역으로 한 번에 하나씩
       for (let i = 0; i < total; i++) {
-        pcms.push(await getPcm(ctx, l.real[i].url, l.urls[i]!));
+        pcms.push(await getPcm(ctx, l.real[i].url, l.blobs[i]!, l.signal));
         if (!l.alive) return null;
         setPreparing({ done: i + 1, total });
       }
@@ -424,7 +426,7 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     try {
       return await job;
     } catch (e) {
-      console.warn("재생 준비 실패", e);
+      if ((e as { name?: string })?.name !== "AbortError") console.warn("재생 준비 실패", e);
       return null;
     } finally {
       if (l.building === job) l.building = null;
@@ -448,16 +450,16 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     const ctx = audioCtx();
     for (const t of ts) {
       if (hasPcm(t.url)) continue;
-      let u = await cachedUrl(t.url);
-      if (!u) {
+      let b = await cachedBlob(t.url);
+      if (!b) {
         try {
-          u = await download(t.url, undefined, undefined, "low");
+          b = await download(t.url, undefined, undefined, "low");
         } catch {
           return;
         }
       }
       try {
-        await getPcm(ctx, t.url, u);
+        await getPcm(ctx, t.url, b);
       } catch {
         return;
       }
@@ -521,8 +523,12 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     } catch {
       /* Web Audio 미지원 — 재생할 수 없다 */
     }
+    const l = loadedRef.current;
     const tp = await prepare();
-    if (!tp) throw new Error("재생할 트랙을 준비하지 못했습니다. 기기에 저장을 다시 시도해 주세요.");
+    if (!tp) {
+      if (loadedRef.current !== l) return; // 기다리는 사이 다른 곡으로 옮겼다
+      throw new Error("재생할 트랙을 준비하지 못했습니다. 기기에 저장을 다시 시도해 주세요.");
+    }
     // 한 번에 한 곳에서만 소리가 나게 한다
     liveEngines.forEach((e) => {
       if (e !== selfRef.current) e.stop();
