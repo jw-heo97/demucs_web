@@ -14,10 +14,10 @@ interface ClickEvent {
 }
 
 const SOUND: Record<ClickEvent["kind"], { freq: number; peak: number; length: number }> = {
-  accent: { freq: 1500, peak: 0.35, length: 0.07 },
-  beat: { freq: 1000, peak: 0.35, length: 0.07 },
+  accent: { freq: 1500, peak: 0.5, length: 0.07 },
+  beat: { freq: 1000, peak: 0.5, length: 0.07 },
   // 박과 헷갈리지 않게 더 높고 짧고 작게 (서버 믹스다운의 8비트와 같은 소리)
-  sub: { freq: 2200, peak: 0.16, length: 0.04 },
+  sub: { freq: 2200, peak: 0.23, length: 0.04 },
 };
 
 const LS_SUBDIV = "metronome.subdiv";

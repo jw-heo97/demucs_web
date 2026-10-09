@@ -103,8 +103,12 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
       return;
     }
     const stems = idx.map((i) => tracks[i].key);
+    // 스템은 기본 볼륨이 50 이라 그대로 넘기면 파일이 작게 나온다. 들리는 균형은 그대로 두고
+    // 가장 큰 스템이 100 이 되게 키운다 (넘치면 서버가 전체를 낮춘다).
+    const top = Math.max(0, ...idx.filter((i) => !tracks[i].virtual).map((i) => vol[i] ?? 1));
+    const scale = top > 0 ? 1 / top : 1;
     const gains: Record<string, number> = {};
-    idx.forEach((i) => (gains[tracks[i].key] = vol[i] ?? 1));
+    idx.forEach((i) => (gains[tracks[i].key] = (vol[i] ?? 1) * scale));
     setMixing(true);
     setHint("");
     setNote("믹스 만드는 중…");

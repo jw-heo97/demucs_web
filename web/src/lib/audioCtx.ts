@@ -14,7 +14,7 @@ export function scheduleClick(
   dest: AudioNode,
   opts: { peak?: number; length?: number } = {},
 ): OscillatorNode {
-  const peak = opts.peak ?? 0.35;
+  const peak = opts.peak ?? 0.5;
   const length = opts.length ?? 0.07;
   const osc = ctx.createOscillator();
   const g = ctx.createGain();
