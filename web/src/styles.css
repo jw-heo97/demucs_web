@@ -282,3 +282,16 @@ table.grid input, table.grid select { padding: 5px 7px; font-size: .82rem; }
 /* 보기 전용 기기 안내 띠 */
 .viewonly { margin: 10px 0 2px; padding: 8px 12px; border-radius: 8px; font-size: .84rem;
   background: color-mix(in srgb, #c98a00 14%, transparent); color: #c98a00; border: 1px solid color-mix(in srgb, #c98a00 35%, transparent); }
+
+/* 마디 이동 (재생 줄·미니 바) */
+.barjump { display: inline-flex; align-items: center; gap: 3px; }
+.barjump input { width: 62px; text-align: center; padding: 5px 4px; font-variant-numeric: tabular-nums; -moz-appearance: textfield; }
+.barjump input::-webkit-outer-spin-button, .barjump input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.barjump button { padding: 4px 9px; font-size: .8rem; }
+.barjump .meta { white-space: nowrap; max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+.minibar .barjump { flex: 1; min-width: 0; }
+.minibar .barjump .meta { flex: 1; }
+@media (pointer: coarse) {
+  .barjump input { width: 74px; }
+  .barjump button { min-height: 40px; padding: 0 12px; font-size: .9rem; }
+}
