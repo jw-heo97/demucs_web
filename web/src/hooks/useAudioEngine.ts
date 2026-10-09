@@ -107,9 +107,9 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
   const [muted, setMuted] = useState<boolean[]>([]);
   const [solo, setSolo] = useState<boolean[]>([]);
   const [vol, setVol] = useState<number[]>([]);
-  /** 기기 저장 상태: 확인 중 / 받는 중(pct) / 재생 중이라 쉬는 중 / 저장됨 / 스트리밍만(받기 실패) */
+  /** 기기 저장 상태: 확인 중 / 저장 안 함(스트리밍) / 받는 중(pct) / 재생 중이라 쉬는 중 / 저장됨 / 받기 실패 */
   const [cache, setCache] = useState<{
-    state: "checking" | "downloading" | "waiting" | "cached" | "stream";
+    state: "checking" | "none" | "downloading" | "waiting" | "cached" | "stream";
     pct: number;
   }>({
     state: "checking",
@@ -142,6 +142,8 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
   }, []);
   const rafRef = useRef(0);
   const loopRef = useRef<{ start: number; end: number } | null>(null);
+  // 지금 곡을 기기에 저장하기 시작 (트랙을 불러올 때 만들어진다)
+  const saveRef = useRef<(() => void) | null>(null);
   const loopEndRef = useRef<((lp: { start: number; end: number }) => void) | null>(null);
 
   useEffect(() => {
@@ -224,11 +226,11 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
         if (h) swapTo[i] = h;
       });
 
-      // 뒤에서 받기 — 듣고 보는 게 먼저다. 원격(LTE·Tailscale)에서 4개를 한꺼번에 최대 속도로
-      // 받으면 회선을 다 차지해 재생 스트리밍·악보 이미지가 멈춰 '저장하는 동안 아무것도 못 했다'.
+      // 기기에 저장은 믹서의 '기기에 저장' 을 눌렀을 때만 한다(saveToDevice). 평소에는 스트리밍.
+      // 받는 동안에도 듣고 보는 게 먼저다 — 원격(LTE·Tailscale)에서 4개를 한꺼번에 최대 속도로
+      // 받으면 회선을 다 차지해 재생 스트리밍·악보 이미지가 멈췄다.
       //  - 한 번에 하나씩, 브라우저에 낮은 우선순위로 요청한다
-      //  - 재생 중에는 받기를 멈추고(스트리밍에 회선을 준다) 멈추면 그 파일부터 다시 받는다
-      //  - 곡을 연 직후 화면·악보·첫 재생 준비가 먼저 끝나게 잠깐 기다렸다 시작한다
+      //  - 재생 중에는 받기를 멈추고(스트리밍에 회선을 준다) 멈추면 받던 데부터 이어 받는다
       const queue = real.map((_, i) => i).filter((i) => !hits[i]);
       const n = real.length;
       let doneCount = n - queue.length;
@@ -266,8 +268,9 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
           }
           if (alive && !queue.length) trySwap();
         } catch {
-          // 받기에 실패해도 스트리밍으로는 계속 들을 수 있다
+          // 받기에 실패해도 스트리밍으로는 계속 들을 수 있다 — 버튼으로 다시 시도할 수 있게
           if (alive) setCache({ state: "stream", pct: 0 });
+          started = false;
         } finally {
           running = false;
         }
@@ -288,11 +291,16 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
         }, 3000);
       };
       abort.signal.addEventListener("abort", () => clearTimeout(resumeTimer));
-      created[0].addEventListener("play", onPlayEv);
-      created[0].addEventListener("pause", onPauseEv);
-      show(0);
-      await new Promise((r) => setTimeout(r, 2000));
-      void run();
+      let started = false;
+      saveRef.current = () => {
+        if (started || !alive) return;
+        started = true;
+        created[0].addEventListener("play", onPlayEv!);
+        created[0].addEventListener("pause", onPauseEv!);
+        if (created[0].paused) void run();
+        else show(0); // 재생 중이면 멈춘 뒤에 받는다
+      };
+      setCache({ state: "none", pct: Math.floor((doneCount / n) * 100) });
     })().catch(() => {
       if (alive) setCache({ state: "stream", pct: 0 });
     });
@@ -310,6 +318,7 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     setDuration(j?.duration ?? 0);
     return () => {
       alive = false;
+      saveRef.current = null;
       abort.abort();
       if (onPlayEv) m.removeEventListener("play", onPlayEv);
       if (onPauseEv) m.removeEventListener("pause", onPauseEv);
@@ -479,6 +488,8 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     solo,
     vol,
     cache,
+    /** 지금 곡의 스템을 기기에 저장 (이후 정지·이동·재생 때 네트워크를 안 탄다) */
+    saveToDevice: () => saveRef.current?.(),
     setRate,
     play,
     prime,
