@@ -17,7 +17,7 @@ import {
   type ClickSound,
 } from "../lib/audioCtx";
 import { ScrollDial } from "./ScrollDial";
-import { CALIB_COUNT, CALIB_FREQ, calibSlotMs, findBeeps, lateness, startMic, type Recording } from "../lib/micCalib";
+import { CALIB_COUNT, calibFreq, calibSlotMs, findBeeps, lateness, startMic, type Recording } from "../lib/micCalib";
 import { measureDeviceLatency, readDeviceLatency, type DeviceLatency } from "../lib/deviceLatency";
 import type { Bar } from "../types";
 import { barAtTime, stepOf } from "../lib/songmap";
@@ -338,7 +338,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
       ctx.currentTime + (serverMs - (tg.serverNow() + (withDelay ? deviceMsRef.current : 0))) / 1000;
     if (slot >= 0)
       for (let k = 0; k < CALIB_COUNT; k++)
-        scheduleClick(ctx, toCtx(at + k * 1000 + slot * slotMs, true), CALIB_FREQ, metroOut(ctx), {
+        scheduleClick(ctx, toCtx(at + k * 1000 + slot * slotMs, true), calibFreq(slot), metroOut(ctx), {
           sound: "beep",
           peak: 0.9,
           length: 0.04,
@@ -352,7 +352,12 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
     const rec = micRef.current.stop();
     micRef.current = null;
     setCalibrating(false);
-    const late = lateness(findBeeps(rec.samples, rec.firstFrame, rec.sr), order.length, expected, slotMs, slot);
+    const late = lateness(
+      order.map((_, j) => findBeeps(rec.samples, rec.firstFrame, rec.sr, calibFreq(j))),
+      expected,
+      slotMs,
+      slot,
+    );
     const mine = late[slot];
     if (mine == null) {
       setHint("내 기기 소리를 마이크로 못 들었습니다. 소리를 키우고 다시 해 보세요.");
@@ -426,46 +431,61 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
    * 기준 위치를 재서 맞춘다. 소리가 나기 시작한 뒤에는 손대지 않는다(재생 중 보정은 소리를 흔든다).
    */
   const mixPrep = useRef<{ id: string; pos: number; clicks: { t: number; freq: number }[] } | null>(null);
-  const PREROLL = 1.5;
-  function mixedRoomStart(s: RoomState) {
-    // 준비해 둔 예비박 파일은 그 출발 한 번에만 쓴다 (속도·반복 구간 변경 같은 이어가기는 아래 '합류')
+  const PREROLL = 0.3;
+
+  /**
+   * 함께 연습 출발 — 버퍼 재생(lib/bufferPlayer). 음악·예비박 모두 마이크로 맞춘 삐와 똑같은 계산으로
+   * 'AudioContext 시각 몇 초에 곡 위치 몇 초' 를 예약한다. <audio> 의 재생 위치 값을 쓰지 않으므로
+   * 기기마다 그 값이 틀리는 정도가 달라도 상관없다 — 삐가 맞으면 음악도 맞는다.
+   * 늦게 들어왔거나 메시지가 늦었으면 지금 자리로 바로 합류한다(이때도 같은 계산이라 맞는다).
+   */
+  async function mixedRoomStart(s: RoomState) {
     const prep = mixPrep.current && Math.abs(mixPrep.current.pos - s.pos) < 0.01 ? mixPrep.current : null;
     mixPrep.current = null;
-    const first = Math.min(s.pos, prep?.clicks[0]?.t ?? s.pos);
-    // 이 기기 보정: 소리가 늦게 나는 만큼(블루투스·내 기기 지연) + 재생 위치가 실제 소리보다
-    // 뒤처지는 만큼(아이패드 자동 측정) 앞서 간다
-    const g = (deviceMsRef.current + (devLat?.ms ?? 0)) / 1000;
-    const songAt = (ms: number) => s.pos + ((ms - s.at) / 1000) * s.rate + g * s.rate;
-    const startSong = Math.max(-9.5, first - PREROLL);
-    const startServer = s.at + ((startSong - g * s.rate - s.pos) / s.rate) * 1000;
-    const a = engine.audios.current[0];
-    const wait = startServer - tg.serverNow();
-    if (!a || !prep || wait < 50) {
-      // 준비가 안 됐거나 늦었다 — 지금 위치로 바로 합류 (소리가 나는 중에 맞춘다)
-      engine.seek(Math.max(0, songAt(tg.serverNow() + 300)));
-      window.setTimeout(() => void engine.playRaw(), 300);
+    let ctx: AudioContext;
+    try {
+      ctx = audioCtx();
+      void ctx.resume();
+    } catch {
       return;
     }
-    a.currentTime = startSong;
-    setCounting(prep.clicks.length);
-    timers.current.t = window.setTimeout(async () => {
-      await engine.playRaw();
-      // 조용한 앞부분에서만 맞춘다: 첫 소리 0.2초 전까지
-      const id = window.setInterval(() => {
-        const now = tg.serverNow();
-        const want = songAt(now);
-        const cur = a.currentTime;
-        const left = prep.clicks.filter((c) => c.t > cur - 0.02).length;
-        setCounting(Math.min(prep.clicks.length, left));
-        if (cur > first - 0.2) {
-          clearInterval(id);
-          return;
-        }
-        if (!a.paused && !a.seeking && Math.abs(cur - want) > 0.006) a.currentTime = want + 0.012;
-      }, 25);
-      timers.current.i = id;
-    }, Math.max(0, wait - 30));
+    const bp = await engine.enterBuffer();
+    if (!bp) return;
+    const dev = deviceMsRef.current; // 마이크로 맞춘 '내 기기 지연'
+    // 곡 시각 t 가 소리 나야 할 AudioContext 시각 — 삐를 예약하는 계산과 같다
+    const ctxAt = (t: number) =>
+      ctx.currentTime + (s.at + ((t - s.pos) / s.rate) * 1000 - (tg.serverNow() + dev)) / 1000;
+    const clicks = prep?.clicks ?? [];
+    const peak = 0.9 * Math.max(1, metroVol);
+    timers.current.oscs = [];
+    for (const c of clicks) {
+      const w = ctxAt(c.t);
+      if (w > ctx.currentTime + 0.01) timers.current.oscs.push(scheduleClick(ctx, w, c.freq, metroOut(ctx), { peak }));
+    }
+    const startCtx = ctxAt(s.pos);
+    if (startCtx > ctx.currentTime + 0.05) bp.startAt(startCtx, s.pos);
+    else {
+      // 이미 지났다 — 지금 자리에서 합류
+      const when = ctx.currentTime + 0.08;
+      bp.startAt(when, s.pos + (when - startCtx) * s.rate);
+    }
+    metro.holdUntil(nextBeatAfter(bars, s.pos) - 0.02);
+    void engine.playRaw(); // 엔진을 '재생 중' 으로 (버퍼는 이미 예약됐다)
+    if (clicks.length) {
+      setCounting(clicks.length);
+      timers.current.i = window.setInterval(() => {
+        const cur = bp.currentTime;
+        const left = clicks.filter((c) => c.t > cur - 0.02).length;
+        setCounting(Math.min(clicks.length, left));
+        if (!left && timers.current.i) clearInterval(timers.current.i);
+      }, 50);
+    }
   }
+
+  // 함께 연습을 나가면 버퍼 재생을 끝내고 합친 <audio> 로 돌아간다 (속도를 바꿔도 음정이 유지되는 쪽)
+  useEffect(() => {
+    if (!tg.joined) engine.leaveBuffer();
+  }, [tg.joined]);
 
   function applyRoomState(s: RoomState) {
     cancelCount();
@@ -483,7 +503,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
       return;
     }
     if (engine.canMix) {
-      mixedRoomStart(s);
+      void mixedRoomStart(s);
       return;
     }
     let ctx: AudioContext;
@@ -519,12 +539,13 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
     engine.pause();
     mixPrep.current = null;
     if (engine.canMix) {
-      // 합친 재생: 예비박 파일을 끼워 두고 시계를 다시 잰 뒤 준비됐다고 알린다
+      // 버퍼 재생을 준비하고(합친 음원 → AudioBuffer) 시계를 다시 잰 뒤 준비됐다고 알린다
       const { clicks } = countInClicks(pos, nCount);
       try {
-        const ok = await engine.prepareCountIn(pos, clicks, 0.9 * Math.max(1, metroVol), pos);
+        const bp = await engine.enterBuffer();
         if (prepRef.current !== id) return;
-        if (ok) {
+        if (bp) {
+          bp.currentTime = pos;
           metro.holdUntil(nextBeatAfter(bars, pos) - 0.02);
           mixPrep.current = { id, pos, clicks };
           await tg.resync();
@@ -654,7 +675,11 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
   }
 
   const seekTo = (t: number) => (tg.joined ? tg.send({ t: "seek", pos: t }) : engine.seek(t));
-  const setRateShared = (r: number) => (tg.joined ? tg.send({ t: "rate", rate: r }) : engine.setRate(r));
+  const setRateShared = (r: number) => {
+    if (!tg.joined) return engine.setRate(r);
+    if (Math.abs(r - 1) > 1e-3) setHint("함께 연습에서는 속도를 바꾸면 음정도 같이 바뀝니다 (정확히 맞추려고 쓰는 재생 방식의 한계).");
+    tg.send({ t: "rate", rate: r });
+  };
 
   /**
    * 지금 들리는 트랙(음소거·솔로·볼륨 반영)만 서버에서 합쳐 한 파일로 받는다.

@@ -5,6 +5,7 @@ import { cachedUrl, download, removeFromDevice } from "../lib/audioCache";
 import { audioCtx } from "../lib/audioCtx";
 import { stemFilesOf } from "../lib/stems";
 import { useSubdiv } from "./useLiveMetronome";
+import { BufferPlayer, pcmToBuffer } from "../lib/bufferPlayer";
 import {
   PRE,
   makeCountInWav,
@@ -49,6 +50,11 @@ interface Mixed {
   active: boolean;
   building: Promise<void> | null;
   buildingSig: string;
+  /** 함께 연습: 합친 음원을 Web Audio 버퍼로 (lib/bufferPlayer) */
+  buffer: AudioBuffer | null;
+  bufSig: string;
+  bp: BufferPlayer | null;
+  bufActive: boolean;
 }
 
 export interface Track {
@@ -338,6 +344,7 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
       mixRef.current = {
         el, proxy: songProxy(el), nodes: mn, sig: "", data: null, fullUrl: null, segUrl: null,
         usingSeg: false, active: false, building: null, buildingSig: "",
+        buffer: null, bufSig: "", bp: null, bufActive: false,
       };
       setMixOn(false);
       setMixBusy(false);
@@ -498,6 +505,7 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
       setPlaying(false);
       onEndedRef.current?.();
     };
+    endedHandlerRef.current = onEnded;
     m.addEventListener("loadedmetadata", onMeta);
     m.addEventListener("ended", onEnded);
     mixed.el.addEventListener("ended", onEnded);
@@ -561,10 +569,15 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
   }, [mixOf]);
   useEffect(applyGains, [applyGains]);
 
+  const endedHandlerRef = useRef<() => void>(() => {});
   const rateRef = useRef(rate);
   rateRef.current = rate;
   useEffect(() => {
-    const els = [...trackElsRef.current, ...(mixRef.current ? [mixRef.current.el] : [])];
+    const els: { preservesPitch: boolean; playbackRate: number }[] = [
+      ...trackElsRef.current,
+      ...(mixRef.current ? [mixRef.current.el] : []),
+      ...(mixRef.current?.bp ? [mixRef.current.bp] : []),
+    ];
     els.forEach((a) => {
       // 음정을 유지한 채 속도만 바꾼다 (연습용이라 피치가 변하면 곤란하다)
       a.preservesPitch = true;
@@ -721,7 +734,22 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
       m.data = data;
       m.sig = sig;
       m.fullUrl = makeFullWav(data);
-      if (m.active) {
+      if (m.bufActive && m.bp) {
+        // 함께 연습 중: 새 버퍼로 바꿔 같은 자리에서 이어간다
+        const bp = m.bp;
+        const pos = bp.currentTime;
+        const wasPlaying = !bp.paused;
+        bp.pause();
+        m.buffer = pcmToBuffer(audioCtx(), data.pcm, data.frames, data.sr);
+        m.bufSig = sig;
+        const nb = new BufferPlayer(audioCtx(), m.buffer, m.nodes[1]);
+        nb.playbackRate = rateRef.current;
+        nb.currentTime = pos;
+        nb.addEventListener("ended", () => endedHandlerRef.current());
+        m.bp = nb;
+        audiosRef.current = [nb as unknown as HTMLAudioElement];
+        if (wasPlaying) nb.startAt(audioCtx().currentTime + 0.03, pos);
+      } else if (m.active) {
         const pos = m.proxy.currentTime;
         const wasPlaying = !m.el.paused;
         switchSrc(m, m.fullUrl, pos, false);
@@ -798,6 +826,48 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     },
     [],
   );
+
+  /**
+   * 함께 연습용 버퍼 재생으로 바꾼다 (합친 음원 → AudioBuffer). 같은 자리에서 이어갈 수 있게 지금 위치를
+   * 넘겨받는다. 성공하면 버퍼 재생기를 돌려준다
+   */
+  const enterBuffer = useCallback(async (): Promise<BufferPlayer | null> => {
+    const m = mixRef.current;
+    if (!m || !canMix() || !m.nodes[1]) return null;
+    await ensureMix();
+    activate(m);
+    if (!m.data) return null;
+    if (!m.buffer || m.bufSig !== m.sig) {
+      m.buffer = pcmToBuffer(audioCtx(), m.data.pcm, m.data.frames, m.data.sr);
+      m.bufSig = m.sig;
+      m.bp = null;
+    }
+    if (!m.bp) {
+      m.bp = new BufferPlayer(audioCtx(), m.buffer, m.nodes[1]);
+      m.bp.addEventListener("ended", () => endedHandlerRef.current());
+    }
+    if (!m.bufActive) {
+      const pos = Math.max(0, audiosRef.current[0]?.currentTime ?? 0);
+      audiosRef.current.forEach((a) => a.pause());
+      m.el.pause();
+      m.bp.playbackRate = rateRef.current;
+      m.bp.currentTime = pos;
+      audiosRef.current = [m.bp as unknown as HTMLAudioElement];
+      m.bufActive = true;
+    }
+    return m.bp;
+  }, []);
+  /** 버퍼 재생을 끝내고 합친 <audio> 로 돌아간다 (같은 자리) */
+  const leaveBuffer = useCallback(() => {
+    const m = mixRef.current;
+    if (!m?.bufActive || !m.bp) return;
+    const pos = Math.max(0, m.bp.currentTime);
+    m.bp.pause();
+    m.bufActive = false;
+    audiosRef.current = [m.proxy];
+    m.proxy.currentTime = pos;
+    setPlaying(false);
+  }, []);
 
   const playCountIn = useCallback(async (pos: number, clicks: CountInClick[], peak: number) => {
     const s0 = Math.min(pos, clicks.length ? clicks[0].t - 0.15 : pos);
@@ -955,5 +1025,8 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     prepareCountIn,
     /** 지금 끼워진 파일 그대로 재생 (예비박 파일을 곡 전체로 바꾸지 않는다) — 함께 연습 출발용 */
     playRaw: () => startPlaying(),
+    /** 함께 연습: 합친 음원을 버퍼로 재생 (삐와 같은 방식으로 정확한 시각에 시작) */
+    enterBuffer,
+    leaveBuffer,
   };
 }
