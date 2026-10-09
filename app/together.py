@@ -251,8 +251,9 @@ async def handle(ws: WebSocket, job_id: str) -> None:
             elif t == "seek":
                 pos = _num(msg.get("pos"), 0.0, 0.0, 86400.0)
                 if room.state["playing"] or room.state.get("prepare"):
-                    # 재생 중 이동: 새 자리를 모두 받아 둔 뒤 같이 이어간다 (예비박 없이)
-                    await room.prepare(pos, 0, GO_LEAD, name)
+                    # 재생 중 이동: 새 자리를 모두 받아 둔 뒤 같이 이어간다 (예비박 없이).
+                    # 합친 재생은 조용한 앞부분(1.5초)에서 위치를 맞추므로 그만큼 여유를 더 둔다
+                    await room.prepare(pos, 0, GO_LEAD + 1.7, name)
                 else:
                     room.state.update(pos=pos, at=now_ms(), by=name)
                     await room.push_state()
