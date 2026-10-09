@@ -492,10 +492,7 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
               if (!a.paused) a.pause();
               continue;
             }
-            // 박을 맞춰야 하는 트랙 — 사용자 트랙(녹음)과 확정 메트로놈 파일. 스템끼리는 0.15초까지
-            // 봐 주지만(덜 들리고, 자주 맞추면 소리가 튄다) 클릭은 수십 ms 만 어긋나도 들린다.
-            // 예전엔 메트로놈 파일도 0.15초 기준이라 재생할 때마다 맞기도 안 맞기도 했다.
-            const custom = !!realRef.current[i]?.trackId || realRef.current[i]?.key === "click";
+            const custom = !!realRef.current[i]?.trackId;
             // 재생 중인 <audio> 의 위치를 옮기거나 뒤늦게 play() 하면 디코더가 다시 준비되는 동안
             // (~80ms) 멈춰 있어 그만큼 늘 뒤처진다 — 스템끼리는 함께 play() 해서 지연이 같아 안 보인다.
             // 사용자 트랙(녹음)은 박을 맞추는 게 목적이라, 그 지연만큼 앞을 겨냥해 옮기고
@@ -519,7 +516,7 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
               lastFix.current[i] = now;
               if (custom) seekCheck.current[i] = { at: now + 600 };
             } else {
-              const tol = realRef.current[i]?.key === "click" ? 0.02 : custom ? 0.04 : 0.15;
+              const tol = custom ? 0.04 : 0.15;
               if (Math.abs(a.currentTime - want) > tol && now - (lastFix.current[i] ?? 0) > 1000) {
                 a.currentTime = want + (custom ? seekLag.current : 0);
                 lastFix.current[i] = now;
