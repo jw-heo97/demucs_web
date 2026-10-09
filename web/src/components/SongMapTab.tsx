@@ -446,7 +446,20 @@ export function SongMapTab({ jobs, onChanged }: Props) {
               if (t != null) engine.seek(t);
             }}
           >
-            <button className="ghost" disabled={busy || !scoreData?.marks.length} onClick={buildFromScore}>
+            <button
+              className="ghost"
+              disabled={busy || !scoreData?.marks.length}
+              onClick={buildFromScore}
+              title={
+                !scoreData
+                  ? "먼저 이 곡의 악보 PDF 를 올려 주세요."
+                  : !scoreData.marks.length
+                    ? "악보에서 구간 표시(Intro·A·サビ 같은 상자)를 찾지 못했습니다. 송 맵을 직접 만들어 주세요."
+                    : busy
+                      ? "다른 작업이 끝나길 기다리는 중입니다."
+                      : `악보의 구간 ${scoreData.marks.length}개로 송 맵을 만들어 새 버전에 저장합니다.`
+              }
+            >
               악보로 송 맵 만들기
             </button>
           </ScorePanel>
