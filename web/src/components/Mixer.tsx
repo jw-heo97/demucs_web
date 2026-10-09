@@ -17,6 +17,7 @@ import {
   type ClickSound,
 } from "../lib/audioCtx";
 import { ScrollDial } from "./ScrollDial";
+import { CALIB_COUNT, CALIB_FREQ, calibSlotMs, findBeeps, lateness, startMic, type Recording } from "../lib/micCalib";
 import { measureDeviceLatency, readDeviceLatency, type DeviceLatency } from "../lib/deviceLatency";
 import type { Bar } from "../types";
 import { barAtTime, stepOf } from "../lib/songmap";
@@ -65,19 +66,21 @@ const LS_DEVICE = "together.deviceMs";
 const LOOP_GAP = 0.5;
 /** 함께 연습 버튼 — 아직 다듬는 중이라 숨겨 둔다 (서버도 TOGETHER=1 일 때만 연다) */
 const TOGETHER_ENABLED = true;
+/** 내 기기 지연 범위(ms) — 블루투스는 200ms 를 넘기도 한다 */
+const DEVICE_LIMIT = 300;
 /** 플레이리스트에서 다음 곡으로 넘어가 자동으로 시작하기 전에 쉬는 시간(초) */
 const AUTO_START_DELAY = 1.5;
 function useDeviceDelay(): [number, (ms: number) => void] {
   const [v, setV] = useState(() => {
     try {
       const n = Number(localStorage.getItem(LS_DEVICE));
-      return Number.isFinite(n) ? Math.max(-100, Math.min(100, n)) : 0;
+      return Number.isFinite(n) ? Math.max(-DEVICE_LIMIT, Math.min(DEVICE_LIMIT, n)) : 0;
     } catch {
       return 0;
     }
   });
   const set = (ms: number) => {
-    const n = Math.max(-100, Math.min(100, Math.round(ms) || 0));
+    const n = Math.max(-DEVICE_LIMIT, Math.min(DEVICE_LIMIT, Math.round(ms) || 0));
     setV(n);
     try {
       localStorage.setItem(LS_DEVICE, String(n));
@@ -293,7 +296,84 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
         );
       else setHint("");
     },
+    {
+      onCalib: (at, order, by) => void runCalib(at, order, by),
+      onAdjust: (ms, by) => {
+        const v = Math.max(-DEVICE_LIMIT, Math.min(DEVICE_LIMIT, Math.round(deviceMsRef.current + ms)));
+        setDeviceMs(v);
+        setHint(`${by} 님의 마이크 측정으로 내 기기 지연을 ${ms > 0 ? "+" : ""}${Math.round(ms)}ms 조정했습니다 (지금 ${v}ms).`);
+      },
+    },
   );
+
+  // ---------------- 마이크로 자동 맞춤 ----------------
+  const micRef = useRef<Recording | null>(null);
+  const [calibrating, setCalibrating] = useState(false);
+  /** 누른 기기: 마이크를 켜고(제스처 안) 모두에게 삐를 내라고 알린다 */
+  async function startCalib() {
+    if (playing || counting || calibrating) return;
+    try {
+      const ctx = audioCtx();
+      void ctx.resume();
+      micRef.current = await startMic(ctx);
+      setCalibrating(true);
+      setHint("마이크로 듣는 중… 모든 기기가 차례로 '삐' 를 냅니다. 조용히 해 주세요.");
+      tg.send({ t: "calib" });
+    } catch (e) {
+      setHint(`마이크를 쓸 수 없습니다: ${(e as Error).message}`);
+    }
+  }
+  /** 모든 기기: 내 칸에 삐를 낸다. 누른 기기는 끝난 뒤 듣고 각자에게 보정값을 보낸다 */
+  async function runCalib(at: number, order: string[], by: string) {
+    let ctx: AudioContext;
+    try {
+      ctx = audioCtx();
+      await ctx.resume();
+    } catch {
+      return;
+    }
+    const slot = order.indexOf(tg.me);
+    const slotMs = calibSlotMs(order.length);
+    const toCtx = (serverMs: number, withDelay: boolean) =>
+      ctx.currentTime + (serverMs - (tg.serverNow() + (withDelay ? deviceMsRef.current : 0))) / 1000;
+    if (slot >= 0)
+      for (let k = 0; k < CALIB_COUNT; k++)
+        scheduleClick(ctx, toCtx(at + k * 1000 + slot * slotMs, true), CALIB_FREQ, metroOut(ctx), {
+          sound: "beep",
+          peak: 0.9,
+          length: 0.04,
+        });
+    if (by !== tg.me || !micRef.current) return;
+    // 예정 시각을 이 순간 기준으로 고정해 둔다 (지연 보정 없이 — '원래 울려야 할 때')
+    const base = { ctx: ctx.currentTime, server: tg.serverNow() };
+    const expected = (j: number, k: number) => base.ctx + (at + k * 1000 + j * slotMs - base.server) / 1000;
+    const endIn = at + CALIB_COUNT * 1000 + 700 - tg.serverNow();
+    await new Promise((r) => setTimeout(r, Math.max(0, endIn)));
+    const rec = micRef.current.stop();
+    micRef.current = null;
+    setCalibrating(false);
+    const late = lateness(findBeeps(rec.samples, rec.firstFrame, rec.sr), order.length, expected, slotMs, slot);
+    const mine = late[slot];
+    if (mine == null) {
+      setHint("내 기기 소리를 마이크로 못 들었습니다. 소리를 키우고 다시 해 보세요.");
+      return;
+    }
+    const parts: string[] = [];
+    order.forEach((id, j) => {
+      if (j === slot) return;
+      const name = tg.members.find((m) => m.id === id)?.name ?? "다른 기기";
+      const v = late[j];
+      if (v == null) {
+        parts.push(`${name}: 못 들음`);
+        return;
+      }
+      const d = Math.round(v - mine);
+      parts.push(`${name}: ${d > 0 ? "+" : ""}${d}ms ${d > 0 ? "늦음" : d < 0 ? "빠름" : ""}`);
+      // 늦게 들리면 그 기기가 그만큼 앞서 내야 한다 → 그 기기의 내 기기 지연을 올린다
+      if (Math.abs(d) >= 3) tg.send({ t: "adjust", id, ms: d });
+    });
+    setHint(`마이크 측정 결과 (내 기기 기준) — ${parts.join(" · ")}. 늦은 기기는 그만큼 앞당겼습니다.`);
+  }
 
   /**
    * 소리로 맞춤 확인: 서버 시각 beepAt 부터 1초마다 클릭, 끌 때까지. 음악 시작과 같은 계산(서버 시각 →
@@ -504,7 +584,14 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
         if (win.length > 5) win.shift();
         if (win.length >= 3) med = [...win].sort((x, y) => x - y)[Math.floor(win.length / 2)];
       } else win = [];
-      send({ t: "report", err: med == null ? null : Math.round(med * 1000), rtt: rttRef.current, ready: !!a && a.readyState >= 3 });
+      send({
+        t: "report",
+        err: med == null ? null : Math.round(med * 1000),
+        rtt: rttRef.current,
+        ready: !!a && a.readyState >= 3,
+        dev: devLatRef.current,
+        delay: deviceMsRef.current,
+      });
     }, 2000);
     return () => window.clearInterval(id);
     // tg 는 매 렌더 새 객체라 의존성에 두면 타이머가 계속 다시 걸린다 — 쓰는 것은 모두 안정적이다
@@ -1194,10 +1281,24 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
                 <span
                   key={m.id}
                   className={`member${m.id === tg.me ? " me" : ""}`}
-                  title={m.rtt != null ? `왕복 ${m.rtt}ms` : undefined}
+                  title={
+                    [
+                      m.rtt != null ? `왕복 ${m.rtt}ms` : "",
+                      m.dev != null ? `기기 자동 측정 ${m.dev}ms (재생 위치가 실제 소리보다 늦은 만큼 앞당김)` : "",
+                      m.delay != null ? `내 기기 지연 ${m.delay}ms` : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" · ") || undefined
+                  }
                 >
                   {m.name}
                   {m.id === tg.me && " (나)"}
+                  {(m.dev != null || m.delay) && (
+                    <span className="meta">
+                      {" "}
+                      [자동 {m.dev ?? "?"} · 지연 {m.delay ?? 0}]
+                    </span>
+                  )}
                   {preparing && <span className={m.preparing ? "warn" : "ok"}>{m.preparing ? " 준비 중" : " 준비됨"}</span>}
                   {!preparing && m.err != null && (
                     <span className={Math.abs(m.err) < 30 ? "ok" : Math.abs(m.err) < 80 ? "warn" : "err"}>
@@ -1222,8 +1323,8 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
                 <ScrollDial
                   value={deviceMs}
                   onChange={setDeviceMs}
-                  min={-100}
-                  max={100}
+                  min={-DEVICE_LIMIT}
+                  max={DEVICE_LIMIT}
                   unit="ms"
                   title="위아래로 끌거나 휠을 굴려 조절 (−100~+100ms, 두 번 누르면 0). + 는 내 기기를 앞서, − 는 늦게 재생합니다. 내 소리가 늦게 들리면 + 로. 재생 중에 바꾸면 손을 뗀 뒤 그 값으로 다시 맞춰 시작합니다. 이 기기에 기억."
                 />
@@ -1234,6 +1335,14 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
                 title="누르면 모든 기기가 같은 순간에 1초마다 클릭을 냅니다(한 번 더 누르면 멈춤). 한 번에 '딱' 들리면 맞은 것, '따닥' 이면 들으면서 '내 기기 지연' 을 조절하세요."
               >
                 {beepAt != null ? "■ 맞춤 확인 멈추기" : "▶ 소리로 맞춤 확인"}
+              </button>
+              <button
+                className={`ghost${calibrating ? " on" : ""}`}
+                disabled={calibrating || playing || !!counting}
+                onClick={() => void startCalib()}
+                title="이 기기의 마이크로 모든 기기의 소리를 듣고, 늦거나 빠른 만큼 각 기기의 '내 기기 지연' 을 자동으로 맞춥니다. 기기들이 서로 들리는 곳에서, 멈춘 상태로 하세요. 약 9초."
+              >
+                {calibrating ? "듣는 중…" : "🎤 마이크로 자동 맞춤"}
               </button>
               {tg.state.current?.by && <span className="meta">마지막 조작: {tg.state.current.by}</span>}
             </>

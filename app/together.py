@@ -144,6 +144,7 @@ class Room:
     def members_view(self) -> list[dict]:
         preparing = self.state.get("prepare") is not None
         return [{"id": k, "name": m["name"], "err": m.get("err"), "rtt": m.get("rtt"),
+                 "dev": m.get("dev"), "delay": m.get("delay"),
                  "ready": (k in self.ready) if preparing else m.get("ready", False),
                  "preparing": preparing and k not in self.ready}
                 for k, m in self.members.items()]
@@ -279,6 +280,16 @@ async def handle(ws: WebSocket, job_id: str) -> None:
                 # 한 번 누르면 켜지고(멈출 때까지 1초마다), 다시 누르면 꺼진다
                 room.beep_at = (now_ms() + 1000) if msg.get("on", True) else None
                 await room.broadcast({"t": "beep", "at": room.beep_at, "by": name})
+            elif t == "calib":
+                # 마이크로 자동 맞춤: 모두가 서버 시각 at 부터 1초마다, 기기마다 정해진 칸(order 순서)에
+                # 짧은 삐를 낸다. 누른 기기가 마이크로 듣고 각 기기에 보정값(adjust)을 보낸다
+                await room.broadcast({"t": "calib", "at": now_ms() + 2500, "order": list(room.members),
+                                      "by": mid, "by_name": name})
+            elif t == "adjust":
+                target = str(msg.get("id") or "")
+                if target in room.members:
+                    await room.send(target, {"t": "adjust", "ms": _num(msg.get("ms"), 0.0, -400.0, 400.0),
+                                             "by": name})
             elif t == "report":
                 # 기기가 잰 자기 상태(서버 기준 어긋남 ms, 왕복 시간) — 참여자 목록에 보인다
                 m = room.members.get(mid)
@@ -286,6 +297,9 @@ async def handle(ws: WebSocket, job_id: str) -> None:
                     m["err"] = msg.get("err")
                     m["rtt"] = msg.get("rtt")
                     m["ready"] = bool(msg.get("ready"))
+                    # 기기 자동 측정값·내 기기 지연 (참여자 목록에 보인다)
+                    m["dev"] = msg.get("dev")
+                    m["delay"] = msg.get("delay")
                     await room.push_members()
             elif t == "name":
                 m = room.members.get(mid)
