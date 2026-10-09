@@ -14,6 +14,7 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+import access
 import downloader
 import scores
 import separator
@@ -44,6 +45,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Demucs Web", version="2.0.0", lifespan=lifespan)
 
+# 접속자 기록 + funnel·다른 계정 차단 (app/access.py)
+app.middleware("http")(access.middleware)
+
 # 앱(Capacitor/Tauri)이나 개발 서버처럼 다른 오리진에서 부를 때만 쓴다.
 # 비어 있으면 동일 오리진만 허용 — 웹으로만 쓸 때는 켤 필요가 없다.
 if CORS_ORIGINS:
@@ -60,6 +64,12 @@ if CORS_ORIGINS:
 @app.get("/healthz")
 def healthz():
     return {"ok": True, "queue": store.queue_depth()}
+
+
+@app.get("/api/clients")
+def api_clients():
+    """최근 접속자 (경로·실제 IP·Tailscale 계정·마지막 요청). 재시작하면 비워진다."""
+    return {"clients": access.recent_clients()}
 
 
 @app.get("/api/info")

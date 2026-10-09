@@ -40,6 +40,12 @@ services:
       YTDLP_CLIENTS: ${YTDLP_CLIENTS:-,android,tv,web_safari,ios,mweb}
       # 앱(Capacitor/Tauri)처럼 다른 오리진에서 부를 때만. 웹으로만 쓰면 비워둔다.
       CORS_ORIGINS: ${CORS_ORIGINS:-}
+      # funnel(인터넷 공개) 접속 허용. 로그인이 없는 앱이라 기본은 막는다 (app/access.py)
+      # funnel 기기 등록 키 — 이 키가 든 링크(/?key=...)를 한 번 연 브라우저만 funnel 로 들어온다
+      ACCESS_KEY: ${ACCESS_KEY:-}
+      ALLOW_FUNNEL: ${ALLOW_FUNNEL:-0}
+      # 이 Tailscale 계정의 기기만 허용 (쉼표로 여러 개). 비우면 tailnet 기기 전부 허용
+      TAILSCALE_ALLOW_USERS: ${TAILSCALE_ALLOW_USERS:-}
 
     volumes:
       # 결과물은 Windows 탐색기에서 바로 열 수 있게 바인드 마운트
