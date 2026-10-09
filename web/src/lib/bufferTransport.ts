@@ -19,7 +19,9 @@
  * 엔진·메트로놈·구간 안내·녹음 코드가 그대로 돈다.
  *
  * 한계: 속도(playbackRate)는 지원하지 않는다 — 버퍼 소스의 속도 변경은 음정이 같이 바뀐다.
- * 속도를 바꾸면 엔진이 <audio> 재생으로 돌아간다.
+ * 속도를 바꾸면 엔진이 풀어 둔 PCM 을 더해(mixdownWav) <audio> 하나로 튼다 — 트랙별 <audio> 로 돌아가면
+ * 아이패드에서 <audio> 4~5개가 동시에 음정 유지 시간 늘리기를 하느라 끊긴다(실사용 확인). 디코딩이 없으니
+ * 더하는 데 0.1~0.3초면 된다.
  */
 
 export interface Pcm {
@@ -77,6 +79,43 @@ function toInt16(x: number) {
   return v > 32767 ? 32767 : v < -32768 ? -32768 : v;
 }
 
+/** 0.7 까지 그대로, 위는 0.9 로 부드럽게 (메트로놈 리미터와 같은 곡선) */
+function soft(x: number) {
+  const a = Math.abs(x);
+  return a <= 0.7 ? x : Math.sign(x) * (0.7 + 0.2 * Math.tanh((a - 0.7) / 0.2));
+}
+
+function wavHeader(frames: number, sr: number): ArrayBuffer {
+  const h = new ArrayBuffer(44);
+  const v = new DataView(h);
+  const w = (o: number, s: string) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  const bytes = frames * 4;
+  w(0, "RIFF");
+  v.setUint32(4, 36 + bytes, true);
+  w(8, "WAVE");
+  w(12, "fmt ");
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true);
+  v.setUint16(22, 2, true);
+  v.setUint32(24, sr, true);
+  v.setUint32(28, sr * 4, true);
+  v.setUint16(32, 4, true);
+  v.setUint16(34, 16, true);
+  w(36, "data");
+  v.setUint32(40, bytes, true);
+  return h;
+}
+
+/** iOS: 제스처 안에서 한 번 재생해 둔 <audio> 만 나중에 재생할 수 있다 — 그때 쓸 아주 짧은 무음 */
+let silentUrl: string | null = null;
+export function silentWav(): string {
+  if (!silentUrl) {
+    const n = 2205;
+    silentUrl = URL.createObjectURL(new Blob([wavHeader(n, 44100), new Int16Array(n * 2) as unknown as BlobPart], { type: "audio/wav" }));
+  }
+  return silentUrl;
+}
+
 interface TrackState {
   pcm: Pcm;
   gain: GainNode;
@@ -119,6 +158,42 @@ export class BufferTransport extends EventTarget {
     });
     // 개발자 도구에서 들여다볼 때 (마지막으로 만든 재생기)
     Object.assign(globalThis, { __transport: this });
+  }
+
+  /**
+   * 지금 트랙들을 gains 대로 더해 WAV(blob: 주소)로 만든다 — 속도 연습용 <audio> 하나에 쓴다.
+   * 트랙 오프셋은 그대로 반영하고(음수면 앞부분을 자른다), 넘치는 부분은 부드럽게 눌러 찌그러지지 않게 한다.
+   */
+  mixdownWav(gains: number[]): string {
+    const live = this.tracks.map((t, i) => ({ t, g: gains[i] ?? 0 })).filter((x) => x.g > 0);
+    const sr = this.tracks[0]?.pcm.sr ?? 48000;
+    const frames = Math.max(1, Math.round(this.duration * sr));
+    const L = new Float32Array(frames);
+    const R = new Float32Array(frames);
+    for (const { t, g } of live) {
+      const { data, ch, frames: n } = t.pcm;
+      const off = Math.round(t.offset * sr);
+      const from = Math.max(0, -off);
+      const to = Math.min(n, frames - off);
+      if (ch === 1) {
+        for (let i = from; i < to; i++) {
+          const v = (data[i] / 32767) * g;
+          L[i + off] += v;
+          R[i + off] += v;
+        }
+      } else {
+        for (let i = from; i < to; i++) {
+          L[i + off] += (data[2 * i] / 32767) * g;
+          R[i + off] += (data[2 * i + 1] / 32767) * g;
+        }
+      }
+    }
+    const pcm = new Int16Array(frames * 2);
+    for (let i = 0; i < frames; i++) {
+      pcm[2 * i] = Math.round(soft(L[i]) * 32767);
+      pcm[2 * i + 1] = Math.round(soft(R[i]) * 32767);
+    }
+    return URL.createObjectURL(new Blob([wavHeader(frames, sr), pcm as unknown as BlobPart], { type: "audio/wav" }));
   }
 
   /** 트랙별 상태 요약 — 개발자 도구용 */

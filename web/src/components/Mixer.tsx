@@ -716,11 +716,13 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
               title={
                 "이 곡은 기기에 저장돼 있어 네트워크 없이 재생·이동합니다." +
                 (engine.preciseOn
-                  ? " 정밀 재생 중 — 트랙을 풀어 Web Audio 로 같은 시각에 재생하므로 트랙끼리·메트로놈·예비박이 샘플 단위로 맞습니다. 속도를 바꾸면 일반 재생으로 돌아갑니다."
-                  : "")
+                  ? " 정밀 재생 중 — 트랙을 풀어 Web Audio 로 같은 시각에 재생하므로 트랙끼리·메트로놈·예비박이 샘플 단위로 맞습니다. 속도를 바꾸면 트랙을 더한 한 파일로 재생합니다."
+                  : engine.slowOn
+                    ? " 속도 연습 중 — 풀어 둔 트랙을 더한 한 파일로 재생합니다 (속도를 바꾸면 음정 유지 때문에 이렇게 합니다). 원곡 속도로 돌아오면 다시 정밀 재생입니다."
+                    : "")
               }
             >
-              기기에 저장됨{engine.preciseOn ? " · 정밀 재생" : ""}
+              기기에 저장됨{engine.preciseOn ? " · 정밀 재생" : engine.slowOn ? " · 속도 연습" : ""}
             </span>
             <button
               className="ghost"

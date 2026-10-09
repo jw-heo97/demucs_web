@@ -5,7 +5,7 @@ import { cachedUrl, download, removeFromDevice } from "../lib/audioCache";
 import { audioCtx } from "../lib/audioCtx";
 import { stemFilesOf } from "../lib/stems";
 import { useSubdiv } from "./useLiveMetronome";
-import { BufferTransport, decodePcm, type Pcm } from "../lib/bufferTransport";
+import { BufferTransport, decodePcm, silentWav, type Pcm } from "../lib/bufferTransport";
 
 /**
  * 정밀 재생(lib/bufferTransport) 상태. 기기에 저장된 곡은 트랙을 풀어 두고 Web Audio 버퍼로 재생한다 —
@@ -16,6 +16,15 @@ interface Precise {
   /** 지금 audiosRef 가 [tp] 인가 */
   active: boolean;
   building: Promise<BufferTransport | null> | null;
+  /**
+   * 속도 연습용 <audio> 하나. 속도가 1 이 아니면 버퍼 재생을 못 쓰는데(음정이 변한다), 트랙별 <audio>
+   * 로 돌아가면 아이패드가 끊긴다(<audio> 4~5개가 동시에 음정 유지 시간 늘리기). 그래서 풀어 둔 PCM 을
+   * 더해 이 하나로 튼다. 음소거·볼륨·오프셋을 바꾸면 다시 더해 같은 자리에서 바꿔 낀다.
+   */
+  slowEl: HTMLAudioElement;
+  slowUrl: string | null;
+  slowSig: string;
+  slowActive: boolean;
 }
 
 export interface Track {
@@ -216,6 +225,8 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
   /** 트랙을 푸는 중이면 진척 (done/total) */
   const [preciseBusy, setPreciseBusy] = useState<{ done: number; total: number } | null>(null);
   const [preciseOn, setPreciseOn] = useState(false);
+  /** 속도 연습 재생(풀어 둔 PCM 을 더한 <audio> 하나) 중인가 */
+  const [slowOn, setSlowOn] = useState(false);
   // trackElsRef 와 같은 순서의 실제 트랙 (오프셋을 찾는 데 쓴다)
   const realRef = useRef<Track[]>([]);
   /** 트랙 i 의 오프셋(초): 트랙의 0초가 곡의 몇 초인지. 스템은 0. job.tracks 에서 그때그때 읽는다 */
@@ -300,10 +311,22 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     const created = audiosRef.current;
     trackElsRef.current = created;
     const nodes: AudioNode[] = [];
-    const precise: Precise = { tp: null, active: false, building: null };
+    const slowEl = new Audio();
+    slowEl.preload = "auto";
+    const precise: Precise = { tp: null, active: false, building: null, slowEl, slowUrl: null, slowSig: "", slowActive: false };
     preciseRef.current = precise;
     setPreciseOn(false);
+    setSlowOn(false);
     setPreciseBusy(null);
+    try {
+      const ctx = audioCtx();
+      const src = ctx.createMediaElementSource(slowEl);
+      const g = ctx.createGain();
+      src.connect(g).connect(ctx.destination);
+      nodes.push(src, g);
+    } catch {
+      /* Web Audio 가 없으면 정밀 재생도 속도 연습 재생도 쓰지 않는다 */
+    }
     gainsRef.current = created.map((a) => {
       try {
         const ctx = audioCtx();
@@ -462,6 +485,7 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     endedRef.current = onEnded;
     m.addEventListener("loadedmetadata", onMeta);
     m.addEventListener("ended", onEnded);
+    slowEl.addEventListener("ended", onEnded);
     setDuration(j?.duration ?? 0);
     return () => {
       alive = false;
@@ -472,7 +496,17 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
       m.removeEventListener("loadedmetadata", onMeta);
       m.removeEventListener("ended", onEnded);
       // src 를 비우면 currentTime 이 0 으로 돌아가므로 그 전에 기억해 둔다
-      lastTime.current = Math.max(0, (precise.active ? precise.tp?.currentTime : created[0]?.currentTime) ?? 0);
+      lastTime.current = Math.max(
+        0,
+        (precise.active ? precise.tp?.currentTime : precise.slowActive ? slowEl.currentTime : created[0]?.currentTime) ?? 0,
+      );
+      slowEl.removeEventListener("ended", onEnded);
+      slowEl.pause();
+      slowEl.removeAttribute("src");
+      slowEl.load();
+      if (precise.slowUrl) URL.revokeObjectURL(precise.slowUrl);
+      precise.slowUrl = null;
+      precise.slowActive = false;
       precise.tp?.dispose();
       precise.tp = null;
       precise.active = false;
@@ -571,33 +605,78 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     }
   }, []);
 
-  /** <audio> 재생 → 정밀 재생으로 (같은 자리에서, 멈춘 채) */
+  /** 지금 재생 위치와 재생 중 여부 (어느 길로 재생 중이든) */
+  const whereNow = (p: Precise) => {
+    if (p.active && p.tp) return { pos: Math.max(0, p.tp.currentTime), playing: !p.tp.paused };
+    if (p.slowActive) return { pos: p.slowEl.currentTime, playing: !p.slowEl.paused };
+    const m = trackElsRef.current[0];
+    return { pos: Math.max(0, m?.currentTime ?? 0), playing: !!m && !m.paused };
+  };
+  /** 지금 재생을 맡은 것을 모두 멈춘다 */
+  const pauseAll = (p: Precise) => {
+    p.tp?.pause();
+    p.slowEl.pause();
+    trackElsRef.current.forEach((a) => a.pause());
+  };
+  /** 지금 설정(음소거·솔로·볼륨·오프셋)의 서명 — 속도 연습 파일을 다시 만들지 정한다 */
+  const slowSig = () =>
+    JSON.stringify(
+      trackElsRef.current.map((_, i) => {
+        const m = mixOfLatest.current(i);
+        return [m.on ? Math.round(m.vol * 1000) : 0, Math.round(offOf(i) * 1e4)];
+      }),
+    );
+  /** 속도 연습 파일을 지금 설정으로 맞춰 둔다 (같으면 그대로). 재생 중이면 같은 자리에서 바꿔 낀다 */
+  const refreshSlow = (p: Precise) => {
+    if (!p.tp) return;
+    const sig = slowSig();
+    if (p.slowUrl && p.slowSig === sig) return;
+    const gains = trackElsRef.current.map((_, i) => {
+      const m = mixOfLatest.current(i);
+      return m.on ? m.vol : 0;
+    });
+    const url = p.tp.mixdownWav(gains);
+    const el = p.slowEl;
+    const pos = el.currentTime;
+    const wasPlaying = p.slowActive && !el.paused;
+    if (p.slowUrl) URL.revokeObjectURL(p.slowUrl);
+    p.slowUrl = url;
+    p.slowSig = sig;
+    el.src = url;
+    el.preservesPitch = true;
+    el.playbackRate = rateRef.current;
+    el.currentTime = pos;
+    if (wasPlaying) el.play().catch(() => {});
+  };
+  /** → 정밀 재생으로 (같은 자리). 재생 중이었으면 이어서 */
   const activatePrecise = (p: Precise) => {
     if (p.active || !p.tp) return;
-    const pos = Math.max(0, trackElsRef.current[0]?.currentTime ?? 0);
-    trackElsRef.current.forEach((a) => a.pause());
+    const { pos, playing: was } = whereNow(p);
+    pauseAll(p);
+    p.slowActive = false;
     p.tp.currentTime = pos;
     audiosRef.current = [p.tp as unknown as HTMLAudioElement];
     p.active = true;
     setPreciseOn(true);
+    setSlowOn(false);
+    if (was) void p.tp.play();
   };
-  /** 정밀 재생 → <audio> 재생으로 (같은 자리). 재생 중이었으면 <audio> 로 이어서 재생한다 */
-  const deactivatePrecise = (p: Precise) => {
-    if (!p.active || !p.tp) return;
-    const pos = Math.max(0, p.tp.currentTime);
-    const wasPlaying = !p.tp.paused;
-    p.tp.pause();
-    const els = trackElsRef.current;
-    els.forEach((a, i) => (a.currentTime = Math.max(0, pos - offOf(i))));
-    audiosRef.current = els;
+  /** → 속도 연습 재생(합친 <audio> 하나)으로 (같은 자리). 재생 중이었으면 이어서 */
+  const activateSlow = (p: Precise) => {
+    if (p.slowActive || !p.tp) return;
+    const { pos, playing: was } = whereNow(p);
+    pauseAll(p);
     p.active = false;
+    refreshSlow(p);
+    p.slowEl.playbackRate = rateRef.current;
+    p.slowEl.currentTime = pos;
+    audiosRef.current = [p.slowEl];
+    p.slowActive = true;
     setPreciseOn(false);
-    if (wasPlaying) {
-      els.forEach((a, i) => {
-        if (pos - offOf(i) >= 0 || i === 0) a.play().catch(() => {});
-      });
-    }
+    setSlowOn(true);
+    if (was) p.slowEl.play().catch(() => {});
   };
+
 
   /**
    * 정밀 재생을 준비해 켠다 (멈춘 채). 기기에 저장된 곡이고 속도가 1 이면 true.
@@ -605,12 +684,17 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
    */
   const preparePrecise = useCallback(async (): Promise<boolean> => {
     const p = preciseRef.current;
-    if (!p || !canPrecise() || rateRef.current !== 1) return false;
+    if (!p || !canPrecise()) return false;
     try {
       const tp = await ensurePrecise();
       if (!tp || preciseRef.current !== p) return false;
-      activatePrecise(p);
-      return true;
+      if (rateRef.current === 1) {
+        activatePrecise(p);
+        return true;
+      }
+      // 속도 연습: 풀어 둔 PCM 을 더한 <audio> 하나로
+      activateSlow(p);
+      return false;
     } catch (e) {
       console.warn("정밀 재생 준비 실패 — <audio> 로 재생합니다", e);
       return false;
@@ -633,11 +717,26 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
       a.preservesPitch = true;
       a.playbackRate = rate;
     });
-    // 정밀 재생은 속도를 못 바꾼다(음정이 따라 변한다) — 1 이 아니면 <audio> 로 돌아간다
+    // 정밀 재생은 속도를 못 바꾼다(음정이 따라 변한다) — 1 이 아니면 합친 <audio> 하나(속도 연습)로,
+    // 1 로 돌아오면 다시 정밀 재생으로. 같은 자리에서 이어진다.
     const p = preciseRef.current;
-    if (p?.active && rate !== 1) deactivatePrecise(p);
+    if (!p) return;
+    if (rate !== 1) {
+      if (p.active) activateSlow(p);
+      else if (p.slowActive) p.slowEl.playbackRate = rate;
+    } else if (p.slowActive) activatePrecise(p);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rate, tracks]);
+
+  // 속도 연습 중에 음소거·솔로·볼륨·오프셋을 바꾸면 손을 뗀 뒤 다시 더해 같은 자리에서 바꿔 낀다
+  const offsetKey = (job?.tracks ?? []).map((t) => `${t.id}:${t.offset_ms}`).join("|");
+  useEffect(() => {
+    const p = preciseRef.current;
+    if (!p?.slowActive) return;
+    const t = window.setTimeout(() => refreshSlow(p), 300);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mixOf, offsetKey]);
 
   // 시간 추적 + 드리프트 보정 + 구간 반복
   const lastPush = useRef(0);
@@ -725,6 +824,8 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     const p = preciseRef.current;
     if (p?.active && p.tp) {
       p.tp.currentTime = Math.max(0, t); // 오프셋은 재생기가 트랙별로 안다
+    } else if (p?.slowActive) {
+      p.slowEl.currentTime = Math.max(0, t); // 오프셋은 더할 때 들어갔다
     } else {
       audiosRef.current.forEach((a, i) => (a.currentTime = Math.max(0, t - offOf(i))));
     }
@@ -732,12 +833,11 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
   }, []);
 
   // 오프셋을 바꾸면(±10ms) 다시 불러오지 않고 그 자리에서 맞춘다
-  const offsetKey = (job?.tracks ?? []).map((t) => `${t.id}:${t.offset_ms}`).join("|");
   useEffect(() => {
     const p = preciseRef.current;
     // 정밀 재생기는 (켜져 있지 않아도) 오프셋을 미리 맞춰 둔다 — 재생 중이면 그 트랙만 이어 건다
     if (p?.tp) trackElsRef.current.forEach((_, i) => p.tp!.setOffset(i, offOf(i)));
-    if (p?.active) return;
+    if (p?.active || p?.slowActive) return;
     const as = audiosRef.current;
     if (!as.length) return;
     const t = as[0].currentTime;
@@ -766,6 +866,21 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     if (p?.active && p.tp) {
       // 정밀 재생: 재생기 하나가 모든 트랙을 같은 시각에 건다
       await p.tp.play();
+      setPlaying(true);
+      return;
+    }
+    if (p?.slowActive) {
+      // 속도 연습: 합친 <audio> 하나
+      if (p.slowEl.ended) p.slowEl.currentTime = 0;
+      try {
+        await p.slowEl.play();
+      } catch (e) {
+        setPlaying(false);
+        const r = e as { name?: string; message?: string };
+        throw new Error(
+          r?.name === "NotAllowedError" ? "브라우저가 재생을 막았습니다. 재생 버튼을 다시 눌러 주세요." : `재생할 수 없습니다: ${r?.message ?? String(r)}`,
+        );
+      }
       setPlaying(true);
       return;
     }
@@ -834,7 +949,15 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
    * (정밀 재생은 버퍼 소스라 이게 필요 없다 — <audio> 쪽만 풀어 둔다)
    */
   const prime = useCallback(() => {
-    if (preciseRef.current?.active) return;
+    const p = preciseRef.current;
+    // 속도 연습용 <audio> 도 제스처 안에서 한 번 풀어 둔다 (iOS — 속도를 바꾸는 순간 바꿔 끼워 재생해야 한다)
+    if (p && !p.slowEl.src) {
+      p.slowEl.src = silentWav();
+      const pr = p.slowEl.play();
+      p.slowEl.pause();
+      pr?.catch(() => {});
+    }
+    if (p?.active || p?.slowActive) return;
     trackElsRef.current.forEach((a) => {
       const p = a.play();
       a.pause();
@@ -912,6 +1035,8 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     /** 정밀 재생을 쓸 수 있나 (기기에 저장된 곡, 속도 1) / 지금 정밀 재생인가 / 트랙을 푸는 중인가 */
     canPrecise: cache.state === "cached" && rate === 1 && gainsRef.current.length > 0 && gainsRef.current.every(Boolean),
     preciseOn,
+    /** 속도 연습 재생 중인가 (풀어 둔 PCM 을 더한 <audio> 하나 — 속도가 1 이 아닐 때) */
+    slowOn,
     preciseBusy,
     preparePrecise,
     playAt,
