@@ -592,7 +592,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
       let pos = opts.from ?? time;
       const lp = opts.loop !== undefined ? opts.loop : loopButton?.region ?? null;
       if (lp) pos = lp.start;
-      const withCount = !!countIn && (pos <= 0.25 || !!lp || !!opts.force);
+      const withCount = !!countIn && (atSongStart(bars, pos) || !!lp || !!opts.force);
       const r = rate || 1;
       const b = barAtTime(bars, pos) ?? bars[0];
       const step = (b ? stepOf(b.bpm, b.beat_unit) : 0.5) / r;
@@ -616,7 +616,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
     if (lp || opts.from !== undefined) engine.seek(pos);
     // 예비박은 곡 처음·반복 시작·구성표에서 고른 구간에서 시작할 때만.
     // 중간에서 이어 들을 때마다 붙으면 방해가 된다.
-    if (!countIn || (pos > 0.25 && !lp && !opts.force)) {
+    if (!countIn || (!atSongStart(bars, pos) && !lp && !opts.force)) {
       await startPlay();
       return;
     }
@@ -1173,6 +1173,11 @@ function beatOf(b: Bar, t: number) {
   const step = stepOf(b.bpm, b.beat_unit);
   // 마디 첫 박에 딱 서면 t 가 start 보다 아주 조금 작을 수 있다 (0박으로 보이던 것) → 1박
   return Math.max(1, Math.min(b.beats_per_bar, Math.floor((t - b.start) / step) + 1));
+}
+
+/** 곡 처음에서 시작하는가: 0:00 이거나 1마디 1박(그 앞 못갖춘마디 안 포함) — 예비박을 붙인다 */
+function atSongStart(bars: Bar[], pos: number) {
+  return pos <= 0.25 || (!!bars.length && pos <= bars[0].start + 0.05);
 }
 
 function nextBeatAfter(bars: Bar[], pos: number) {
