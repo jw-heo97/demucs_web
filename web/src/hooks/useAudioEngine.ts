@@ -5,6 +5,51 @@ import { cachedUrl, download, removeFromDevice } from "../lib/audioCache";
 import { audioCtx } from "../lib/audioCtx";
 import { stemFilesOf } from "../lib/stems";
 import { useSubdiv } from "./useLiveMetronome";
+import {
+  PRE,
+  makeCountInWav,
+  makeFullWav,
+  renderMix,
+  silentWav,
+  type CountInClick,
+  type MixPcm,
+} from "../lib/mixRender";
+
+/**
+ * 합친 재생용 <audio> 를 곡 시간으로 보이게 하는 대리 객체. 파일 시각 = 곡 시각 + PRE 라서
+ * currentTime 을 읽고 쓸 때만 PRE 를 빼고 더한다. 나머지(이벤트·paused·play…)는 그대로 넘긴다 —
+ * 메트로놈·구간 안내·녹음처럼 audios[0].currentTime 을 '곡 위치' 로 읽는 코드가 그대로 돈다.
+ */
+function songProxy(el: HTMLAudioElement): HTMLAudioElement {
+  return new Proxy(el, {
+    get(t, prop) {
+      if (prop === "currentTime") return t.currentTime - PRE;
+      if (prop === "duration") return Math.max(0, t.duration - PRE);
+      const v = (t as unknown as Record<string | symbol, unknown>)[prop];
+      return typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(t) : v;
+    },
+    set(t, prop, v) {
+      if (prop === "currentTime") t.currentTime = Math.max(0, (v as number) + PRE);
+      else (t as unknown as Record<string | symbol, unknown>)[prop] = v;
+      return true;
+    },
+  });
+}
+
+interface Mixed {
+  el: HTMLAudioElement;
+  proxy: HTMLAudioElement;
+  nodes: AudioNode[];
+  sig: string;
+  data: MixPcm | null;
+  fullUrl: string | null;
+  segUrl: string | null;
+  /** 지금 예비박 파일(segUrl)을 틀고 있나 */
+  usingSeg: boolean;
+  active: boolean;
+  building: Promise<void> | null;
+  buildingSig: string;
+}
 
 export interface Track {
   key: string;
@@ -177,8 +222,8 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
   const carryRef = useRef(!!opts.carryMix);
   carryRef.current = !!opts.carryMix;
   // 트랙이 바뀌는 순간 직전 믹스 상태를 읽기 위한 사본
-  const mixRef = useRef({ tracks, muted, solo, vol });
-  mixRef.current = { tracks, muted, solo, vol };
+  const mixStateRef = useRef({ tracks, muted, solo, vol });
+  mixStateRef.current = { tracks, muted, solo, vol };
   const audiosRef = useRef<HTMLAudioElement[]>([]);
   /**
    * 트랙마다 Web Audio 게인 (audiosRef 와 같은 순서). 스템도 메트로놈 클릭과 같은 AudioContext 로
@@ -188,6 +233,12 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
    * Web Audio 를 못 쓰면 null — 그때는 예전처럼 <audio> 로 직접 낸다.
    */
   const gainsRef = useRef<(GainNode | null)[]>([]);
+  /** 트랙별 <audio> (audiosRef 는 합친 재생으로 바뀌면 [합친 것] 하나가 된다) */
+  const trackElsRef = useRef<HTMLAudioElement[]>([]);
+  /** 합친 재생 (기기에 저장된 곡) — lib/mixRender 참고 */
+  const mixRef = useRef<Mixed | null>(null);
+  const [mixBusy, setMixBusy] = useState(false);
+  const [mixOn, setMixOn] = useState(false);
   // audiosRef 와 같은 순서의 실제 트랙 (오프셋을 찾는 데 쓴다)
   const realRef = useRef<Track[]>([]);
   /** 트랙 i 의 오프셋(초): 트랙의 0초가 곡의 몇 초인지. 스템은 0. job.tracks 에서 그때그때 읽는다 */
@@ -230,7 +281,7 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     const resumeAt = sameJob ? lastTime.current : 0;
     const prevMix = new Map<string, { muted: boolean; solo: boolean; vol: number }>();
     if (sameJob || carryRef.current) {
-      const m = mixRef.current;
+      const m = mixStateRef.current;
       m.tracks.forEach((t, i) =>
         prevMix.set(t.key, { muted: !!m.muted[i], solo: !!m.solo[i], vol: m.vol[i] ?? 1 }),
       );
@@ -268,7 +319,30 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
       return a;
     });
     const created = audiosRef.current;
+    trackElsRef.current = created;
     const nodes: AudioNode[] = [];
+    // 합친 재생용 <audio> (기기에 저장된 곡에서 ▶ 를 누르면 처음 합쳐서 이걸로 바꾼다)
+    {
+      const el = new Audio();
+      el.preload = "auto";
+      const mn: AudioNode[] = [];
+      try {
+        const ctx = audioCtx();
+        const src = ctx.createMediaElementSource(el);
+        const g = ctx.createGain();
+        src.connect(g).connect(ctx.destination);
+        mn.push(src, g);
+      } catch {
+        /* Web Audio 가 없으면 합친 재생은 쓰지 않는다 */
+      }
+      mixRef.current = {
+        el, proxy: songProxy(el), nodes: mn, sig: "", data: null, fullUrl: null, segUrl: null,
+        usingSeg: false, active: false, building: null, buildingSig: "",
+      };
+      setMixOn(false);
+      setMixBusy(false);
+    }
+    const mixed = mixRef.current!;
     gainsRef.current = created.map((a) => {
       try {
         const ctx = audioCtx();
@@ -406,6 +480,7 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     };
     m.addEventListener("loadedmetadata", onMeta);
     m.addEventListener("ended", onEnded);
+    mixed.el.addEventListener("ended", onEnded);
     setDuration(j?.duration ?? 0);
     return () => {
       alive = false;
@@ -415,8 +490,17 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
       if (onPauseEv) m.removeEventListener("pause", onPauseEv);
       m.removeEventListener("loadedmetadata", onMeta);
       m.removeEventListener("ended", onEnded);
+      mixed.el.removeEventListener("ended", onEnded);
       // src 를 비우면 currentTime 이 0 으로 돌아가므로 그 전에 기억해 둔다
-      lastTime.current = created[0]?.currentTime ?? 0;
+      lastTime.current = Math.max(0, (mixed.active ? mixed.proxy.currentTime : created[0]?.currentTime) ?? 0);
+      mixed.el.pause();
+      mixed.el.removeAttribute("src");
+      mixed.el.load();
+      if (mixed.fullUrl) URL.revokeObjectURL(mixed.fullUrl);
+      if (mixed.segUrl) URL.revokeObjectURL(mixed.segUrl);
+      mixed.data = null;
+      mixed.nodes.forEach((n) => n.disconnect());
+      if (mixRef.current === mixed) mixRef.current = null;
       // 리스너만 떼면 <audio> 가 살아남아 계속 재생된다. 확실히 놓아준다.
       created.forEach((a) => {
         a.pause();
@@ -436,8 +520,12 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     },
     [muted, solo, vol],
   );
+  // 합친 재생이 '지금 설정' 을 읽는 곳 (콜백들이 첫 렌더 것을 쥐고 있어도 최신 값을 보게)
+  const mixOfLatest = useRef(mixOf);
+  mixOfLatest.current = mixOf;
 
   const applyGains = useCallback(() => {
+    if (mixRef.current?.active) return; // 합친 재생 — 볼륨은 합칠 때 들어간다(아래에서 다시 합친다)
     audiosRef.current.forEach((a, i) => {
       const m = mixOf(i);
       const g = gainsRef.current[i];
@@ -453,8 +541,11 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
   }, [mixOf]);
   useEffect(applyGains, [applyGains]);
 
+  const rateRef = useRef(rate);
+  rateRef.current = rate;
   useEffect(() => {
-    audiosRef.current.forEach((a) => {
+    const els = [...trackElsRef.current, ...(mixRef.current ? [mixRef.current.el] : [])];
+    els.forEach((a) => {
       // 음정을 유지한 채 속도만 바꾼다 (연습용이라 피치가 변하면 곤란하다)
       a.preservesPitch = true;
       a.playbackRate = rate;
@@ -478,7 +569,7 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
         const now = performance.now();
         if (now - lastPush.current > 33) {
           lastPush.current = now;
-          setTime(t);
+          setTime(Math.max(0, t)); // 합친 재생의 예비박 동안은 곡 0초 앞일 수 있다
         }
         // 마스터(첫 트랙)가 멈춰 있으면 나머지를 다시 틀지 않는다. 예전엔 일시정지 직후 화면이
         // 다시 그려지기 전 프레임(playing 이 아직 true)에서 '멈춘 트랙 = 다시 틀어야 할 트랙' 으로
@@ -543,6 +634,9 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
   }, [playing]);
 
   const seek = useCallback((t: number) => {
+    // 예비박 파일을 틀던 중이면 곡 전체 파일로 돌아가서 옮긴다 (예비박 파일은 그 위치 앞이 조용하다)
+    const m = mixRef.current;
+    if (m?.active && m.usingSeg && m.fullUrl) switchSrc(m, m.fullUrl, Math.max(0, t), false);
     audiosRef.current.forEach((a, i) => (a.currentTime = Math.max(0, t - offOf(i))));
     setTime(Math.max(0, t));
   }, []);
@@ -561,7 +655,124 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offsetKey]);
 
+  // ---------------- 합친 재생 ----------------
+  const cacheRef = useRef(cache);
+  cacheRef.current = cache;
+  const mixOfRef = mixOfLatest;
+  /** 지금 설정으로 합칠 재료 (기기에 저장된 트랙만) */
+  const mixSources = () =>
+    trackElsRef.current.map((a, i) => {
+      const m = mixOfRef.current(i);
+      return { url: a.src, gain: m.on ? m.vol : 0, offsetSec: offOf(i) };
+    });
+  const canMix = () =>
+    cacheRef.current.state === "cached" && !!mixRef.current?.nodes.length && trackElsRef.current.length > 0;
+
+  /** 합친 재생으로 바꾼다 (트랙별 <audio> 는 멈추고, 같은 자리에서 이어간다) */
+  const switchSrc = (m: Mixed, url: string, songPos: number, seg: boolean) => {
+    m.el.src = url;
+    m.el.preservesPitch = true;
+    m.el.playbackRate = rateRef.current;
+    m.proxy.currentTime = songPos;
+    m.usingSeg = seg;
+  };
+  const activate = (m: Mixed) => {
+    if (m.active || !m.fullUrl) return;
+    const pos = trackElsRef.current[0]?.currentTime ?? 0;
+    trackElsRef.current.forEach((a) => a.pause());
+    switchSrc(m, m.fullUrl, pos, false);
+    audiosRef.current = [m.proxy];
+    m.active = true;
+    setMixOn(true);
+  };
+  /** 지금 설정대로 합쳐 둔다 (같은 설정이면 그대로). 재생 중이면 다 합친 뒤 그 자리에서 바꿔 낀다 */
+  const ensureMix = useCallback(async () => {
+    const m = mixRef.current;
+    if (!m) return;
+    const src = mixSources();
+    const sig = JSON.stringify(src.map((x) => [x.url, Math.round(x.gain * 1000), Math.round(x.offsetSec * 1e4)]));
+    if (m.data && m.sig === sig) return;
+    if (m.building && m.buildingSig === sig) return m.building;
+    setMixBusy(true);
+    const job = (async () => {
+      const data = await renderMix(audioCtx(), src);
+      if (mixRef.current !== m) return;
+      const old = m.fullUrl;
+      m.data = data;
+      m.sig = sig;
+      m.fullUrl = makeFullWav(data);
+      if (m.active) {
+        const pos = m.proxy.currentTime;
+        const wasPlaying = !m.el.paused;
+        switchSrc(m, m.fullUrl, pos, false);
+        if (m.segUrl) URL.revokeObjectURL(m.segUrl);
+        m.segUrl = null;
+        if (wasPlaying) await m.el.play().catch(() => {});
+      }
+      if (old) URL.revokeObjectURL(old);
+    })();
+    m.building = job;
+    m.buildingSig = sig;
+    try {
+      await job;
+    } finally {
+      if (m.building === job) {
+        m.building = null;
+        setMixBusy(false);
+      }
+    }
+  }, []);
+
+  // 기기에 저장된 곡을 열면 잠시 뒤 뒤에서 미리 합쳐 둔다 — 첫 ▶ 를 기다리지 않게
+  useEffect(() => {
+    if (cache.state !== "cached" || !loadedId) return;
+    const t = window.setTimeout(() => {
+      if (canMix()) void ensureMix().catch(() => {});
+    }, 1500);
+    return () => window.clearTimeout(t);
+  }, [cache.state, loadedId, ensureMix]);
+
+  // 합친 재생 중에 음소거·솔로·볼륨·오프셋을 바꾸면 손을 뗀 뒤 다시 합쳐 그 자리에서 바꿔 낀다
+  useEffect(() => {
+    if (!mixRef.current?.active) return;
+    const t = window.setTimeout(() => void ensureMix(), 600);
+    return () => window.clearTimeout(t);
+  }, [mixOf, job?.tracks, ensureMix]);
+
   const play = useCallback(async () => {
+    // 기기에 저장된 곡이면 합친 재생 — 처음 한 번 합치는 데 1~3초
+    const m = mixRef.current;
+    if (m && canMix()) {
+      try {
+        await ensureMix();
+        activate(m);
+        if (m.usingSeg && m.fullUrl) switchSrc(m, m.fullUrl, Math.max(0, m.proxy.currentTime), false);
+      } catch (e) {
+        console.warn("합친 재생 실패 — 트랙별로 재생합니다", e);
+      }
+    }
+    return startPlaying();
+  }, []);
+
+  /**
+   * 예비박부터: 곡 위치 pos 앞은 조용하고 예비박 클릭이 들어 있는 파일을 합친 재생으로 튼다.
+   * 클릭과 음악이 한 파일이라 기기와 상관없이 마지막 클릭 → 1마디 1박이 정확히 한 박이다.
+   */
+  const playCountIn = useCallback(async (pos: number, clicks: CountInClick[], peak: number) => {
+    const m = mixRef.current;
+    if (!m || !canMix()) return startPlaying();
+    await ensureMix();
+    activate(m);
+    if (!m.data) return startPlaying();
+    const url = await makeCountInWav(m.data, pos, clicks, peak);
+    if (m.segUrl) URL.revokeObjectURL(m.segUrl);
+    m.segUrl = url;
+    const s0 = Math.min(pos, clicks.length ? clicks[0].t - 0.15 : pos);
+    switchSrc(m, url, s0, true);
+    return startPlaying();
+  }, []);
+
+  const startPlaying = useCallback(async () => {
     const as = audiosRef.current;
     if (!as.length) return;
     // 한 번에 한 곳에서만 소리가 나게 한다
@@ -580,8 +791,10 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     const ps: Promise<void>[] = [];
     as.forEach((a, i) => {
       const want = t - offOf(i);
-      if (want < 0) {
-        a.pause(); // 아직 시작 전인 트랙 — 때가 되면 tick 이 튼다
+      // 아직 시작 전인 트랙 — 때가 되면 tick 이 튼다. 마스터(0번)는 예외: 합친 재생의 예비박 동안은
+      // 곡 위치가 0 보다 앞(음수)이라 이 규칙에 걸려 재생이 안 됐다
+      if (want < 0 && i > 0) {
+        a.pause();
         return;
       }
       if (Math.abs(a.currentTime - want) > 0.05) a.currentTime = want;
@@ -616,6 +829,14 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
    * 모든 트랙을 한 번 재생·정지해 미리 풀어둔다. 즉시 멈추므로 소리는 나지 않는다.
    */
   const prime = useCallback(() => {
+    // 합친 재생용 요소도 제스처 안에서 한 번 풀어 둔다 (iOS — 합치는 데 시간이 걸려 재생은 나중에 된다)
+    const m = mixRef.current;
+    if (m && !m.el.src) {
+      m.el.src = silentWav();
+      const p = m.el.play();
+      m.el.pause();
+      p?.catch(() => {});
+    }
     audiosRef.current.forEach((a) => {
       const p = a.play();
       a.pause();
@@ -628,6 +849,9 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
   const pause = useCallback(() => {
     audiosRef.current.forEach((a) => a.pause());
     setPlaying(false);
+    // 예비박 파일이었으면 같은 자리의 곡 전체 파일로 돌려 둔다 (다음 재생·앞으로 이동이 정상이게)
+    const m = mixRef.current;
+    if (m?.active && m.usingSeg && m.fullUrl) switchSrc(m, m.fullUrl, Math.max(0, m.proxy.currentTime), false);
   }, []);
 
   const setLoop = useCallback((r: { start: number; end: number } | null) => {
@@ -685,5 +909,10 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     audios: audiosRef,
     /** 지금 불러온 곡 (활성 송 맵 버전의 잠금·기준 클릭 보정을 읽는다) */
     job,
+    /** 합친 재생을 쓸 수 있나 (기기에 저장된 곡) / 지금 합친 재생 중인가 / 합치는 중인가 */
+    canMix: cache.state === "cached" && !!mixRef.current?.nodes.length,
+    mixOn,
+    mixBusy,
+    playCountIn,
   };
 }

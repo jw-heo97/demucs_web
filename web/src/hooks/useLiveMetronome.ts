@@ -196,7 +196,14 @@ export function useLiveMetronome(engine: Engine, bars: Bar[], subdiv: 1 | 2 = 1,
     },
     [],
   );
+  // 이 곡 위치 전에는 울리지 않는다 — 합친 재생은 예비박이 파일 안에 들어 있어서, 그동안 즉석
+  // 클릭이 같이 울리면 겹친다
+  const holdRef = useRef(-Infinity);
+  const holdUntil = useCallback((songPos: number) => {
+    holdRef.current = songPos;
+  }, []);
   const cancel = useCallback(() => {
+    holdRef.current = -Infinity;
     hintRef.current = null;
     resetRef.current = true;
   }, []);
@@ -255,6 +262,7 @@ export function useLiveMetronome(engine: Engine, bars: Bar[], subdiv: 1 | 2 = 1,
       const horizon = pred + (LOOKAHEAD + Math.max(0, -off)) * r;
       while (anchor && next < ev.length && ev[next].t < horizon) {
         const e = ev[next++];
+        if (e.t < holdRef.current) continue;
         let when = anchor.ctx + (e.t - anchor.song) / r + off;
         // 시작하며 살짝 지나친 박은 바로 울린다 (그 밖에 지난 박은 이미 걸러졌다)
         if (when < now - 0.15) continue;
@@ -402,5 +410,5 @@ export function useLiveMetronome(engine: Engine, bars: Bar[], subdiv: 1 | 2 = 1,
     };
   }, [enabled, engine.audios]);
 
-  return { expect, cancel };
+  return { expect, cancel, holdUntil };
 }
