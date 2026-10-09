@@ -4,6 +4,7 @@ import { BASE } from "../api";
 import { cachedUrl, download, removeFromDevice } from "../lib/audioCache";
 import { audioCtx } from "../lib/audioCtx";
 import { stemFilesOf } from "../lib/stems";
+import { useSubdiv } from "./useLiveMetronome";
 
 export interface Track {
   key: string;
@@ -36,7 +37,7 @@ const LABEL: Record<string, string> = {
   original: "원본",
 };
 
-export function tracksOf(job: Job): Track[] {
+export function tracksOf(job: Job, subdiv: 1 | 2 = 1): Track[] {
   const best = stemFilesOf(job);
   // 원본은 믹서에 올리지 않는다 — 스템과 겹쳐 소리가 두 배가 된다 (파형 표시용으로만 쓴다)
   const plain = ["drums", "bass", "vocals", "other"].filter((k) => best.has(k));
@@ -73,11 +74,15 @@ export function tracksOf(job: Job): Track[] {
   //    잠근 기기의 클릭 보정은 트랙 오프셋으로 싣는다.
   //  - 그 밖: 송 맵에서 즉석으로 만든다 (고치면 저장 전에도 바로 들린다)
   const active = job.map_versions?.find((v) => v.id === job.map_active);
-  const clickFile = best.get("click");
+  const click4 = best.get("click");
+  // 8비트: 서버가 같이 구워 둔 `{곡}_click8.mp3` (없는 예전 곡은 4비트 파일)
+  const click8 =
+    subdiv === 2 && click4 ? job.files.find((f) => f.name === `${job.folder}_click8.mp3`) : undefined;
+  const clickFile = click8 ?? click4;
   if (active?.locked && clickFile) {
     tracks.push({
       key: "click",
-      label: `${LABEL.click} (확정)`,
+      label: `${LABEL.click} (확정${click8 ? " · 8비트" : ""})`,
       url: `${BASE}${clickFile.url}?v=${clickFile.mtime ?? 0}`,
       rel: clickFile.rel,
       mtime: clickFile.mtime ?? 0,
@@ -136,8 +141,12 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
    */
   // 기기 저장을 지우면 이 값을 올려 트랙을 다시 불러온다 (스트리밍으로 돌아간다)
   const [reloadTick, setReloadTick] = useState(0);
+  // 4/8비트 — 확정 버전의 메트로놈 파일이 바뀐다 (바꾸면 트랙을 다시 불러온다)
+  const [subdiv] = useSubdiv();
+  const subdivRef = useRef(subdiv);
+  subdivRef.current = subdiv;
   const key = job
-    ? `${job.id}:${tracksOf(job).map((t) => `${t.rel}@${t.mtime}`).join("|")}#${reloadTick}`
+    ? `${job.id}:${tracksOf(job, subdiv).map((t) => `${t.rel}@${t.mtime}`).join("|")}#${reloadTick}`
     : "";
   const jobRef = useRef(job);
   jobRef.current = job;
@@ -236,7 +245,7 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     setPlaying(false);
     setTime(resumeAt);
 
-    const ts = j ? tracksOf(j) : [];
+    const ts = j ? tracksOf(j, subdivRef.current) : [];
     setTracks(ts);
     setLoadedId(j?.id ?? null);
     setMuted(ts.map((t) => prevMix.get(t.key)?.muted ?? false));

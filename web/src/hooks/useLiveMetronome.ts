@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { audioCtx, metroOut, scheduleClick, type ClickHandle } from "../lib/audioCtx";
 import { beatsFromBars } from "../lib/songmap";
 import type { Bar } from "../types";
@@ -29,21 +29,32 @@ export const OFFSET_LIMIT = 200;
 /**
  * 메트로놈 4비트(1) / 8비트(2). 곡마다가 아니라 연습 방식이라 브라우저에 하나로 기억한다.
  */
+// 화면 전체가 같은 값을 본다 — 믹서(즉석 클릭)와 재생 엔진(확정 버전의 4/8비트 클릭 파일)이 같이 쓴다
+let subdivValue: 1 | 2 = (() => {
+  try {
+    return localStorage.getItem(LS_SUBDIV) === "2" ? 2 : 1;
+  } catch {
+    return 1;
+  }
+})();
+const subdivListeners = new Set<() => void>();
+
 export function useSubdiv(): [1 | 2, (n: 1 | 2) => void] {
-  const [v, setV] = useState<1 | 2>(() => {
-    try {
-      return localStorage.getItem(LS_SUBDIV) === "2" ? 2 : 1;
-    } catch {
-      return 1;
-    }
-  });
+  const v = useSyncExternalStore(
+    (cb) => {
+      subdivListeners.add(cb);
+      return () => subdivListeners.delete(cb);
+    },
+    () => subdivValue,
+  );
   const set = useCallback((n: 1 | 2) => {
-    setV(n);
+    subdivValue = n;
     try {
       localStorage.setItem(LS_SUBDIV, String(n));
     } catch {
       /* 기억만 못 할 뿐 */
     }
+    subdivListeners.forEach((f) => f());
   }, []);
   return [v, set];
 }

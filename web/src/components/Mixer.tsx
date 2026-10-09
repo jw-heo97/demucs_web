@@ -835,7 +835,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
           <option value="4">예비박 4박</option>
           <option value="8">예비박 8박</option>
         </select>
-        {hasMetronome && (
+        {metroIdx >= 0 && (
           <select
             style={{ width: 118 }}
             value={String(subdiv)}
