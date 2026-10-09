@@ -5,7 +5,7 @@ import { sectionAt } from "../lib/sectionColors";
 import { barAtTime, barsFromMap, emptyRange, nearestBar, stepOf } from "../lib/songmap";
 import { stemFilesOf } from "../lib/stems";
 import { showTime } from "../lib/time";
-import type { Job, MapPayload, MapVersion, SongMap } from "../types";
+import type { Job, MapPayload, MapRange, MapVersion, ScoreData, SongMap } from "../types";
 import { Mixer, type MixerControl } from "./Mixer";
 import { ScorePanel } from "./ScoreView";
 import { TimeInput } from "./TimeInput";
@@ -239,6 +239,49 @@ export function SongMapTab({ jobs, onChanged }: Props) {
     }
   };
 
+  /**
+   * 악보의 구간 표시·템포로 송 맵을 만들어 새 버전 '악보'로 저장한다 (지금 버전은 남는다).
+   * 1마디 1박 위치는 지금 값(자동 추론 또는 손으로 잡은 값)을 쓴다 — 악보는 음원 어디서
+   * 시작하는지 모른다. 반복으로 같은 구간이 연달아 나오면 한 구간으로 합친다.
+   */
+  const mapFromScore = (sc: ScoreData): SongMap | null => {
+    if (!map) return null;
+    const n = sc.order ? sc.order.length : sc.measures.length;
+    const markAt = new Map(sc.marks.map((m) => [m.measure, m.text]));
+    const base = map.ranges[0];
+    const ranges: MapRange[] = [];
+    for (let b = 1; b <= n; b++) {
+      const name = markAt.get(sc.order ? sc.order[b - 1] : b);
+      if (!name) continue;
+      if (ranges.length && ranges[ranges.length - 1].name === name) continue;
+      ranges.push({ ...emptyRange(b, base), name, click_beats: null });
+    }
+    if (!ranges.length || ranges[0].from_bar !== 1) ranges.unshift({ ...emptyRange(1, base), click_beats: null });
+    return { anchor: map.anchor, bpm: sc.tempo ?? map.bpm, ranges };
+  };
+
+  const [scoreData, setScoreData] = useState<ScoreData | null>(null);
+  const buildFromScore = () => {
+    if (!job || !scoreData) return;
+    const m = mapFromScore(scoreData);
+    if (!m) return;
+    const names = new Set(versions.map((v) => v.name));
+    let name = "악보";
+    for (let k = 2; names.has(name); k++) name = `악보 ${k}`;
+    if (
+      !confirm(
+        `악보로 송 맵을 만들어 새 버전에 저장합니다: ${name} (지금 버전은 그대로 남습니다)
+` +
+          `구간 ${m.ranges.length}개 · ♩=${m.bpm} · 1마디 1박은 지금 값(${showTime(m.anchor)})을 씁니다.`,
+      )
+    )
+      return;
+    void verAction(
+      () => api.createVersion(job.id, name, m),
+      `새 버전 ${name} 을 만들었습니다 — 1마디 1박 위치가 맞는지 확인하세요.`,
+    );
+  };
+
   const verAction = async (fn: () => Promise<unknown>, note: string) => {
     if (!job) return;
     setBusy(true);
@@ -365,12 +408,17 @@ export function SongMapTab({ jobs, onChanged }: Props) {
           {/* 악보: 지금 마디부터 8마디. 마디를 누르면 그 마디로 이동 */}
           <ScorePanel
             jobId={job.id}
+            onScore={setScoreData}
             bar={barAtTime(bars, engine.time)?.bar ?? 1}
             onPickBar={(b) => {
               const t = bars.find((x) => x.bar === b)?.start;
               if (t != null) engine.seek(t);
             }}
-          />
+          >
+            <button className="ghost" disabled={busy || !scoreData?.marks.length} onClick={buildFromScore}>
+              악보로 송 맵 만들기
+            </button>
+          </ScorePanel>
 
           <div className="panel">
             <div className="vertabs">
