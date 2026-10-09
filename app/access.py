@@ -48,7 +48,7 @@ from typing import Optional
 from html import escape
 
 from fastapi import Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 
 from config import ALLOW_FUNNEL, OUTPUT_DIR, TAILSCALE_ALLOW_USERS
 from lock import check_pin, clear_fails, hash_pin, locked_out, record_fail
@@ -414,7 +414,6 @@ input:focus{outline:2px solid var(--accent);border-color:transparent}
 button,a.btn{display:block;width:100%;margin-top:20px;padding:13px;border:0;border-radius:9px;background:var(--accent);
  color:#fff;font:inherit;font-weight:600;text-align:center;text-decoration:none;cursor:pointer}
 button:disabled{opacity:.6}
-a.sub{background:none;color:var(--muted);font-weight:400;padding:8px;margin-top:8px}
 .err{color:var(--err);font-size:.9rem;margin-top:12px;min-height:1.3em}
 </style></head><body>__BODY__</body></html>"""
 
@@ -446,11 +445,19 @@ def _join_page(body: str, status: int = 200) -> HTMLResponse:
     return HTMLResponse(_JOIN_HTML.replace("__BODY__", body), status_code=status)
 
 
-def _join_box(title: str, text: str, enter: bool = False, again: bool = False) -> str:
-    return ('<div class="box"><h1>' + escape(title) + "</h1><p>" + escape(text) + "</p>"
-            + ('<a class="btn" href="/">들어가기</a>' if enter else "")
-            + ('<a class="btn sub" href="?again=1">다른 이름으로 다시 등록</a>' if again else "")
-            + "</div>")
+def _join_box(title: str, text: str) -> str:
+    return '<div class="box"><h1>' + escape(title) + "</h1><p>" + escape(text) + "</p></div>"
+
+
+def start_url(request: Request, device: Optional[dict]) -> str:
+    """홈 화면 아이콘이 열 주소. 링크로 등록한 기기는 '그 링크 + 이 기기 토큰' — 홈 화면 앱이
+    Safari 와 쿠키를 나눠 쓰지 않아도 처음 열 때 같은 기기로 이어진다 (_join 의 ?t=)."""
+    token = request.cookies.get(DEVICE_COOKIE, "")
+    if device is not None and device.get("link") and token:
+        ln = next((x for x in store.links() if x["id"] == device["link"]), None)
+        if ln is not None:
+            return f"{JOIN_PREFIX}{ln['code']}?t={token}"
+    return "/ui/"
 
 
 async def _join(request: Request, who: dict, device: Optional[dict]):
@@ -459,12 +466,24 @@ async def _join(request: Request, who: dict, device: Optional[dict]):
     if request.method == "GET":
         if ln is None:
             return _join_page(_join_box("없는 링크", "지워졌거나 잘못된 접속 링크입니다. 링크를 다시 받아 주세요."), 404)
+        # 링크를 '들어오는 주소' 로 계속 쓸 수 있게: 이미 들어올 수 있는 기기는 바로 앱으로 보낸다.
+        # (관리자 기기는 등록하지 않는다 — 기기 쿠키가 생기면 송 맵 주인이 그 기기로 기록된다)
         if is_admin(who):
-            # 관리자 기기에 기기 쿠키가 생기면 송 맵 주인이 '관리자' 대신 그 기기로 기록된다
-            return _join_page(_join_box(ln["label"], "이 기기는 관리자 기기라서 등록하지 않아도 들어갈 수 있습니다.", True))
+            return RedirectResponse("/", status_code=303)
         if device is not None and not device.get("blocked") and not request.query_params.get("again"):
-            return _join_page(_join_box(ln["label"], f"이 기기는 이미 '{device['name']}' 으로 등록되어 있습니다.",
-                                        True, True))
+            return RedirectResponse("/", status_code=303)
+        # 홈 화면 아이콘: iPhone·iPad 의 홈 화면 앱은 Safari 와 쿠키 저장소가 따로라서 처음 열면
+        # 등록이 안 된 상태다. 그래서 manifest 의 start_url 에 이 기기 토큰을 실어 두고(?t=),
+        # 그걸로 같은 기기 등록을 이어 준다 — 비밀번호를 다시 넣지 않아도 되고 기기도 늘지 않는다.
+        t = request.query_params.get("t")
+        if t:
+            dv = store.device_for(t)
+            if dv is not None and not dv.get("blocked") and dv.get("link") == ln["id"]:
+                resp = RedirectResponse("/", status_code=303)
+                resp.set_cookie(DEVICE_COOKIE, t, max_age=DEVICE_MAX_AGE, httponly=True,
+                                secure=who["via"] != "direct", samesite="lax")
+                _log(who, dv, "홈 화면 앱에서 등록 이어받음")
+                return resp
         return _join_page(_JOIN_FORM.replace("__LABEL__", escape(ln["label"]))
                           .replace("__NAME__", escape(device["name"]) if device else ""))
 

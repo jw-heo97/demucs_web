@@ -717,6 +717,17 @@ def get_file(job_id: str, rel: str, download: int = 0):
     )
 
 
+@app.get("/manifest.webmanifest")
+def web_manifest(request: Request):
+    """홈 화면에 추가할 때 쓰는 설정. start_url 이 기기마다 다르다 (access.start_url)."""
+    dv = getattr(request.state, "device", None)
+    return JSONResponse({
+        "name": "Demucs Web", "short_name": "Demucs",
+        "start_url": access.start_url(request, dv), "scope": "/",
+        "display": "standalone", "background_color": "#12141a", "theme_color": "#12141a",
+    }, media_type="application/manifest+json", headers={"Cache-Control": "no-store"})
+
+
 @app.get("/")
 def index():
     return RedirectResponse("/ui/")
