@@ -6,7 +6,16 @@ import type { Track, useAudioEngine } from "../hooks/useAudioEngine";
 import { OFFSET_LIMIT, useClickOffset, useLiveMetronome, useSubdiv } from "../hooks/useLiveMetronome";
 import { useSectionVoice } from "../hooks/useSectionVoice";
 import { roomPosition, useTogether, type RoomState } from "../hooks/useTogether";
-import { audioCtx, scheduleClick } from "../lib/audioCtx";
+import {
+  CLICK_SOUNDS,
+  audioCtx,
+  getClickSound,
+  metroOut,
+  scheduleClick,
+  setClickSound,
+  type ClickHandle,
+  type ClickSound,
+} from "../lib/audioCtx";
 import { ScrollDial } from "./ScrollDial";
 import type { Bar } from "../types";
 import { barAtTime, stepOf } from "../lib/songmap";
@@ -222,9 +231,12 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
       rec.current = null;
     }
   }, []);
-  const timers = useRef<{ t?: number; i?: number; oscs: OscillatorNode[] }>({ oscs: [] });
+  const timers = useRef<{ t?: number; i?: number; oscs: ClickHandle[] }>({ oscs: [] });
   // 메트로놈 트랙은 파일이 아니라 송 맵에서 즉석으로 울린다 (편집이 바로 들린다)
   const [subdiv, setSubdiv] = useSubdiv();
+  const [clickSound, setClickSoundState] = useState<ClickSound>(getClickSound);
+  const metroIdx = tracks.findIndex((t) => t.virtual);
+  const metroVol = metroIdx >= 0 ? (vol[metroIdx] ?? 1) : 1;
   const hasMetronome = tracks.some((t) => t.virtual);
   const [clickOffset, setClickOffset] = useClickOffset();
   const metro = useLiveMetronome(engine, bars, subdiv, clickOffset);
@@ -273,7 +285,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
       const mine = tg.serverNow() + deviceMsRef.current;
       while (beepAt + k * 1000 - mine < 300) {
         const when = ctx.currentTime + (beepAt + k * 1000 - mine) / 1000;
-        if (when > ctx.currentTime + 0.005) scheduleClick(ctx, when, k % 4 === 0 ? 1500 : 1000, ctx.destination);
+        if (when > ctx.currentTime + 0.005) scheduleClick(ctx, when, k % 4 === 0 ? 1500 : 1000, metroOut(ctx));
         k++;
       }
     }, 50);
@@ -674,7 +686,10 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
       const when = tBeat - k * step + off;
       if (when < ctx.currentTime) continue;
       timers.current.oscs.push(
-        scheduleClick(ctx, when, (nCount - k) % bpb === 0 ? 1500 : 1000, ctx.destination),
+        // 예비박은 메트로놈을 음소거해도 울리되, 메트로놈 볼륨을 100% 넘게 올렸으면 그만큼 키운다
+        scheduleClick(ctx, when, (nCount - k) % bpb === 0 ? 1500 : 1000, metroOut(ctx), {
+          peak: 0.9 * Math.max(1, metroVol),
+        }),
       );
     }
 
@@ -769,6 +784,32 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
           >
             <option value="1">클릭 4비트</option>
             <option value="2">클릭 8비트</option>
+          </select>
+        )}
+        {(hasMetronome || countIn > 0) && (
+          <select
+            style={{ width: 128 }}
+            value={clickSound}
+            onChange={(e) => {
+              const v = e.target.value as ClickSound;
+              setClickSound(v);
+              setClickSoundState(v);
+              // 고르면 한 번 들려준다 (첫 박 소리)
+              try {
+                const ctx = audioCtx();
+                void ctx.resume();
+                scheduleClick(ctx, ctx.currentTime + 0.03, 1500, metroOut(ctx), { peak: 0.9 * Math.max(1, metroVol) });
+              } catch {
+                /* Web Audio 미지원 */
+              }
+            }}
+            title="메트로놈·예비박 소리. 이 기기에 기억합니다. 재생 중에도 바로 바뀝니다."
+          >
+            {CLICK_SOUNDS.map((s) => (
+              <option key={s.value} value={s.value}>
+                소리: {s.label}
+              </option>
+            ))}
           </select>
         )}
         {(hasMetronome || countIn > 0) && (
@@ -1052,9 +1093,11 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
           <input
             type="range"
             min={0}
-            max={100}
+            // 메트로놈은 300% 까지 (리미터가 찌그러짐을 막는다). 스템은 100% 까지
+            max={t.virtual ? 300 : 100}
             value={Math.round((vol[i] ?? 1) * 100)}
             onChange={(e) => engine.setVolume(i, Number(e.target.value) / 100)}
+            title={t.virtual ? "메트로놈 볼륨 — 음악에 묻히면 100 넘게(최대 300) 올리세요" : undefined}
           />
           <span className="pct">{Math.round((vol[i] ?? 1) * 100)}</span>
           {t.trackId && (() => {

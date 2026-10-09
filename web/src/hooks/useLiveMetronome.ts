@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { audioCtx, scheduleClick } from "../lib/audioCtx";
+import { audioCtx, metroOut, scheduleClick, type ClickHandle } from "../lib/audioCtx";
 import { beatsFromBars } from "../lib/songmap";
 import type { Bar } from "../types";
 import type { useAudioEngine } from "./useAudioEngine";
@@ -14,10 +14,11 @@ interface ClickEvent {
 }
 
 const SOUND: Record<ClickEvent["kind"], { freq: number; peak: number; length: number }> = {
-  accent: { freq: 1500, peak: 0.5, length: 0.07 },
-  beat: { freq: 1000, peak: 0.5, length: 0.07 },
-  // 박과 헷갈리지 않게 더 높고 짧고 작게 (서버 믹스다운의 8비트와 같은 소리)
-  sub: { freq: 2200, peak: 0.23, length: 0.04 },
+  // 예전엔 0.5 였다 — 음악에 묻혀 잘 안 들려서 올렸다 (100% 넘게 키우면 리미터가 받는다)
+  accent: { freq: 1500, peak: 0.9, length: 0.07 },
+  beat: { freq: 1000, peak: 0.9, length: 0.07 },
+  // 박과 헷갈리지 않게 더 높고 짧고 작게
+  sub: { freq: 2200, peak: 0.4, length: 0.04 },
 };
 
 const LS_SUBDIV = "metronome.subdiv";
@@ -188,7 +189,7 @@ export function useLiveMetronome(engine: Engine, bars: Bar[], subdiv: 1 | 2 = 1,
     const ctx = audioCtx();
     if (!gainRef.current) {
       gainRef.current = ctx.createGain();
-      gainRef.current.connect(ctx.destination);
+      gainRef.current.connect(metroOut(ctx));
     }
     const out = gainRef.current;
     out.gain.setValueAtTime(levelRef.current, ctx.currentTime);
@@ -207,7 +208,7 @@ export function useLiveMetronome(engine: Engine, bars: Bar[], subdiv: 1 | 2 = 1,
     // (음악 시작이 몇십 ms 흔들려도 그건 다음 재생의 시작 보정으로 고친다)
     let graceUntil = 0;
     let next = 0;
-    const live: { osc: OscillatorNode; when: number; t: number }[] = [];
+    const live: { osc: ClickHandle; when: number; t: number }[] = [];
     // 마지막으로 실제로 울린(취소되지 않은) 클릭의 곡 시각 — 다시 맞출 때 겹치거나 빠지지 않게
     let lastSounded = -Infinity;
 
