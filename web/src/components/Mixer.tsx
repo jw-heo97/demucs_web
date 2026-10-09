@@ -53,7 +53,7 @@ const LS_DEVICE = "together.deviceMs";
 /** 반복 구간 끝에서 반복 시작으로 돌아와 예비박을 시작하기 전 쉬는 시간(초) */
 const LOOP_GAP = 0.5;
 /** 함께 연습 버튼 — 아직 다듬는 중이라 숨겨 둔다 (서버도 TOGETHER=1 일 때만 연다) */
-const TOGETHER_ENABLED = false;
+const TOGETHER_ENABLED = true;
 function useDeviceDelay(): [number, (ms: number) => void] {
   const [v, setV] = useState(() => {
     try {
@@ -238,7 +238,31 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
   deviceMsRef.current = deviceMs;
   const countingRef = useRef(0);
   countingRef.current = counting;
-  const tg = useTogether(jobId, (s) => applyRoomState(s));
+  const tg = useTogether(
+    jobId,
+    (s) => applyRoomState(s),
+    (at, n, by) => playBeeps(at, n, by),
+  );
+
+  /**
+   * 소리로 맞춤 확인: 서버 시각 at 부터 1초마다 클릭. 음악 시작과 같은 계산(서버 시각 → 이 기기 시각,
+   * 내 기기 지연만큼 앞당김)으로 울리므로, 모든 기기가 한 번에 '딱' 이면 음악도 맞는다.
+   */
+  function playBeeps(at: number, n: number, by: string) {
+    let ctx: AudioContext;
+    try {
+      ctx = audioCtx();
+      void ctx.resume();
+    } catch {
+      return;
+    }
+    const mine = tg.serverNow() + deviceMsRef.current;
+    for (let k = 0; k < n; k++) {
+      const when = ctx.currentTime + (at + k * 1000 - mine) / 1000;
+      if (when > ctx.currentTime) scheduleClick(ctx, when, k % 4 === 0 ? 1500 : 1000, ctx.destination);
+    }
+    setHint(`${by} 님이 맞춤 확인 — 클릭이 한 번에 '딱' 들리면 맞은 것, '따닥' 이면 내 기기 지연을 조정하세요.`);
+  }
 
   const [preparing, setPreparing] = useState(false);
   const prepRef = useRef("");
@@ -334,9 +358,11 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
             restore(s);
             engine.seek(expected);
             win = [];
-          } else if (Math.abs(med) > 0.01) {
+          } else if (Math.abs(med) > 0.015) {
             // 앞서 있으면(+) 느리게, 뒤처지면(-) 빠르게. 1초에 어긋남만큼 따라잡는 정도.
-            const k = Math.max(-0.05, Math.min(0.05, -med / 1.0));
+            // 15ms 아래는 건드리지 않는다 — 몇 ms 차이까지 속도로 맞추려 하면 속도를 계속 바꿔
+            // 오히려 ±15ms 로 흔들렸다(실측). 예약 시작만으로 기기 안에서는 ±7ms 안에 들어간다.
+            const k = Math.max(-0.03, Math.min(0.03, -med / 1.0));
             setSpeed(s.rate * (1 + k));
             nudged = true;
           } else restore(s);
@@ -386,6 +412,17 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
     setLoopEnd((lp) => loopEndFn.current(lp));
     return () => setLoopEnd(null);
   }, [setLoopEnd]);
+
+  // 함께 연습 중에 기기 저장을 지우면 나간다 (스트리밍으로는 시작을 맞출 수 없다)
+  const cacheState = engine.cache.state;
+  useEffect(() => {
+    // 'checking' 은 목록이 갱신될 때 잠깐 지나가는 상태라 보지 않는다 — 정말 지웠을 때만
+    if (tg.joined && (cacheState === "none" || cacheState === "stream")) {
+      tg.leave();
+      setHint("기기 저장을 지워 함께 연습에서 나왔습니다.");
+    }
+    // tg 는 매 렌더 새 객체 — 저장 상태가 바뀔 때만 본다
+  }, [cacheState]);
 
   function joinTogether() {
     // 참여 버튼이 사용자 제스처라 여기서 소리를 풀어 둔다 — 이후 방 신호로 재생이 시작된다 (iOS)
@@ -772,8 +809,20 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
         {TOGETHER_ENABLED && (
           <button
             className={`ghost${tg.joined ? " on" : ""}`}
-            onClick={() => (tg.joined ? tg.leave() : joinTogether())}
-            title="같은 곡을 연 다른 기기들과 같은 순간에 재생합니다. 누가 재생·멈춤·이동해도 모두 따라갑니다. 볼륨·음소거는 각자 따로입니다."
+            onClick={() =>
+              tg.joined
+                ? tg.leave()
+                : engine.cache.state === "cached"
+                  ? joinTogether()
+                  : setHint("함께 연습은 이 기기에 저장한 곡만 할 수 있습니다. 오른쪽 '기기에 저장' 을 먼저 눌러 주세요.")
+            }
+            aria-disabled={!tg.joined && engine.cache.state !== "cached"}
+            style={!tg.joined && engine.cache.state !== "cached" ? { opacity: 0.5 } : undefined}
+            title={
+              engine.cache.state === "cached"
+                ? "같은 곡을 연 다른 기기들과 같은 순간에 재생합니다. 누가 재생·멈춤·이동해도 모두 따라갑니다. 볼륨·음소거는 각자 따로입니다."
+                : "기기에 저장한 곡만 함께 연습할 수 있습니다 — 서버에서 받아 가며 재생하면 기기마다 시작이 들쭉날쭉해 맞출 수 없습니다."
+            }
           >
             {tg.joined ? "함께 연습 중" : "함께 연습"}
           </button>
@@ -946,6 +995,13 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
                 />
                 ms
               </label>
+              <button
+                className="ghost"
+                onClick={() => tg.send({ t: "beep" })}
+                title="모든 기기가 같은 순간에 클릭을 8번 냅니다. 한 번에 '딱' 들리면 맞은 것, '따닥' 이면 늦게 들리는 기기의 '내 기기 지연' 을 올리세요."
+              >
+                소리로 맞춤 확인
+              </button>
               {tg.state.current?.by && <span className="meta">마지막 조작: {tg.state.current.by}</span>}
             </>
           )}

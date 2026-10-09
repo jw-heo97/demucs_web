@@ -51,7 +51,11 @@ export function roomPosition(s: RoomState, serverMs: number) {
  * 시계: 몇 번 주고받아 왕복 시간(RTT)이 가장 짧았던 측정으로 서버-기기 시계 차이를 잡는다
  * (왕복이 짧을수록 '가는 시간 = 오는 시간' 가정이 맞다). 20초마다 다시 잰다.
  */
-export function useTogether(jobId: string, onState: (s: RoomState, fresh: boolean) => void) {
+export function useTogether(
+  jobId: string,
+  onState: (s: RoomState, fresh: boolean) => void,
+  onBeep?: (at: number, n: number, by: string) => void,
+) {
   const [joined, setJoined] = useState(false);
   const [connected, setConnected] = useState(false);
   const [members, setMembers] = useState<Member[]>([]);
@@ -71,6 +75,8 @@ export function useTogether(jobId: string, onState: (s: RoomState, fresh: boolea
   const stateRef = useRef<RoomState | null>(null);
   const onStateRef = useRef(onState);
   onStateRef.current = onState;
+  const onBeepRef = useRef(onBeep);
+  onBeepRef.current = onBeep;
 
   const serverNow = useCallback(() => localNow() + offsetRef.current, []);
 
@@ -83,7 +89,7 @@ export function useTogether(jobId: string, onState: (s: RoomState, fresh: boolea
   const pongWait = useRef<(() => void) | null>(null);
   /** 시계를 다시 잰다 — 시작 직전에 부른다. 최선값을 버리고 n 번 새로 재서 그중 최선을 쓴다. */
   const resync = useCallback(
-    (n = 6) =>
+    (n = 10) =>
       new Promise<void>((resolve) => {
         bestRef.current = null;
         let got = 0;
@@ -94,7 +100,7 @@ export function useTogether(jobId: string, onState: (s: RoomState, fresh: boolea
         pongWait.current = () => {
           if (++got >= n) done();
         };
-        for (let i = 0; i < n; i++) window.setTimeout(() => send({ t: "ping", c: localNow() }), i * 80);
+        for (let i = 0; i < n; i++) window.setTimeout(() => send({ t: "ping", c: localNow() }), i * 60);
         // 응답이 안 와도 오래 붙잡지 않는다
         window.setTimeout(done, 1500);
       }),
@@ -145,10 +151,11 @@ export function useTogether(jobId: string, onState: (s: RoomState, fresh: boolea
       if (msg.t === "pong") {
         const t1 = localNow();
         const r = t1 - msg.c;
-        // 왕복 시간이 가장 짧은 측정이 가장 정확하다
-        if (!bestRef.current || r <= bestRef.current.rtt * 1.2) {
+        // 왕복 시간이 가장 짧은 측정만 믿는다 — 시계 오차는 많아야 (왕복 - 최소 왕복)/2 라서
+        // 짧을수록 '가는 시간 = 오는 시간' 가정이 맞다. 예전엔 최선의 1.2배까지 받아 들쭉날쭉했다.
+        if (!bestRef.current || r <= bestRef.current.rtt) {
           offsetRef.current = msg.s - (msg.c + r / 2);
-          if (!bestRef.current || r < bestRef.current.rtt) bestRef.current = { rtt: r, at: t1 };
+          bestRef.current = { rtt: r, at: t1 };
           setRtt(Math.round(r));
         }
         pongWait.current?.();
@@ -163,6 +170,8 @@ export function useTogether(jobId: string, onState: (s: RoomState, fresh: boolea
       } else if (msg.t === "state") {
         stateRef.current = msg.state;
         onStateRef.current(msg.state, false);
+      } else if (msg.t === "beep") {
+        onBeepRef.current?.(msg.at, msg.n, msg.by);
       } else if (msg.t === "members") {
         setMembers(msg.members);
       }
