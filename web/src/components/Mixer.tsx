@@ -7,6 +7,7 @@ import { OFFSET_LIMIT, useClickOffset, useLiveMetronome, useSubdiv } from "../ho
 import { useSectionVoice } from "../hooks/useSectionVoice";
 import { roomPosition, useTogether, type RoomState } from "../hooks/useTogether";
 import { audioCtx, scheduleClick } from "../lib/audioCtx";
+import { ScrollDial } from "./ScrollDial";
 import type { Bar } from "../types";
 import { barAtTime, stepOf } from "../lib/songmap";
 import { clock } from "../lib/time";
@@ -58,13 +59,13 @@ function useDeviceDelay(): [number, (ms: number) => void] {
   const [v, setV] = useState(() => {
     try {
       const n = Number(localStorage.getItem(LS_DEVICE));
-      return Number.isFinite(n) ? Math.max(0, Math.min(500, n)) : 0;
+      return Number.isFinite(n) ? Math.max(-100, Math.min(100, n)) : 0;
     } catch {
       return 0;
     }
   });
   const set = (ms: number) => {
-    const n = Math.max(0, Math.min(500, Math.round(ms) || 0));
+    const n = Math.max(-100, Math.min(100, Math.round(ms) || 0));
     setV(n);
     try {
       localStorage.setItem(LS_DEVICE, String(n));
@@ -238,17 +239,28 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
   deviceMsRef.current = deviceMs;
   const countingRef = useRef(0);
   countingRef.current = counting;
+  // 소리로 맞춤 확인 중이면 첫 클릭의 서버 시각 (null = 꺼짐)
+  const [beepAt, setBeepAt] = useState<number | null>(null);
   const tg = useTogether(
     jobId,
     (s) => applyRoomState(s),
-    (at, n, by) => playBeeps(at, n, by),
+    (at, by) => {
+      setBeepAt(at);
+      if (at != null)
+        setHint(
+          `${by ? by + " 님이 " : ""}맞춤 확인 중 — 클릭이 '딱' 한 번이면 맞은 것, '따닥' 이면 내 기기 지연을 조절하며 들어 보세요.`,
+        );
+      else setHint("");
+    },
   );
 
   /**
-   * 소리로 맞춤 확인: 서버 시각 at 부터 1초마다 클릭. 음악 시작과 같은 계산(서버 시각 → 이 기기 시각,
-   * 내 기기 지연만큼 앞당김)으로 울리므로, 모든 기기가 한 번에 '딱' 이면 음악도 맞는다.
+   * 소리로 맞춤 확인: 서버 시각 beepAt 부터 1초마다 클릭, 끌 때까지. 음악 시작과 같은 계산(서버 시각 →
+   * 이 기기 시각, 내 기기 지연만큼 앞당김)이라 모두가 '딱' 이면 음악도 맞는다. 클릭은 0.3초 앞만
+   * 예약하므로 내 기기 지연을 돌리면 다음 클릭부터 바로 들린다.
    */
-  function playBeeps(at: number, n: number, by: string) {
+  useEffect(() => {
+    if (beepAt == null || !tg.joined) return;
     let ctx: AudioContext;
     try {
       ctx = audioCtx();
@@ -256,13 +268,21 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
     } catch {
       return;
     }
-    const mine = tg.serverNow() + deviceMsRef.current;
-    for (let k = 0; k < n; k++) {
-      const when = ctx.currentTime + (at + k * 1000 - mine) / 1000;
-      if (when > ctx.currentTime) scheduleClick(ctx, when, k % 4 === 0 ? 1500 : 1000, ctx.destination);
-    }
-    setHint(`${by} 님이 맞춤 확인 — 클릭이 한 번에 '딱' 들리면 맞은 것, '따닥' 이면 내 기기 지연을 조정하세요.`);
-  }
+    let k = Math.max(0, Math.ceil((tg.serverNow() + deviceMsRef.current - beepAt) / 1000));
+    const id = window.setInterval(() => {
+      const mine = tg.serverNow() + deviceMsRef.current;
+      while (beepAt + k * 1000 - mine < 300) {
+        const when = ctx.currentTime + (beepAt + k * 1000 - mine) / 1000;
+        if (when > ctx.currentTime + 0.005) scheduleClick(ctx, when, k % 4 === 0 ? 1500 : 1000, ctx.destination);
+        k++;
+      }
+    }, 50);
+    return () => window.clearInterval(id);
+    // tg 는 매 렌더 새 객체 — serverNow 는 안정적이다
+  }, [beepAt, tg.joined]);
+  useEffect(() => {
+    if (!tg.joined) setBeepAt(null);
+  }, [tg.joined]);
 
   const [preparing, setPreparing] = useState(false);
   const prepRef = useRef("");
@@ -325,6 +345,23 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
     }
     if (prepRef.current === id) tg.send({ t: "ready", id });
   }
+
+  // 내 기기 지연을 재생 중에 바꾸면, 조절을 멈추고 0.5초 뒤 그 값으로 한 번 다시 맞춰 시작한다
+  // (자동 보정이 아니라 사용자가 바꾼 것 — 이 순간만 잠깐 끊긴다)
+  const firstDevice = useRef(true);
+  useEffect(() => {
+    if (firstDevice.current) {
+      firstDevice.current = false;
+      return;
+    }
+    const s = tg.state.current;
+    if (!tg.joined || !s?.playing || s.prepare) return;
+    const t = window.setTimeout(() => {
+      const now = tg.state.current;
+      if (now?.playing && !now.prepare) applyRoomState(now);
+    }, 500);
+    return () => window.clearTimeout(t);
+  }, [deviceMs]);
 
   // 내 상태 알리기 (어긋남 표시만). 재생 중에는 보정하지 않는다 — 시작만 같은 순간에 맞추고
   // 그다음은 각 기기가 그대로 재생한다. 예전엔 어긋나면 속도를 바꾸거나(±3~5%) 위치를 옮겨
@@ -949,28 +986,23 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
                   onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
                 />
               </label>
-              <label
-                className="meta"
-                title="내 기기 소리가 늦게 나오는 만큼(블루투스 이어폰은 100~200ms) 앞서 재생해 다른 사람과 맞춥니다. 이 기기에 기억."
-              >
+              <span className="meta" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                 내 기기 지연
-                <input
-                  type="number"
-                  min={0}
-                  max={500}
-                  step={10}
-                  style={{ width: 64 }}
+                <ScrollDial
                   value={deviceMs}
-                  onChange={(e) => setDeviceMs(Number(e.target.value))}
+                  onChange={setDeviceMs}
+                  min={-100}
+                  max={100}
+                  unit="ms"
+                  title="위아래로 끌거나 휠을 굴려 조절 (−100~+100ms, 두 번 누르면 0). + 는 내 기기를 앞서, − 는 늦게 재생합니다. 내 소리가 늦게 들리면 + 로. 재생 중에 바꾸면 손을 뗀 뒤 그 값으로 다시 맞춰 시작합니다. 이 기기에 기억."
                 />
-                ms
-              </label>
+              </span>
               <button
-                className="ghost"
-                onClick={() => tg.send({ t: "beep" })}
-                title="모든 기기가 같은 순간에 클릭을 8번 냅니다. 한 번에 '딱' 들리면 맞은 것, '따닥' 이면 늦게 들리는 기기의 '내 기기 지연' 을 올리세요."
+                className={`ghost${beepAt != null ? " on" : ""}`}
+                onClick={() => tg.send({ t: "beep", on: beepAt == null })}
+                title="누르면 모든 기기가 같은 순간에 1초마다 클릭을 냅니다(한 번 더 누르면 멈춤). 한 번에 '딱' 들리면 맞은 것, '따닥' 이면 들으면서 '내 기기 지연' 을 조절하세요."
               >
-                소리로 맞춤 확인
+                {beepAt != null ? "■ 맞춤 확인 멈추기" : "▶ 소리로 맞춤 확인"}
               </button>
               {tg.state.current?.by && <span className="meta">마지막 조작: {tg.state.current.by}</span>}
             </>
