@@ -19,6 +19,8 @@ interface Props {
   onChanged?: () => void;
   /** 속도 조절 노출 여부 (송 맵에서만) */
   showRate?: boolean;
+  /** 재생 버튼 옆 '구간 반복' (송 맵에서만). on 이면 누를 때 해제한다. */
+  loopButton?: { on: boolean; title: string; onToggle: () => void };
   countIn: number;
   onCountInChange: (n: number) => void;
   /**
@@ -34,7 +36,7 @@ interface Props {
  * 예비박은 파일에 굽지 않고 Web Audio 로 즉석에서 만든다. 파일에 넣으려면 모든 스템 앞에
  * 같은 길이의 무음을 붙여 전부 재인코딩해야 하고, 곡 중간부터 연습할 때는 쓸 수 없다.
  */
-export function Mixer({ engine, bars, jobId, onChanged, showRate, countIn, onCountInChange, autoStart }: Props) {
+export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, countIn, onCountInChange, autoStart }: Props) {
   const { tracks, playing, time, duration, rate, muted, solo, vol } = engine;
   const [counting, setCounting] = useState(0);
   const [hint, setHint] = useState("");
@@ -226,6 +228,15 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, countIn, onCou
         <button className="playbtn" onClick={handlePlay}>
           {counting ? counting : playing ? "❚❚" : "▶"}
         </button>
+        {loopButton && (
+          <button
+            className={`ghost${loopButton.on ? " on" : ""}`}
+            onClick={loopButton.onToggle}
+            title={loopButton.title}
+          >
+            구간 반복
+          </button>
+        )}
         <input
           className="seek"
           type="range"

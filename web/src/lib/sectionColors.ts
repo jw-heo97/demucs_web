@@ -34,3 +34,30 @@ export function sectionColors(bars: Bar[]): Map<string, string> {
 export function colorOf(colors: Map<string, string>, name: string | undefined | null) {
   return name ? colors.get(keyOf(name)) ?? null : null;
 }
+
+/**
+ * 시각 t 가 속한 구간 — 같은 이름이 이어지는 마디들. 이름이 없으면 그 마디 하나.
+ * 첫 마디보다 앞이면 첫 구간.
+ */
+export function sectionAt(bars: Bar[], t: number, duration: number) {
+  if (!bars.length) return null;
+  let i = 0;
+  for (let k = 0; k < bars.length; k++) {
+    if (bars[k].start <= t + 0.02) i = k;
+    else break;
+  }
+  const name = bars[i].name;
+  let s = i;
+  let e = i;
+  if (name) {
+    while (s > 0 && bars[s - 1].name === name) s--;
+    while (e + 1 < bars.length && bars[e + 1].name === name) e++;
+  }
+  return {
+    name,
+    fromBar: bars[s].bar,
+    toBar: bars[e].bar,
+    start: bars[s].start,
+    end: e + 1 < bars.length ? bars[e + 1].start : duration,
+  };
+}

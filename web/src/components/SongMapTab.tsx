@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { useAudioEngine } from "../hooks/useAudioEngine";
+import { sectionAt } from "../lib/sectionColors";
 import { barsFromMap, emptyRange, nearestBar, stepOf } from "../lib/songmap";
 import { stemFilesOf } from "../lib/stems";
 import { showTime } from "../lib/time";
@@ -320,6 +321,21 @@ export function SongMapTab({ jobs, onChanged }: Props) {
               jobId={job.id}
               onChanged={onChanged}
               showRate
+              loopButton={{
+                on: !!loop,
+                title: loop
+                  ? `반복 해제 (${showTime(loop.start)}~${showTime(loop.end)})`
+                  : "지금 재생 위치가 속한 구간(같은 이름이 이어지는 마디들)을 반복합니다",
+                onToggle: () => {
+                  if (loop) return setLoopRegion(null);
+                  const s = sectionAt(bars, engine.time, duration);
+                  if (!s || s.end - s.start < 0.3) return;
+                  setLoopRegion({ start: s.start, end: s.end });
+                  setMsg(
+                    `${s.name || `${s.fromBar}마디`} 반복 (${s.fromBar}~${s.toBar}마디)`,
+                  );
+                },
+              }}
               countIn={countIn}
               onCountInChange={setCountIn}
             />
