@@ -69,11 +69,15 @@ class PlaylistStore:
             return self._load()
 
     # --- 변경 ---
-    def create(self, name: Any, items: Any = None) -> dict:
+    def create(self, name: Any, items: Any = None, owner: Optional[str] = None,
+               owner_link: Optional[str] = None) -> dict:
         p = {
             "id": uuid.uuid4().hex[:10],
             "name": self._name(name),
             "items": self._items(items) if items is not None else [],
+            # 만든 사람과 그 사람이 들어온 접속 링크 (곡과 같은 규칙으로 보인다 — main._pl_visible)
+            "owner": owner,
+            "owner_link": owner_link,
             "created_at": time.time(),
             "updated_at": time.time(),
         }

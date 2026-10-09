@@ -82,6 +82,10 @@ export interface AccessLink {
   uses: number;
   /** 지금 이 링크로 등록되어 있는 기기 수 */
   devices: number;
+  /** 관리자가 이 링크에 공유한 곡 수 */
+  songs: number;
+  /** 이 링크 사람들이 만든 곡 수 */
+  own_songs: number;
 }
 
 export interface AccessClient {
@@ -103,7 +107,15 @@ export interface AccessClient {
 export const api = {
   // --- 접속자 관리 ---
   me: () =>
-    get<{ via: string; login: string; admin: boolean; can_edit: boolean; key: string; device: string | null }>("/api/me"),
+    get<{
+      via: string;
+      login: string;
+      admin: boolean;
+      can_edit: boolean;
+      key: string;
+      device: string | null;
+      links: { id: string; label: string }[];
+    }>("/api/me"),
   access: () =>
     get<{
       devices: AccessDevice[];
@@ -117,6 +129,10 @@ export const api = {
   updateLink: (id: string, body: { label?: string; password?: string; role?: AccessRole }) =>
     patch<AccessLink>(`/api/admin/links/${id}`, body),
   deleteLink: (id: string) => del(`/api/admin/links/${id}`),
+  /** 이 링크에 공유할 곡을 통째로 정한다 */
+  setLinkSongs: (id: string, jobs: string[]) => put(`/api/admin/links/${id}/songs`, { jobs }),
+  /** 이 곡을 볼 수 있는 링크를 통째로 정한다 */
+  shareJob: (id: string, links: string[]) => put(`/api/admin/jobs/${id}/share`, { links }),
   updateDevice: (id: string, body: { name?: string; blocked?: boolean; role?: AccessRole }) =>
     patch<AccessDevice>(`/api/admin/devices/${id}`, body),
   deleteDevice: (id: string) => del(`/api/admin/devices/${id}`),

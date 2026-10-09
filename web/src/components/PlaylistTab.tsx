@@ -68,6 +68,8 @@ export function PlaylistTab({ jobs, onChanged }: Props) {
   const done = useMemo(() => jobs.filter((j) => j.status === "done"), [jobs]);
 
   const sel = lists?.find((p) => p.id === selId) ?? lists?.[0] ?? null;
+  // 관리자가 만들어 공유한 플레이리스트는 읽기만 (서버도 403)
+  const editable = canEdit && !sel?.readonly;
   const items = sel?.items ?? [];
   const playable = (i: number) => byId.get(items[i])?.status === "done";
   const curJob = playable(cur) ? byId.get(items[cur])! : null;
@@ -291,8 +293,8 @@ export function PlaylistTab({ jobs, onChanged }: Props) {
               {sel.name} <span className="meta">{items.length}곡</span>
             </h2>
             <span style={{ flex: 1 }} />
-            {canEdit && <button className="ghost" onClick={rename}>이름 변경</button>}
-            {canEdit && <button className="ghost" onClick={removeList}>플레이리스트 삭제</button>}
+            {editable && <button className="ghost" onClick={rename}>이름 변경</button>}
+            {editable && <button className="ghost" onClick={removeList}>플레이리스트 삭제</button>}
           </div>
 
           <div style={{ marginTop: 10 }}>
@@ -320,7 +322,7 @@ export function PlaylistTab({ jobs, onChanged }: Props) {
                       >
                         ▶
                       </button>
-                      {canEdit && (
+                      {editable && (
                         <>
                           <button className="ghost" onClick={() => move(i, -1)} disabled={i === 0} title="위로">▲</button>
                           <button className="ghost" onClick={() => move(i, 1)} disabled={i === items.length - 1} title="아래로">▼</button>
@@ -334,7 +336,7 @@ export function PlaylistTab({ jobs, onChanged }: Props) {
             })}
           </div>
 
-          {canEdit && (
+          {editable && (
           <div className="actions">
             <select value={addId} onChange={(e) => setAddId(e.target.value)} style={{ flex: 1, minWidth: 180 }}>
               <option value="">보관함에서 곡 고르기…</option>

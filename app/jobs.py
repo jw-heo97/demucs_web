@@ -120,6 +120,14 @@ class Job:
     bars: list[dict] = field(default_factory=list)     # 마디별 시작 시각·박자표
     files: list[dict[str, Any]] = field(default_factory=list)
 
+    # 누가 만든 곡인가 (access.owner_key / owner_name). 없으면 관리자 것(예전 곡).
+    owner: Optional[str] = None
+    owner_name: Optional[str] = None
+    # 만든 기기가 들어온 접속 링크 — 같은 링크 사람들끼리 이 곡을 본다
+    owner_link: Optional[str] = None
+    # 관리자가 이 곡을 공유한 접속 링크들
+    shared_links: list[str] = field(default_factory=list)
+
     created_at: float = field(default_factory=time.time)
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
@@ -174,6 +182,10 @@ class Job:
             "files": self.files,
             # 사용자 트랙(녹음·반주). 믹서가 스템 뒤에 붙인다 (app/tracks.py)
             "tracks": self.track_entries(),
+            "owner": self.owner,
+            "owner_name": self.owner_name,
+            "owner_link": self.owner_link,
+            "shared_links": list(self.shared_links),
             "created_at": self.created_at,
             "elapsed": round((self.finished_at or time.time()) - (self.started_at or self.created_at), 1),
         }
@@ -197,13 +209,23 @@ class JobStore:
             jobs = sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)
         return [j.to_dict() for j in jobs]
 
+    def all_jobs(self) -> list[Job]:
+        with self._lock:
+            return list(self._jobs.values())
+
+    def set_shared(self, job: Job, links: list[str]) -> None:
+        """이 곡을 볼 수 있는 접속 링크(관리자가 고른 것)를 통째로 바꾼다."""
+        job.shared_links = sorted(set(links))
+        self._save_meta(job)
+
     def queue_depth(self) -> int:
         return self._queue.qsize()
 
     # --- 등록 ---
     def submit(self, url: str, fmt: str, target: str, save_original: bool,
                title_override: Optional[str] = None, metronome: bool = True,
-               minus_mixes: bool = False) -> Job:
+               minus_mixes: bool = False, owner: Optional[str] = None,
+               owner_name: Optional[str] = None, owner_link: Optional[str] = None) -> Job:
         if fmt not in FORMATS:
             raise ValueError(f"format 은 {FORMATS} 중 하나여야 합니다.")
         if target != "all" and target not in STEMS:
@@ -235,7 +257,8 @@ class JobStore:
                   save_original=save_original, title_override=title_override,
                   metronome=metronome, minus_mixes=minus_mixes, video_id=video_id,
                   # 대기 중에도 목록에 제목·길이가 보이게 미리 채운다
-                  title=meta.get("title"), duration=duration)
+                  title=meta.get("title"), duration=duration,
+                  owner=owner, owner_name=owner_name, owner_link=owner_link)
         with self._lock:
             self._jobs[job.id] = job
         try:
@@ -345,6 +368,10 @@ class JobStore:
             map_active=data.get("map_active"),
             metronome=bool(data.get("metronome", False)),
             minus_mixes=bool(data.get("minus_mixes", False)),
+            owner=data.get("owner"),
+            owner_name=data.get("owner_name"),
+            owner_link=data.get("owner_link"),
+            shared_links=[x for x in data.get("shared_links") or [] if isinstance(x, str)],
             status="done",
             stage="완료",
             progress=1.0,

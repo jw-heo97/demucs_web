@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ask, confirmBox } from "../lib/dialog";
+import { ask, confirmBox, pickMany } from "../lib/dialog";
 import { api, type AccessClient, type AccessDevice, type AccessLink, type AccessRole } from "../api";
 
 const ROLE: Record<AccessRole, string> = { view: "보기만", edit: "수정 가능" };
@@ -122,6 +122,29 @@ export function AccessTab() {
     void act(() => api.updateLink(l.id, { password: pw.trim() }), `'${l.label}' 비밀번호를 바꿨습니다.`);
   };
 
+  // 이 링크 사람들에게 보일 곡 고르기 (그 사람들이 직접 만든 곡은 고르지 않아도 늘 보인다)
+  const shareSongs = async (l: AccessLink) => {
+    let jobs;
+    try {
+      jobs = (await api.jobs()).jobs.filter((j) => j.status === "done" && j.owner_link !== l.id);
+    } catch (e) {
+      return setMsg((e as Error).message);
+    }
+    const picked = await pickMany({
+      title: `'${l.label}' 에 공유할 곡`,
+      message: "고른 곡만 이 링크로 들어온 사람들에게 보입니다. 그 사람들이 직접 만든 곡은 고르지 않아도 그 사람들끼리 보입니다.",
+      items: jobs.map((j) => ({
+        label: j.folder ?? j.title ?? j.id,
+        sub: j.owner_name && j.owner_link ? `· ${j.owner_name}` : undefined,
+        value: j.id,
+      })),
+      selected: jobs.filter((j) => j.shared_links?.includes(l.id)).map((j) => j.id),
+      okText: "저장",
+      empty: "보관함에 완료된 곡이 없습니다.",
+    });
+    if (picked) void act(() => api.setLinkSongs(l.id, picked), `'${l.label}' 에 ${picked.length}곡을 공유합니다.`);
+  };
+
   const renameLink = async (l: AccessLink) => {
     const v = await ask({ title: "링크 이름", value: l.label, okText: "바꾸기" });
     if (v && v.trim() && v !== l.label)
@@ -144,7 +167,8 @@ export function AccessTab() {
         <p className="meta" style={{ marginTop: 0 }}>
           링크와 비밀번호를 만들어 보내세요. 받은 사람이 링크를 열고 <b>자기 이름</b>과 <b>비밀번호</b>를 넣으면 그
           기기가 그 이름으로 등록됩니다. 링크 하나를 여러 사람·여러 기기가 같이 써도 됩니다. 링크가 새도
-          비밀번호를 모르면 못 들어옵니다 (5번 틀리면 5분 막힘).
+          비밀번호를 모르면 못 들어옵니다 (5번 틀리면 5분 막힘). 링크 사람들에게는 <b>그 사람들이 만든 곡</b>과{" "}
+          <b>내가 공유한 곡</b>만 보입니다 — 아래 '곡 공유' 나 보관함의 ⋯ → 공유에서 고르세요.
           한 번 들어온 기기는 이 링크를 열면 바로 앱으로 들어가니, 즐겨찾기나 홈 화면 아이콘으로 쓰게 하세요.
         </p>
         <form
@@ -186,7 +210,8 @@ export function AccessTab() {
                 <div className="linkhead">
                   <b>{l.label}</b>
                   <span className="meta">
-                    {ROLE[l.role]} · 기기 {l.devices}대 · {when(l.created)} 만듦
+                    {ROLE[l.role]} · 기기 {l.devices}대 · 공유한 곡 {l.songs} · 이 사람들이 만든 곡 {l.own_songs} ·{" "}
+                    {when(l.created)} 만듦
                   </span>
                 </div>
                 <div className="linkrow">
@@ -196,6 +221,9 @@ export function AccessTab() {
                   </button>
                 </div>
                 <div className="rowbtns">
+                  <button disabled={busy} onClick={() => void shareSongs(l)}>
+                    곡 공유 ({l.songs})
+                  </button>
                   <button className="ghost" disabled={busy} onClick={() => void changePassword(l)}>
                     비밀번호 바꾸기
                   </button>
