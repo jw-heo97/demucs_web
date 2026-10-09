@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { useAudioEngine } from "../hooks/useAudioEngine";
+import { useLiveMetronome } from "../hooks/useLiveMetronome";
+import { audioCtx, scheduleClick } from "../lib/audioCtx";
 import type { Bar } from "../types";
 import { barAtTime, stepOf } from "../lib/songmap";
 import { clock } from "../lib/time";
@@ -25,9 +27,6 @@ interface Props {
   autoStart?: number;
 }
 
-let sharedCtx: AudioContext | null = null;
-const audioCtx = () => (sharedCtx ??= new AudioContext());
-
 /**
  * 트랜스포트 + 트랙 볼륨/음소거/솔로 + 예비박.
  *
@@ -41,6 +40,8 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, countIn, onCou
   const [note, setNote] = useState("");
   const [mixing, setMixing] = useState(false);
   const timers = useRef<{ t?: number; i?: number; oscs: OscillatorNode[] }>({ oscs: [] });
+  // 메트로놈 트랙은 파일이 아니라 송 맵에서 즉석으로 울린다 (편집이 바로 들린다)
+  useLiveMetronome(engine, bars);
 
   /**
    * 지금 들리는 트랙(음소거·솔로·볼륨 반영)만 서버에서 합쳐 한 파일로 받는다.
@@ -137,6 +138,12 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, countIn, onCou
   const next = cur ? bars.find((b) => b.bar === cur.bar + 1) : bars[0];
 
   async function handlePlay() {
+    // iOS 는 사용자 제스처 안에서만 AudioContext 를 깨울 수 있다. 메트로놈·예비박 모두 여기에 의존한다.
+    try {
+      void audioCtx().resume();
+    } catch {
+      /* Web Audio 미지원 — 음악만 재생된다 */
+    }
     if (playing || counting) {
       cancelCount();
       engine.pause();
@@ -179,7 +186,9 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, countIn, onCou
 
     timers.current.oscs = [];
     for (let k = countIn; k >= 1; k--) {
-      click(ctx, tBeat - k * step, (countIn - k) % bpb === 0 ? 1500 : 1000, timers.current.oscs);
+      timers.current.oscs.push(
+        scheduleClick(ctx, tBeat - k * step, (countIn - k) % bpb === 0 ? 1500 : 1000, ctx.destination),
+      );
     }
 
     const startAt = tBeat - toBeat; // >= ctx.currentTime + margin
@@ -320,18 +329,4 @@ function nextBeatAfter(bars: Bar[], pos: number) {
     }
   }
   return pos;
-}
-
-function click(ctx: AudioContext, when: number, freq: number, sink: OscillatorNode[]) {
-  const osc = ctx.createOscillator();
-  const g = ctx.createGain();
-  osc.type = "sine";
-  osc.frequency.value = freq;
-  g.gain.setValueAtTime(0.0001, when);
-  g.gain.exponentialRampToValueAtTime(0.35, when + 0.003);
-  g.gain.exponentialRampToValueAtTime(0.0001, when + 0.07);
-  osc.connect(g).connect(ctx.destination);
-  osc.start(when);
-  osc.stop(when + 0.09);
-  sink.push(osc);
 }

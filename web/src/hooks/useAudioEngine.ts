@@ -9,6 +9,12 @@ export interface Track {
   url: string;
   rel: string;
   mtime: number;
+  /**
+   * 오디오 파일이 없는 트랙. 메트로놈은 파일을 재생하지 않고 useLiveMetronome 이 송 맵에서
+   * 즉석으로 클릭을 만든다 — 맵을 고칠 때마다 파일을 다시 굽지 않아도 바로 들린다.
+   * 음소거·솔로·볼륨은 다른 트랙과 똑같이 엔진이 들고 있다. 항상 목록 맨 끝에 둔다.
+   */
+  virtual?: boolean;
 }
 
 const LABEL: Record<string, string> = {
@@ -28,21 +34,26 @@ export function tracksOf(job: Job): Track[] {
   const best = stemFilesOf(job);
   // 원본은 믹서에 올리지 않는다 — 스템과 겹쳐 소리가 두 배가 된다 (파형 표시용으로만 쓴다)
   const plain = ["drums", "bass", "vocals", "other"].filter((k) => best.has(k));
-  let keys =
+  const keys =
     plain.length >= 2 ? plain : [...best.keys()].filter((k) => k !== "click" && k !== "original");
-  if (best.has("click")) keys = [...keys, "click"];
-  return keys.map((k) => {
+  const tracks: Track[] = keys.map((k) => {
     const f = best.get(k)!;
     return {
       key: k,
       label: LABEL[k] ?? k,
-      // 메트로놈은 송 맵을 저장할 때마다 같은 이름으로 다시 구워진다. URL 이 같으면
-      // <audio> 가 이미 받아둔 옛 데이터를 그대로 들려주므로 수정 시각을 붙여 구별한다.
+      // 같은 이름으로 다시 구워진 파일(예전 메트로놈처럼)을 <audio> 가 옛 데이터로
+      // 들려주지 않게 수정 시각을 붙여 구별한다.
       url: `${BASE}${f.url}?v=${f.mtime ?? 0}`,
       rel: f.rel,
       mtime: f.mtime ?? 0,
     };
   });
+  // 메트로놈은 송 맵이 있으면 언제나 쓸 수 있다 (클릭 파일은 다운로드·믹스 받기용)
+  const hasMap = !!(job.songmap as { ranges?: unknown[] } | undefined)?.ranges?.length;
+  if (hasMap || best.has("click")) {
+    tracks.push({ key: "click", label: LABEL.click, url: "", rel: "", mtime: 0, virtual: true });
+  }
+  return tracks;
 }
 
 /**
@@ -149,11 +160,13 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     setMuted(ts.map((t) => prevMix.get(t.key)?.muted ?? false));
     setSolo(ts.map((t) => prevMix.get(t.key)?.solo ?? false));
     setVol(ts.map((t) => prevMix.get(t.key)?.vol ?? 1));
-    if (!ts.length) {
+    const real = ts.filter((t) => !t.virtual);
+    if (!real.length) {
       setDuration(j?.duration ?? 0);
       return;
     }
-    audiosRef.current = ts.map((t) => {
+    // 가상 트랙은 맨 끝이라 audiosRef 의 인덱스는 tracks 의 인덱스와 같다
+    audiosRef.current = real.map((t) => {
       const a = new Audio();
       a.preload = "auto"; // 예비박이 끝나는 순간 바로 소리가 나야 한다
       // 같은 오리진일 때 crossOrigin 을 켜면 불필요하게 CORS 모드로 요청된다.
@@ -191,13 +204,22 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     };
   }, [key]);
 
+  /** 트랙 i 가 지금 들리는지(음소거·솔로 반영)와 볼륨. 가상 트랙(메트로놈)도 같은 규칙. */
+  const mixOf = useCallback(
+    (i: number) => {
+      const anySolo = solo.some(Boolean);
+      return { on: anySolo ? !!solo[i] : !muted[i], vol: vol[i] ?? 1 };
+    },
+    [muted, solo, vol],
+  );
+
   const applyGains = useCallback(() => {
-    const anySolo = solo.some(Boolean);
     audiosRef.current.forEach((a, i) => {
-      a.muted = anySolo ? !solo[i] : muted[i];
-      a.volume = vol[i] ?? 1;
+      const m = mixOf(i);
+      a.muted = !m.on;
+      a.volume = m.vol;
     });
-  }, [muted, solo, vol]);
+  }, [mixOf]);
   useEffect(applyGains, [applyGains]);
 
   useEffect(() => {
@@ -301,12 +323,8 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
   const setVolume = (i: number, v2: number) => setVol((a) => a.map((x, k) => (k === i ? v2 : x)));
 
   /** 지금 들리는 트랙 인덱스 (믹스다운에 쓴다) */
-  const audibleIndexes = () => {
-    const anySolo = solo.some(Boolean);
-    return tracks
-      .map((_, i) => ((anySolo ? solo[i] : !muted[i]) && (vol[i] ?? 1) > 0 ? i : -1))
-      .filter((i) => i >= 0);
-  };
+  const audibleIndexes = () =>
+    tracks.map((_, i) => (mixOf(i).on && mixOf(i).vol > 0 ? i : -1)).filter((i) => i >= 0);
 
   return {
     tracks,
@@ -328,6 +346,7 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     toggleSolo,
     setVolume,
     audibleIndexes,
+    mixOf,
     audios: audiosRef,
   };
 }

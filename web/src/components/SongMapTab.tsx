@@ -189,7 +189,7 @@ export function SongMapTab({ jobs, onChanged }: Props) {
   const save = async () => {
     if (!job || !map) return;
     setBusy(true);
-    setMsg("저장하고 메트로놈을 다시 굽는 중…");
+    setMsg("저장 중… (다운로드용 클릭 파일도 함께 만듭니다)");
     try {
       const r = await api.saveMap(job.id, map);
       setMsg(`저장 완료 — ♩=${r.bpm} · ${r.bars}마디 · 박자 ${r.beats}개`);
@@ -612,8 +612,12 @@ export function SongMapTab({ jobs, onChanged }: Props) {
                   {[...dupBars].sort((a, b) => a - b).join(", ")}마디가 중복됩니다
                 </span>
               )}
-              <button onClick={save} disabled={busy || dupBars.size > 0}>
-                저장 · 메트로놈 재생성
+              <button
+                onClick={save}
+                disabled={busy || dupBars.size > 0}
+                title="메트로놈은 저장하지 않아도 편집한 대로 바로 들립니다. 저장하면 맵이 남고 다운로드용 클릭 파일이 갱신됩니다."
+              >
+                저장
               </button>
             </div>
             {msg && <div className="meta" style={{ marginTop: 8 }}>{msg}</div>}
