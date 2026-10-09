@@ -221,7 +221,8 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
   // 뒤처지는 만큼 — 아이패드 약 0.1초). 칸에는 앞의 것만 보인다
   const userOffset = lockedOffset ?? localOffset;
   const [devLat, setDevLat] = useState<DeviceLatency | null>(readDeviceLatency);
-  const clickOffset = userOffset + (devLat?.ms ?? 0);
+  // 정밀 재생(기기에 저장된 곡)은 음악도 클릭도 AudioContext 시계로 같은 길을 타서 기기 측정이 필요 없다
+  const clickOffset = userOffset + (engine.preciseOn ? 0 : devLat?.ms ?? 0);
   const measuringRef = useRef(false);
   /** 기기 측정 (제스처 안에서 부른다). 처음 재생할 때 화면에 드러내지 않고 자동으로 —
    *  확정 버전의 메트로놈은 파일이라 필요 없고, 예비박·편집 중 즉석 클릭에만 쓰인다 */
@@ -420,7 +421,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
       /* Web Audio 미지원 — 음악만 재생된다 */
     }
     // 이 기기를 아직 안 쟀으면 첫 재생 때 소리 없이 잰다 (제스처 안이어야 해서 여기서)
-    if (!devLat) measureDevice(false);
+    if (!devLat && !engine.canPrecise) measureDevice(false);
     if (loopGap.current) {
       // 반복 사이 쉬는 중에 누르면 반복을 멈춘다
       clearTimeout(loopGap.current);
@@ -445,42 +446,15 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
       await startPlay();
       return;
     }
-    // 기기에 저장된 곡: 예비박까지 한 파일에 넣어 합친 재생으로 (기기와 상관없이 정확하다)
-    if (engine.canMix) {
-      engine.prime();
-      const nb = nextBeatAfter(bars, pos);
-      const bb = barAtTime(bars, pos) ?? bars[0];
-      const st = bb ? stepOf(bb.bpm, bb.beat_unit) : 0.5;
-      const bpb = bb?.beats_per_bar ?? 4;
-      const offS = userOffset / 1000;
-      const clicks: { t: number; freq: number }[] = [];
-      for (let k = countIn; k >= 1; k--)
-        clicks.push({ t: nb - k * st + offS, freq: (countIn - k) % bpb === 0 ? 1500 : 1000 });
-      metro.holdUntil(nb - 0.02);
-      voice.cueAt(pos, Math.max(countIn * st, nb - pos) + 0.1);
-      setCounting(countIn);
-      timers.current.i = window.setInterval(() => {
-        const t = engine.audios.current[0]?.currentTime ?? -1e9;
-        const left = clicks.filter((c) => c.t > t - 0.02).length;
-        setCounting(Math.min(countIn, left));
-        if (!left && timers.current.i) clearInterval(timers.current.i);
-      }, 60);
-      try {
-        setHint("");
-        await engine.playCountIn(pos, clicks, 0.9 * Math.max(1, metroVol));
-      } catch (e) {
-        cancelCount();
-        setHint((e as Error).message);
-      }
-      return;
-    }
+    // <audio> 재생이면 실제 재생은 예비박이 끝난 뒤 타이머에서 시작한다. iOS 는 사용자 제스처 밖의
+    // play() 를 거부하므로, 제스처 안(첫 await 전)에서 트랙들을 미리 풀어둔다.
+    engine.prime();
+    // 기기에 저장된 곡: 트랙을 풀어 정밀 재생으로 (처음 한 번은 몇 초). 음악이 예비박 클릭과 같은
+    // AudioContext 시계에 걸리므로 마지막 클릭 → 1마디 1박이 기기와 상관없이 정확히 한 박이다.
+    const precise = await engine.preparePrecise();
     const b = barAtTime(bars, pos) ?? bars[0];
     const stepRaw = b ? stepOf(b.bpm, b.beat_unit) : 0.5;
     const step = stepRaw / (rate || 1);
-
-    // 실제 재생은 예비박이 끝난 뒤 타이머에서 시작한다. iOS 는 사용자 제스처 밖의 play()
-    // 를 거부하므로, 제스처 안(첫 await 전)에서 트랙들을 미리 풀어둔다.
-    engine.prime();
 
     let ctx: AudioContext;
     try {
@@ -499,11 +473,11 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
     // 클릭이 끝나고도 1마디 1박이 한참 뒤에 와서 예비박의 의미가 없어진다.
     const nextBeat = nextBeatAfter(bars, pos);
     // 클릭 지연 보정: 예비박도 실시간 메트로놈과 같은 만큼 옮긴다. 앞당기면 그만큼 여유를 더 둔다.
-    const off = clickOffset / 1000;
+    const off = (precise ? userOffset : clickOffset) / 1000;
     const margin = 0.15 + Math.max(0, -off);
     const toBeat = (nextBeat - pos) / (rate || 1); // 재생 속도를 반영한 실제 시간
     const tBeat = ctx.currentTime + margin + Math.max(countIn * step, toBeat);
-    scheduleStart(ctx, pos, tBeat - toBeat, countIn, rate || 1);
+    scheduleStart(ctx, pos, tBeat - toBeat, countIn, rate || 1, precise);
   }
 
   /**
@@ -511,13 +485,13 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
    * 마지막 클릭과 '곡의 다음 박' 사이가 정확히 한 박이 되게 그 앞에 클릭을 찍는다(이미 지난
    * 클릭은 건너뛴다).
    */
-  function scheduleStart(ctx: AudioContext, pos: number, startAt: number, nCount: number, r: number) {
+  function scheduleStart(ctx: AudioContext, pos: number, startAt: number, nCount: number, r: number, precise: boolean) {
     const b = barAtTime(bars, pos) ?? bars[0];
     const stepRaw = b ? stepOf(b.bpm, b.beat_unit) : 0.5;
     const step = stepRaw / r;
     const bpb = b?.beats_per_bar ?? 4;
     const nextBeat = nextBeatAfter(bars, pos);
-    const off = clickOffset / 1000;
+    const off = (precise ? userOffset : clickOffset) / 1000;
     const tBeat = startAt + (nextBeat - pos) / r;
 
     // 곧 시작하는 구간(곡 맨 앞 Intro 등)은 읽지 않는다 — 예비박과 겹친다
@@ -535,17 +509,24 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
       );
     }
 
-    // 메트로놈이 예비박과 같은 시계로 이어 세게 한다 — 마지막 예비박과 1마디 1박 사이가 정확히 한 박
-    metro.expect(startAt, pos, learnLatency);
-    // 음악은 시작 지연만큼 미리 재생을 건다 (그래야 startAt 에 실제로 소리가 난다)
-    const playAt = startAt - startLatency;
+    // 메트로놈이 예비박과 같은 시계로 이어 세게 한다 — 마지막 예비박과 1마디 1박 사이가 정확히 한 박.
+    // 정밀 재생은 시작 시각이 정확하므로 시작 지연을 배우지 않는다 (<audio> 재생만)
+    metro.expect(startAt, pos, precise ? undefined : learnLatency);
     if (nCount) {
       setCounting(nCount);
       timers.current.i = window.setInterval(() => {
         const left = Math.ceil((tBeat - ctx.currentTime) / step);
         setCounting(Math.max(0, Math.min(left, nCount)));
+        if (left <= 0 && timers.current.i) {
+          clearInterval(timers.current.i);
+          timers.current.i = undefined;
+        }
       }, 60);
     }
+    // 정밀 재생: 재생기가 startAt 에 샘플 단위로 시작한다 — 타이머도, 시작 지연 보정도 필요 없다
+    if (precise && engine.playAt(pos, startAt)) return;
+    // <audio> 재생: 음악은 시작 지연만큼 미리 재생을 건다 (그래야 startAt 에 실제로 소리가 난다)
+    const playAt = startAt - startLatency;
     timers.current.t = window.setTimeout(
       async () => {
         if (timers.current.i) clearInterval(timers.current.i);
@@ -576,7 +557,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
     <div className="mixer">
       <div className="transport" ref={transportRef}>
         <button className="playbtn" onClick={() => void handlePlay()}>
-          {engine.mixBusy ? "…" : counting ? counting : autoPending ? "…" : playing ? "❚❚" : "▶"}
+          {engine.preciseBusy ? "…" : counting ? counting : autoPending ? "…" : playing ? "❚❚" : "▶"}
         </button>
         {loopButton && (
           <button
@@ -603,9 +584,9 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
           <BpmControl base={bars[0].bpm} rate={rate} onRate={setRateShared} />
         ) : null}
         {hint && <span className="err">{hint}</span>}
-        {engine.mixBusy && (
-          <span className="meta" title="기기에 저장된 트랙을 지금 믹서 설정대로 한 파일로 합치는 중입니다. 합친 뒤에는 트랙끼리·메트로놈·예비박이 기기와 상관없이 정확히 맞습니다.">
-            트랙 합치는 중…
+        {engine.preciseBusy && (
+          <span className="meta" title="기기에 저장된 트랙을 풀어 정밀 재생을 준비하는 중입니다. 준비되면 트랙끼리·메트로놈·예비박이 기기와 상관없이 샘플 단위로 맞습니다.">
+            트랙 준비 중 {engine.preciseBusy.done}/{engine.preciseBusy.total}…
           </span>
         )}
         {!hint && note && <span className="meta">{note}</span>}
@@ -730,8 +711,16 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
         )}
         {engine.cache.state === "cached" && (
           <>
-            <span className="meta" title="이 곡은 기기에 저장돼 있어 네트워크 없이 재생·이동합니다.">
-              기기에 저장됨
+            <span
+              className="meta"
+              title={
+                "이 곡은 기기에 저장돼 있어 네트워크 없이 재생·이동합니다." +
+                (engine.preciseOn
+                  ? " 정밀 재생 중 — 트랙을 풀어 Web Audio 로 같은 시각에 재생하므로 트랙끼리·메트로놈·예비박이 샘플 단위로 맞습니다. 속도를 바꾸면 일반 재생으로 돌아갑니다."
+                  : "")
+              }
+            >
+              기기에 저장됨{engine.preciseOn ? " · 정밀 재생" : ""}
             </span>
             <button
               className="ghost"
@@ -798,7 +787,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
       {transportHidden && tracks.length > 0 && (
         <div className="minibar">
           <button className="playbtn" onClick={() => void handlePlay()}>
-            {engine.mixBusy ? "…" : counting ? counting : autoPending ? "…" : playing ? "❚❚" : "▶"}
+            {engine.preciseBusy ? "…" : counting ? counting : autoPending ? "…" : playing ? "❚❚" : "▶"}
           </button>
           {bars.length > 0 ? (
             <BarJump cur={cur?.bar ?? 0} last={lastBar} onGo={gotoBar} name={cur?.name} />

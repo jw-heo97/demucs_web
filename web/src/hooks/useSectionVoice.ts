@@ -127,9 +127,9 @@ export function useSectionVoice(engine: Engine, bars: Bar[]) {
           if (from >= s.cue && from < s.start - 0.3) said.current.add(i);
         });
       } else if (performance.now() - startedAt < 1000 && last !== null && (t < last || t - last > 1)) {
-        // 재생 직후 위치가 자리 잡는 중 — 합친 재생은 예비박 파일로 바꿔 끼우는 순간 위치가 잠깐
-        // 곡 0초보다 앞(-10초)을 가리켰다가 돌아온다. 이걸 '이동' 으로 보고 지우면 첫 구간(예비박과
-        // 겹쳐서 일부러 건너뛴 것)을 다시 읽었다. 새 위치 기준으로 시작 판단만 다시 한다.
+        // 재생 직후 위치가 자리 잡는 중 — 정밀 재생은 예비박 동안 위치가 시작 위치보다 앞(음수)에서
+        // 올라오고, <audio> 도 첫 프레임 위치가 흔들린다. 이걸 '이동' 으로 보고 지우면 첫 구간(예비박과
+        // 겹쳐서 일부러 건너뛴 것)을 다시 읽는다. 새 위치 기준으로 시작 판단만 다시 한다.
         ss.forEach((s, i) => {
           if (t >= s.cue && t < s.start - 0.3) said.current.add(i);
         });
