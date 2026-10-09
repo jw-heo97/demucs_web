@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Job } from "../types";
 import { BASE } from "../api";
 import { cachedUrl, download, removeFromDevice } from "../lib/audioCache";
+import { audioCtx } from "../lib/audioCtx";
 import { stemFilesOf } from "../lib/stems";
 
 export interface Track {
@@ -150,6 +151,14 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
   const mixRef = useRef({ tracks, muted, solo, vol });
   mixRef.current = { tracks, muted, solo, vol };
   const audiosRef = useRef<HTMLAudioElement[]>([]);
+  /**
+   * 트랙마다 Web Audio 게인 (audiosRef 와 같은 순서). 스템도 메트로놈 클릭과 같은 AudioContext 로
+   * 내보낸다 — 예전엔 <audio> 가 직접 스피커로 나가고 클릭은 Web Audio 로 나가서, 두 길이 스피커에
+   * 닿는 시간이 기기마다 달랐다(아이패드에서 클릭 타이밍이 컴퓨터와 다름). 같은 길이면 기기 차이가
+   * 함께 움직인다. 덤으로 iOS 에서도 볼륨이 먹는다(iOS 는 <audio>.volume 을 무시한다).
+   * Web Audio 를 못 쓰면 null — 그때는 예전처럼 <audio> 로 직접 낸다.
+   */
+  const gainsRef = useRef<(GainNode | null)[]>([]);
   // audiosRef 와 같은 순서의 실제 트랙 (오프셋을 찾는 데 쓴다)
   const realRef = useRef<Track[]>([]);
   /** 트랙 i 의 오프셋(초): 트랙의 0초가 곡의 몇 초인지. 스템은 0. job.tracks 에서 그때그때 읽는다 */
@@ -228,6 +237,19 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
       return a;
     });
     const created = audiosRef.current;
+    const nodes: AudioNode[] = [];
+    gainsRef.current = created.map((a) => {
+      try {
+        const ctx = audioCtx();
+        const src = ctx.createMediaElementSource(a);
+        const g = ctx.createGain();
+        src.connect(g).connect(ctx.destination);
+        nodes.push(src, g);
+        return g;
+      } catch {
+        return null;
+      }
+    });
 
     // 기기에 받아 둔 파일이 있으면 그걸로(정지·이동·재생 때 네트워크를 안 탄다), 없으면 일단
     // 서버에서 스트리밍하면서 뒤에서 통째로 받아 두고, 다 받으면 멈춰 있을 때 바꿔 끼운다.
@@ -370,6 +392,7 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
         a.removeAttribute("src");
         a.load();
       });
+      nodes.forEach((n) => n.disconnect());
       setPlaying(false);
     };
   }, [key]);
@@ -386,8 +409,15 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
   const applyGains = useCallback(() => {
     audiosRef.current.forEach((a, i) => {
       const m = mixOf(i);
-      a.muted = !m.on;
-      a.volume = m.vol;
+      const g = gainsRef.current[i];
+      if (g) {
+        a.muted = false;
+        a.volume = 1;
+        g.gain.setTargetAtTime(m.on ? m.vol : 0, g.context.currentTime, 0.01);
+      } else {
+        a.muted = !m.on;
+        a.volume = m.vol;
+      }
     });
   }, [mixOf]);
   useEffect(applyGains, [applyGains]);
@@ -507,6 +537,12 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     liveEngines.forEach((e) => {
       if (e !== selfRef.current) e.stop();
     });
+    // 소리가 Web Audio 로 나가므로 AudioContext 가 깨어 있어야 들린다 (재생 버튼이 제스처)
+    try {
+      void audioCtx().resume();
+    } catch {
+      /* Web Audio 미지원 — <audio> 로 직접 나간다 */
+    }
     // 끝까지 들은 뒤 다시 누르면 처음부터
     if (as[0].ended) as.forEach((a) => (a.currentTime = 0));
     const t = as[0].currentTime;
@@ -616,5 +652,7 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     audibleIndexes,
     mixOf,
     audios: audiosRef,
+    /** 지금 불러온 곡 (활성 송 맵 버전의 잠금·기준 클릭 보정을 읽는다) */
+    job,
   };
 }

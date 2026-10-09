@@ -1,3 +1,4 @@
+import { readClickOffset } from "../hooks/useLiveMetronome";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ask, choose, confirmBox } from "../lib/dialog";
 import { api } from "../api";
@@ -180,7 +181,12 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
       setMsg("PIN 은 4~12자여야 합니다.");
       return;
     }
-    await verAction(() => api.lockVersion(job.id, active, { locked: true, pin: pin.trim() }), "이 버전을 잠갔습니다. 덮어쓰기·삭제가 막힙니다.");
+    // 이 기기의 클릭 보정도 같이 저장한다 — 잠긴 동안 모든 기기가 이 값으로 클릭을 내서, 잠근
+    // 기기에서 맞춘 대로 들린다
+    await verAction(
+      () => api.lockVersion(job.id, active, { locked: true, pin: pin.trim(), click_offset_ms: readClickOffset() }),
+      "이 버전을 잠갔습니다. 덮어쓰기·삭제가 막히고, 클릭은 이 기기에서 맞춘 대로 모든 기기에서 납니다.",
+    );
   };
   const unlockActive = async () => {
     if (!job || !active || !activeVer) return;

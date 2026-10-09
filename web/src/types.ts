@@ -47,6 +47,8 @@ export interface MapVersion {
   locked?: boolean;
   /** 풀 때 PIN 이 필요한가 */
   has_pin?: boolean;
+  /** 잠근 기기의 클릭 보정(ms). 잠긴 동안 모든 기기가 이 값으로 클릭을 낸다 */
+  click_offset_ms?: number | null;
 }
 
 export interface MapPayload {

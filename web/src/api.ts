@@ -200,7 +200,7 @@ export const api = {
     patch(`/api/jobs/${id}/map/versions/${vid}`, { name }),
   deleteVersion: (id: string, vid: string) => del(`/api/jobs/${id}/map/versions/${vid}`),
   /** 잠그기 {locked:true, pin?} / 풀기 {locked:false, pin?} */
-  lockVersion: (id: string, vid: string, body: { locked: boolean; pin?: string }) =>
+  lockVersion: (id: string, vid: string, body: { locked: boolean; pin?: string; click_offset_ms?: number }) =>
     post<{ version: MapVersion; job: Job }>(`/api/jobs/${id}/map/versions/${vid}/lock`, body),
   restoreMap: (id: string, index: number) => post(`/api/jobs/${id}/map/restore`, { index }),
 

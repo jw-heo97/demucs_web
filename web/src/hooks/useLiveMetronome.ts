@@ -55,6 +55,16 @@ export function useSubdiv(): [1 | 2, (n: 1 | 2) => void] {
  * (특히 블루투스 이어폰·폰) 구성표가 정확해도 클릭이 음악보다 앞서거나 늦게 들린다.
  * 곡이 아니라 기기의 성질이므로 브라우저에 하나로 기억한다.
  */
+/** 이 기기의 클릭 보정(ms) — 잠글 때 버전에 같이 저장한다 */
+export function readClickOffset(): number {
+  try {
+    const n = Number(localStorage.getItem(LS_OFFSET));
+    return Number.isFinite(n) ? Math.max(-OFFSET_LIMIT, Math.min(OFFSET_LIMIT, n)) : 0;
+  } catch {
+    return 0;
+  }
+}
+
 export function useClickOffset(): [number, (ms: number) => void] {
   const [v, setV] = useState<number>(() => {
     try {
