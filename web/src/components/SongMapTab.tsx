@@ -543,7 +543,7 @@ export function SongMapTab({ jobs, onChanged }: Props) {
             <div className="row" style={{ marginBottom: 12 }}>
               <div>
                 <label>1마디 1박 위치</label>
-                <div style={{ display: "flex", gap: 6 }}>
+                <div className="anchorrow">
                   <TimeInput value={map.anchor} onChange={(v) => setMap({ ...map, anchor: v })} />
                   <button className="ghost" onClick={() => setMap({ ...map, anchor: +engine.time.toFixed(3) })}>
                     현재
