@@ -95,6 +95,17 @@ export interface EngineOptions {
 /** 스템 트랙의 처음 볼륨 (0~1) */
 const DEFAULT_STEM_VOL = 0.5;
 
+/** 재생 중 <audio> 위치를 옮길 때의 지연(초). 기기마다 달라 배운 값을 기억한다 */
+const LS_SEEK_LAG = "audio.seekLag";
+function loadSeekLag() {
+  try {
+    const v = Number(localStorage.getItem(LS_SEEK_LAG));
+    return Number.isFinite(v) && v >= 0 && v <= 0.3 ? v : 0.08;
+  } catch {
+    return 0.08;
+  }
+}
+
 export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
   /**
    * 작업 목록은 1~8초마다 폴링돼 **매번 새 객체**로 온다.
@@ -391,6 +402,11 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
 
   // 시간 추적 + 드리프트 보정 + 구간 반복
   const lastPush = useRef(0);
+  // 트랙별로 마지막으로 위치를 맞춘 시각 (너무 자주 맞추면 소리가 튄다)
+  const lastFix = useRef<number[]>([]);
+  // 재생 중 위치를 옮길 때 생기는 지연(초)과, 옮긴 뒤 오차를 잴 시각
+  const seekLag = useRef(loadSeekLag());
+  const seekCheck = useRef<({ at: number } | undefined)[]>([]);
   useEffect(() => {
     const tick = () => {
       const as = audiosRef.current;
@@ -412,10 +428,37 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
               if (!a.paused) a.pause();
               continue;
             }
+            const custom = !!realRef.current[i]?.trackId;
+            // 재생 중인 <audio> 의 위치를 옮기거나 뒤늦게 play() 하면 디코더가 다시 준비되는 동안
+            // (~80ms) 멈춰 있어 그만큼 늘 뒤처진다 — 스템끼리는 함께 play() 해서 지연이 같아 안 보인다.
+            // 사용자 트랙(녹음)은 박을 맞추는 게 목적이라, 그 지연만큼 앞을 겨냥해 옮기고
+            // 0.6초 뒤 실제 오차로 지연값을 배운다 (처음 값은 브라우저에 기억해 둔 것).
+            const check = seekCheck.current[i];
+            if (check && now >= check.at && !a.paused) {
+              seekCheck.current[i] = undefined;
+              const err = want - a.currentTime; // + 면 아직 뒤처져 있다 → 지연을 더 크게 본다
+              if (Math.abs(err) < 0.5) {
+                seekLag.current = Math.max(0, Math.min(0.3, seekLag.current + err * 0.7));
+                try {
+                  localStorage.setItem(LS_SEEK_LAG, seekLag.current.toFixed(4));
+                } catch {
+                  /* 기억만 못 할 뿐 */
+                }
+              }
+            }
             if (a.paused && !a.ended) {
-              a.currentTime = want;
+              a.currentTime = want + (custom ? seekLag.current : 0);
               a.play().catch(() => {});
-            } else if (Math.abs(a.currentTime - want) > 0.15) a.currentTime = want;
+              lastFix.current[i] = now;
+              if (custom) seekCheck.current[i] = { at: now + 600 };
+            } else {
+              const tol = custom ? 0.04 : 0.15;
+              if (Math.abs(a.currentTime - want) > tol && now - (lastFix.current[i] ?? 0) > 1000) {
+                a.currentTime = want + (custom ? seekLag.current : 0);
+                lastFix.current[i] = now;
+                if (custom) seekCheck.current[i] = { at: now + 600 };
+              }
+            }
           }
           const lp = loopRef.current;
           if (lp && t >= lp.end) {
