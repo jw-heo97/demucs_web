@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { confirmBox, notice } from "../lib/dialog";
 import { api } from "../api";
 import { useAudioEngine } from "../hooks/useAudioEngine";
 import { barsFromMap } from "../lib/songmap";
@@ -129,12 +130,20 @@ export function JobRow({
                 disabled={!!job.locked_versions}
                 title={job.locked_versions ? "잠긴 송 맵 버전이 있어 지울 수 없습니다. 송 맵에서 잠금을 먼저 푸세요." : undefined}
                 onClick={async () => {
-                  if (!confirm("결과 폴더까지 완전히 삭제합니다. 계속할까요?")) return;
+                  if (
+                    !(await confirmBox({
+                      title: `${name} 삭제`,
+                      message: "결과 폴더(스템·송 맵·악보·트랙)까지 완전히 삭제합니다. 되돌릴 수 없습니다.",
+                      okText: "삭제",
+                      danger: true,
+                    }))
+                  )
+                    return;
                   try {
                     await api.deleteJob(job.id);
                     onChanged();
                   } catch (e) {
-                    alert((e as Error).message);
+                    await notice("삭제하지 못했습니다", (e as Error).message);
                   }
                 }}
               >

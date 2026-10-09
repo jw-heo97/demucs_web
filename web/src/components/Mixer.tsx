@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ask, confirmBox } from "../lib/dialog";
 import { useMe } from "../lib/me";
 import { api } from "../api";
 import type { Track, useAudioEngine } from "../hooks/useAudioEngine";
@@ -804,8 +805,14 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
             </span>
             <button
               className="ghost"
-              onClick={() => {
-                if (confirm("이 곡을 기기에서 지울까요? 이후로는 서버에서 스트리밍합니다 (다시 저장할 수 있습니다)."))
+              onClick={async () => {
+                if (
+                  await confirmBox({
+                    title: "기기 저장 삭제",
+                    message: "이 곡을 이 기기에서 지웁니다. 이후로는 서버에서 스트리밍합니다 (다시 저장할 수 있습니다).",
+                    okText: "지우기",
+                  })
+                )
                   void engine.removeFromDevice();
               }}
               title="이 곡의 스템을 이 기기에서 지웁니다."
@@ -1023,8 +1030,8 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
                 {canEdit && (
                   <button
                     className="ghost"
-                    onClick={() => {
-                      const name = prompt("트랙 이름", c.name);
+                    onClick={async () => {
+                      const name = await ask({ title: "트랙 이름", value: c.name, okText: "바꾸기" });
                       if (name && name.trim() && name !== c.name)
                         void api.updateTrack(jobId, c.id, { name: name.trim() }).then(() => onChanged?.(), (e) => setHint((e as Error).message));
                     }}
@@ -1035,8 +1042,8 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
                 {canEdit && (
                   <button
                     className="ghost"
-                    onClick={() => {
-                      if (confirm(`'${c.name}' 트랙을 지울까요? 파일도 지워집니다.`))
+                    onClick={async () => {
+                      if (await confirmBox({ title: `'${c.name}' 트랙 삭제`, message: "트랙 파일도 지워집니다.", okText: "삭제", danger: true }))
                         void api.deleteTrack(jobId, c.id).then(() => onChanged?.(), (e) => setHint((e as Error).message));
                     }}
                   >

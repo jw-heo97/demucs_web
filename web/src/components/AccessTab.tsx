@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { ask, confirmBox } from "../lib/dialog";
 import { api, type AccessClient, type AccessDevice, type AccessRole } from "../api";
 
 const ROLE: Record<AccessRole, string> = { view: "보기만", edit: "수정 가능" };
@@ -109,8 +110,8 @@ export function AccessTab() {
     }
   };
 
-  const rename = (d: AccessDevice) => {
-    const name = prompt("기기 이름", d.name);
+  const rename = async (d: AccessDevice) => {
+    const name = await ask({ title: "기기 이름", value: d.name, okText: "바꾸기" });
     if (name && name.trim() && name !== d.name)
       void act(() => api.updateDevice(d.id, { name: name.trim() }), "이름을 바꿨습니다.");
   };
@@ -237,7 +238,7 @@ export function AccessTab() {
                     <td>{d.blocked ? <span className="err">차단됨</span> : "허용"}</td>
                     <td>
                       <div className="rowbtns">
-                        <button className="ghost" disabled={busy} onClick={() => rename(d)}>
+                        <button className="ghost" disabled={busy} onClick={() => void rename(d)}>
                           이름
                         </button>
                         <button
@@ -255,8 +256,15 @@ export function AccessTab() {
                         <button
                           className="ghost"
                           disabled={busy}
-                          onClick={() => {
-                            if (confirm(`${d.name} 의 등록을 해제할까요? 다시 들어오려면 초대 링크가 필요합니다.`))
+                          onClick={async () => {
+                            if (
+                              await confirmBox({
+                                title: `${d.name} 등록 해제`,
+                                message: "다시 들어오려면 초대 링크가 필요합니다.",
+                                okText: "해제",
+                                danger: true,
+                              })
+                            )
                               void act(() => api.deleteDevice(d.id), `${d.name} 등록을 해제했습니다.`);
                           }}
                         >
