@@ -53,6 +53,10 @@ class Room:
                       "count_in": 0, "loop": None, "seq": 0, "by": "", "prepare": None}
         self.ready: set[str] = set()
         self._prep_task: Optional[asyncio.Task] = None
+        self._loop_task: Optional[asyncio.Task] = None
+        # 반복 구간을 다시 시작할 때 쓸 예비박 수와 여유 — 마지막 재생 요청의 것을 따른다
+        self.loop_count_in = 0
+        self.loop_lead = GO_LEAD
 
     def cancel_prepare(self) -> None:
         if self._prep_task and not self._prep_task.done():
@@ -108,9 +112,32 @@ class Room:
             return s["pos"]
         p = s["pos"] + max(0.0, t_ms - s["at"]) / 1000.0 * s["rate"]
         lp = s["loop"]
-        if lp and lp["end"] - lp["start"] > 0.2 and p >= lp["end"]:
-            p = lp["start"] + (p - lp["start"]) % (lp["end"] - lp["start"])
+        # 반복 구간 끝에서는 멈춘다 — 그 순간 _loop_restart 가 모두를 예비박부터 다시 시작시킨다
+        if lp and lp["end"] - lp["start"] > 0.2 and s["pos"] < lp["end"]:
+            p = min(p, lp["end"])
         return p
+
+    def _schedule_loop(self) -> None:
+        """재생 중이고 반복 구간이 있으면 끝나는 순간에 다시 시작하도록 걸어 둔다."""
+        if self._loop_task and self._loop_task is not asyncio.current_task() and not self._loop_task.done():
+            self._loop_task.cancel()
+        self._loop_task = None
+        s, lp = self.state, self.state.get("loop")
+        if not (s["playing"] and lp and s["pos"] < lp["end"]):
+            return
+        delay = max(0.0, (s["at"] - now_ms()) / 1000.0) + (lp["end"] - s["pos"]) / max(0.1, s["rate"])
+        self._loop_task = asyncio.create_task(self._loop_restart(s["seq"], delay))
+
+    async def _loop_restart(self, seq: int, delay: float) -> None:
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            return
+        s, lp = self.state, self.state.get("loop")
+        if s["seq"] != seq or not s["playing"] or not lp:
+            return          # 그새 다른 조작이 있었다
+        # 반복 끝: 모두 멈추고 → 반복 시작을 받아 두고 → 예비박부터 같이
+        await self.prepare(lp["start"], self.loop_count_in, self.loop_lead, s["by"])
 
     def members_view(self) -> list[dict]:
         preparing = self.state.get("prepare") is not None
@@ -133,6 +160,7 @@ class Room:
 
     async def push_state(self) -> None:
         self.state["seq"] += 1
+        self._schedule_loop()
         await self.broadcast({"t": "state", "state": self.state, "server": now_ms()})
 
     async def push_members(self) -> None:
@@ -197,9 +225,11 @@ async def handle(ws: WebSocket, job_id: str) -> None:
                 # 바로 시작하지 않고 '맞추고 시작' — 모두 그 위치를 받아 둔 뒤 같이 들어간다
                 room.state.update(rate=_num(msg.get("rate"), room.state["rate"], 0.5, 1.5),
                                   loop=_clamp_loop(msg.get("loop")))
-                await room.prepare(_num(msg.get("pos"), 0.0, 0.0, 86400.0),
-                                   int(_num(msg.get("count_in"), 0, 0, 16)),
-                                   _num(msg.get("lead"), GO_LEAD, 0.0, MAX_LEAD), name)
+                count_in = int(_num(msg.get("count_in"), 0, 0, 16))
+                lead = _num(msg.get("lead"), GO_LEAD, 0.0, MAX_LEAD)
+                if room.state["loop"]:
+                    room.loop_count_in, room.loop_lead = count_in, lead
+                await room.prepare(_num(msg.get("pos"), 0.0, 0.0, 86400.0), count_in, lead, name)
             elif t == "ready":
                 await room.mark_ready(mid, str(msg.get("id") or ""))
             elif t == "pause":

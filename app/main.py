@@ -20,7 +20,7 @@ import downloader
 import scores
 import separator
 import together
-from config import CORS_ORIGINS, MAX_DURATION_SEC, METRONOME_DEFAULT, OUTPUT_DIR, WORK_DIR
+from config import TOGETHER_ENABLED, CORS_ORIGINS, MAX_DURATION_SEC, METRONOME_DEFAULT, OUTPUT_DIR, WORK_DIR
 from downloader import DownloadError
 from jobs import FORMATS, MAX_TITLE_LEN, STEMS, store
 from playlists import playlists
@@ -132,7 +132,11 @@ def admin_device_delete(did: str):
 
 @app.websocket("/api/together/{job_id}")
 async def together_ws(ws: WebSocket, job_id: str):
-    """함께 연습 — 같은 곡을 여러 기기에서 같은 순간에 재생한다 (app/together.py)."""
+    """함께 연습 — 같은 곡을 여러 기기에서 같은 순간에 재생한다 (app/together.py).
+    아직 다듬는 중이라 TOGETHER=1 일 때만 연다."""
+    if not TOGETHER_ENABLED:
+        await ws.close(code=4410)
+        return
     if store.get(job_id) is None:
         await ws.close(code=4404)
         return

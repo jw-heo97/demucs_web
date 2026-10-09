@@ -133,6 +133,7 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
   }, []);
   const rafRef = useRef(0);
   const loopRef = useRef<{ start: number; end: number } | null>(null);
+  const loopEndRef = useRef<((lp: { start: number; end: number }) => void) | null>(null);
 
   useEffect(() => {
     const j = jobRef.current;
@@ -253,7 +254,15 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
             if (Math.abs(as[i].currentTime - t) > 0.15) as[i].currentTime = t;
           }
           const lp = loopRef.current;
-          if (lp && t >= lp.end) as.forEach((a) => (a.currentTime = lp.start));
+          if (lp && t >= lp.end) {
+            const onEnd = loopEndRef.current;
+            if (onEnd) {
+              // 반복 끝: 멈추고 알린다 — 믹서가 예비박부터 다시 시작한다(함께 연습이면 방이)
+              as.forEach((a) => a.pause());
+              setPlaying(false);
+              onEnd(lp);
+            } else as.forEach((a) => (a.currentTime = lp.start));
+          }
         }
       }
       rafRef.current = requestAnimationFrame(tick);
@@ -328,6 +337,11 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     loopRef.current = r && r.end - r.start > 0.2 ? r : null;
   }, []);
 
+  /** 반복 구간 끝에서 할 일. 주면 그 자리에서 멈추고 부르고, 없으면 반복 시작으로 바로 돌아간다. */
+  const setLoopEnd = useCallback((fn: ((lp: { start: number; end: number }) => void) | null) => {
+    loopEndRef.current = fn;
+  }, []);
+
   const toggleMute = (i: number) => setMuted((m) => m.map((v2, k) => (k === i ? !v2 : v2)));
   const toggleSolo = (i: number) => setSolo((s) => s.map((v2, k) => (k === i ? !v2 : v2)));
   const setVolume = (i: number, v2: number) => setVol((a) => a.map((x, k) => (k === i ? v2 : x)));
@@ -352,6 +366,7 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
     pause,
     seek,
     setLoop,
+    setLoopEnd,
     toggleMute,
     toggleSolo,
     setVolume,

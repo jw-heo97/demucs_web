@@ -33,12 +33,15 @@ const LS_NAME = "together.name";
 /** 단조 증가하는 지금 시각(ms). Date.now() 는 시계 조정으로 튈 수 있다. */
 const localNow = () => performance.timeOrigin + performance.now();
 
-/** 방 위치 계산 (서버 together.Room.position 과 같은 규칙) */
+/**
+ * 방 위치 계산 (서버 together.Room.position 과 같은 규칙). 반복 구간 끝에서는 멈춘다 —
+ * 서버가 그 순간 모두를 멈추고 예비박부터 다시 시작시킨다.
+ */
 export function roomPosition(s: RoomState, serverMs: number) {
   if (!s.playing) return s.pos;
-  let p = s.pos + (Math.max(0, serverMs - s.at) / 1000) * s.rate;
+  const p = s.pos + (Math.max(0, serverMs - s.at) / 1000) * s.rate;
   const lp = s.loop;
-  if (lp && lp.end - lp.start > 0.2 && p >= lp.end) p = lp.start + ((p - lp.start) % (lp.end - lp.start));
+  if (lp && lp.end - lp.start > 0.2 && s.pos < lp.end) return Math.min(p, lp.end);
   return p;
 }
 

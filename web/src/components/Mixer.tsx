@@ -48,6 +48,8 @@ function learnLatency(lag: number) {
  * 이만큼 앞서 재생해서 다른 사람과 귀에 들리는 순간을 맞춘다. 기기의 성질이라 브라우저에 기억한다.
  */
 const LS_DEVICE = "together.deviceMs";
+/** 함께 연습 버튼 — 아직 다듬는 중이라 숨겨 둔다 (서버도 TOGETHER=1 일 때만 연다) */
+const TOGETHER_ENABLED = false;
 function useDeviceDelay(): [number, (ms: number) => void] {
   const [v, setV] = useState(() => {
     try {
@@ -253,6 +255,20 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
     if (cur !== loopKey) tg.send({ t: "loop", loop: loopButton?.region ?? null });
     // loopKey 가 바뀔 때만 (방 상태가 바뀌어 다시 도는 것은 아니다)
   }, [loopKey, tg.connected]);
+
+  // 반복 구간 끝: 멈췄다가 예비박부터 다시. 이어 붙이면(바로 처음으로 점프) 박을 놓치기 쉽고
+  // 함께 연습에서는 기기마다 점프 순간이 달라 엉켰다. 함께 연습이면 방(서버)이 끝나는 순간을
+  // 알고 있어 모두를 멈추고 맞추고 시작을 다시 돌리므로, 여기서는 멈추기만 한다.
+  const loopEndFn = useRef<(lp: Region) => void>(() => {});
+  loopEndFn.current = (lp) => {
+    if (tg.joined) return;
+    void handlePlay({ force: true, from: lp.start, loop: lp });
+  };
+  const setLoopEnd = engine.setLoopEnd;
+  useEffect(() => {
+    setLoopEnd((lp) => loopEndFn.current(lp));
+    return () => setLoopEnd(null);
+  }, [setLoopEnd]);
 
   function joinTogether() {
     // 참여 버튼이 사용자 제스처라 여기서 소리를 풀어 둔다 — 이후 방 신호로 재생이 시작된다 (iOS)
@@ -539,6 +555,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
         {showRate && bars[0]?.bpm ? (
           <BpmControl base={bars[0].bpm} rate={rate} onRate={setRateShared} />
         ) : null}
+        {TOGETHER_ENABLED && (
         <button
           className={`ghost${tg.joined ? " on" : ""}`}
           onClick={() => (tg.joined ? tg.leave() : joinTogether())}
@@ -546,6 +563,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
         >
           {tg.joined ? "함께 연습 중" : "함께 연습"}
         </button>
+        )}
         <select
           style={{ width: 112 }}
           value={String(countIn)}
