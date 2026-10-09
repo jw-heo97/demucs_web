@@ -328,12 +328,19 @@ export function SongMapTab({ jobs, onChanged }: Props) {
                   : "지금 재생 위치가 속한 구간(같은 이름이 이어지는 마디들)을 반복합니다",
                 onToggle: () => {
                   if (loop) return setLoopRegion(null);
+                  // 구간 2마디 전부터 다음 구간 첫 마디 끝까지 (Verse A 13~18 → 11~19마디).
+                  // 들어가는 흐름과 다음 구간으로 넘어가는 첫 마디까지 연습하기 위해서다.
                   const s = sectionAt(bars, engine.time, duration);
-                  if (!s || s.end - s.start < 0.3) return;
-                  setLoopRegion({ start: s.start, end: s.end });
-                  setMsg(
-                    `${s.name || `${s.fromBar}마디`} 반복 (${s.fromBar}~${s.toBar}마디)`,
-                  );
+                  if (!s) return;
+                  const first = bars[0].bar;
+                  const last = bars[bars.length - 1].bar;
+                  const fromBar = Math.max(first, s.fromBar - 2);
+                  const toBar = Math.min(last, s.toBar + 1);
+                  const start = bars.find((b) => b.bar === fromBar)!.start;
+                  const end = bars.find((b) => b.bar === toBar + 1)?.start ?? duration;
+                  if (end - start < 0.3) return;
+                  setLoopRegion({ start, end });
+                  setMsg(`${s.name || `${s.fromBar}마디`} 반복 — ${fromBar}~${toBar}마디`);
                 },
               }}
               countIn={countIn}
