@@ -58,6 +58,18 @@ export interface MapPayload {
   octave_note: string | null;
 }
 
+/** 사용자가 올린 트랙(녹음·반주). offset_ms: 트랙의 0초가 곡의 몇 ms 인지 (음수 가능) */
+export interface JobTrack {
+  id: string;
+  name: string;
+  offset_ms: number;
+  duration: number | null;
+  rel: string;
+  size: number;
+  mtime: number;
+  url: string;
+}
+
 export interface Job {
   id: string;
   url: string;
@@ -83,6 +95,7 @@ export interface Job {
   bar_count: number;
   beat_count: number;
   files: JobFile[];
+  tracks?: JobTrack[];
   created_at: number;
   elapsed: number;
 }

@@ -29,6 +29,7 @@ import numpy as np
 import audio_io
 import downloader
 import separator
+import tracks as user_tracks
 from config import (
     BEATS_PER_BAR,
     CLICK_LEVEL,
@@ -127,6 +128,23 @@ class Job:
     def out_dir(self) -> Optional[Path]:
         return (OUTPUT_DIR / self.folder) if self.folder else None
 
+    def track_entries(self) -> list[dict]:
+        out = []
+        d = self.out_dir
+        if not d:
+            return out
+        for t in user_tracks.load(d):
+            p = d / t["file"]
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            out.append({"id": t["id"], "name": t["name"], "offset_ms": int(t.get("offset_ms", 0)),
+                        "duration": t.get("duration"), "rel": t["file"], "size": st.st_size,
+                        "mtime": int(st.st_mtime * 1000),
+                        "url": f"/api/jobs/{self.id}/files/{quote(t['file'], safe='/')}"})
+        return out
+
     def to_dict(self) -> dict:
         return {
             "id": self.id,
@@ -154,6 +172,8 @@ class Job:
             "bar_count": len(self.bars),
             "beat_count": len(self.beats),
             "files": self.files,
+            # 사용자 트랙(녹음·반주). 믹서가 스템 뒤에 붙인다 (app/tracks.py)
+            "tracks": self.track_entries(),
             "created_at": self.created_at,
             "elapsed": round((self.finished_at or time.time()) - (self.started_at or self.created_at), 1),
         }
@@ -359,7 +379,8 @@ class JobStore:
     def _scan_files(job: Job, d: Path) -> list[dict]:
         out = []
         for p in sorted(d.rglob("*")):
-            if not p.is_file() or p.name in (META_FILE, MAP_HISTORY_FILE, PEAKS_FILE, "_score.json"):
+            if not p.is_file() or p.name in (META_FILE, MAP_HISTORY_FILE, PEAKS_FILE, "_score.json",
+                                             user_tracks.TRACKS_FILE):
                 continue
             # 악보 분석 결과(페이지 이미지)는 내려받을 파일이 아니다
             if "_score" in p.relative_to(d).parts[:-1]:

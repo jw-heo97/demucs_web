@@ -21,6 +21,7 @@ import downloader
 import scores
 import separator
 import together
+import tracks as user_tracks
 from config import TOGETHER_ENABLED, CORS_ORIGINS, MAX_DURATION_SEC, METRONOME_DEFAULT, OUTPUT_DIR, WORK_DIR
 from downloader import DownloadError
 from jobs import FORMATS, MAX_TITLE_LEN, STEMS, store
@@ -413,6 +414,59 @@ def delete_job(job_id: str):
 # 곡 폴더의 score.pdf 와 그 분석 결과(_score.json, _score/page-N.png). scores.py 참고.
 
 MAX_SCORE_BYTES = 30 * 1024 * 1024
+MAX_TRACK_BYTES = 200 * 1024 * 1024
+
+# 올린 파일의 Content-Type → 임시 확장자 (ffmpeg 가 알아서 읽지만 확장자가 있으면 더 잘 고른다)
+_AUDIO_EXT = {"audio/mpeg": ".mp3", "audio/mp3": ".mp3", "audio/wav": ".wav", "audio/x-wav": ".wav",
+              "audio/wave": ".wav", "audio/webm": ".webm", "video/webm": ".webm", "audio/ogg": ".ogg",
+              "audio/mp4": ".m4a", "audio/x-m4a": ".m4a", "audio/aac": ".aac", "audio/flac": ".flac",
+              "audio/x-flac": ".flac", "video/mp4": ".mp4"}
+
+
+# --- 사용자 트랙 (녹음·반주를 믹서에 올린다, MTR) ---
+@app.post("/api/jobs/{job_id}/tracks", status_code=201)
+async def add_track(job_id: str, request: Request, name: str = "", offset_ms: float = 0):
+    """본문 = 오디오 파일 그대로. ?name= ?offset_ms= 로 이름·시작 위치. mp3 로 변환해 넣는다."""
+    job = _require_job(job_id, done=True)
+    if not job.out_dir or not job.out_dir.exists():
+        raise HTTPException(404, "결과 폴더가 없습니다.")
+    body = await request.body()
+    if len(body) < 100:
+        raise HTTPException(400, "오디오 파일이 비어 있습니다.")
+    if len(body) > MAX_TRACK_BYTES:
+        raise HTTPException(400, "파일이 너무 큽니다 (200MB 까지).")
+    ctype = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    ext = _AUDIO_EXT.get(ctype, "")
+    try:
+        item = await asyncio.to_thread(user_tracks.add, job.out_dir, body, ext, name, offset_ms)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    job.files = store._scan_files(job, job.out_dir)
+    return {"track": item, "job": job.to_dict()}
+
+
+@app.patch("/api/jobs/{job_id}/tracks/{tid}")
+def update_track(job_id: str, tid: str, payload: dict = Body(...)):
+    """{name?, offset_ms?}"""
+    job = _require_job(job_id, done=True)
+    try:
+        item = user_tracks.update(job.out_dir, tid, payload.get("name"),
+                                  payload.get("offset_ms") if "offset_ms" in payload else None)
+    except KeyError:
+        raise HTTPException(404, "그 트랙을 찾을 수 없습니다.")
+    return {"track": item, "job": job.to_dict()}
+
+
+@app.delete("/api/jobs/{job_id}/tracks/{tid}")
+def delete_track(job_id: str, tid: str):
+    job = _require_job(job_id, done=True)
+    try:
+        user_tracks.remove(job.out_dir, tid)
+    except KeyError:
+        raise HTTPException(404, "그 트랙을 찾을 수 없습니다.")
+    job.files = store._scan_files(job, job.out_dir)
+    return {"job": job.to_dict()}
+
 
 
 def _score_dir(job_id: str) -> Path:

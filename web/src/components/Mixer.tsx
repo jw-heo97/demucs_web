@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { useMe } from "../lib/me";
 import { api } from "../api";
-import type { useAudioEngine } from "../hooks/useAudioEngine";
+import type { Track, useAudioEngine } from "../hooks/useAudioEngine";
 import { OFFSET_LIMIT, useClickOffset, useLiveMetronome, useSubdiv } from "../hooks/useLiveMetronome";
 import { useSectionVoice } from "../hooks/useSectionVoice";
 import { roomPosition, useTogether, type RoomState } from "../hooks/useTogether";
@@ -114,6 +115,111 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
   const [hint, setHint] = useState("");
   const [note, setNote] = useState("");
   const [mixing, setMixing] = useState(false);
+  const { canEdit } = useMe();
+
+  // ---------------- 사용자 트랙 (MTR): 파일 올리기 · 녹음 ----------------
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const uploadTrack = async (blob: Blob, name: string, offsetMs: number) => {
+    setUploading(true);
+    setHint("");
+    setNote(`${name} 올리는 중…`);
+    try {
+      await api.uploadTrack(jobId, blob, name, offsetMs);
+      onChanged?.();
+      setNote(`${name} 트랙을 추가했습니다. 박이 어긋나면 트랙 줄의 ±ms 로 맞추세요.`);
+    } catch (e) {
+      setNote("");
+      setHint((e as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  };
+  const customOf = (t: Track) => (t.trackId ? engineJobTracks.find((x) => x.id === t.trackId) : undefined);
+  const engineJobTracks = engine.jobTracks;
+  const nudgeTrack = async (tid: string, delta: number, cur: number) => {
+    try {
+      await api.updateTrack(jobId, tid, { offset_ms: cur + delta });
+      onChanged?.();
+    } catch (e) {
+      setHint((e as Error).message);
+    }
+  };
+
+  /**
+   * 녹음: 마이크를 열고 녹음을 시작한 뒤 곡을 (예비박부터) 튼다. 음악이 실제로 나기 시작한
+   * 순간의 곡 위치와 그때까지 녹음된 길이로 "녹음의 0초 = 곡의 몇 초" (오프셋)를 잰다.
+   * 마이크 입력 지연은 기기마다 달라 ±ms 로 맞춘다. 헤드폰 없이 하면 스피커 소리가 같이 녹음된다.
+   */
+  const rec = useRef<{ mr: MediaRecorder; stream: MediaStream; chunks: Blob[]; startPerf: number; offset: number | null; onPlaying: () => void } | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [recSec, setRecSec] = useState(0);
+  useEffect(() => {
+    if (!recording) return;
+    const id = window.setInterval(() => rec.current && setRecSec(Math.floor((performance.now() - rec.current.startPerf) / 1000)), 500);
+    return () => window.clearInterval(id);
+  }, [recording]);
+  const canRecord = typeof MediaRecorder !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
+  async function startRecording() {
+    setHint("");
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      });
+    } catch {
+      setHint("마이크를 쓸 수 없습니다. 브라우저의 마이크 권한을 확인해 주세요.");
+      return;
+    }
+    const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", ""].find((m) => !m || MediaRecorder.isTypeSupported(m)) ?? "";
+    const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+    const r = { mr, stream, chunks: [] as Blob[], startPerf: 0, offset: null as number | null, onPlaying: () => {} };
+    mr.ondataavailable = (e) => e.data.size && r.chunks.push(e.data);
+    const master = engine.audios.current[0];
+    r.onPlaying = () => {
+      // 음악이 실제로 나기 시작: 녹음은 그보다 (지금까지 녹음된 길이)만큼 먼저 시작했다
+      if (r.offset === null && master) r.offset = master.currentTime - (performance.now() - r.startPerf) / 1000;
+    };
+    master?.addEventListener("playing", r.onPlaying);
+    rec.current = r;
+    mr.start(250);
+    r.startPerf = performance.now();
+    setRecording(true);
+    setRecSec(0);
+    setNote("녹음 중 — 헤드폰을 쓰세요. 멈추면 트랙으로 올라갑니다.");
+    void handlePlay({ force: true });
+  }
+  async function stopRecording() {
+    const r = rec.current;
+    if (!r) return;
+    rec.current = null;
+    setRecording(false);
+    engine.audios.current[0]?.removeEventListener("playing", r.onPlaying);
+    cancelCount();
+    engine.pause();
+    const done = new Promise<void>((res) => (r.mr.onstop = () => res()));
+    r.mr.stop();
+    await done;
+    r.stream.getTracks().forEach((t) => t.stop());
+    const blob = new Blob(r.chunks, { type: r.mr.mimeType || "audio/webm" });
+    if (blob.size < 1000) {
+      setNote("");
+      setHint("녹음된 소리가 없습니다.");
+      return;
+    }
+    const n = (engineJobTracks.length ?? 0) + 1;
+    if (r.offset === null) setHint("음악이 시작되기 전에 멈춰서 시작 위치를 재지 못했습니다 — ±ms 로 맞춰 주세요.");
+    await uploadTrack(blob, `녹음 ${n}`, Math.round((r.offset ?? 0) * 1000));
+  }
+  useEffect(() => () => {
+    // 화면을 떠나면 녹음도 끝낸다 (올리지 않는다)
+    const r = rec.current;
+    if (r) {
+      r.mr.stop();
+      r.stream.getTracks().forEach((t) => t.stop());
+      rec.current = null;
+    }
+  }, []);
   const timers = useRef<{ t?: number; i?: number; oscs: OscillatorNode[] }>({ oscs: [] });
   // 메트로놈 트랙은 파일이 아니라 송 맵에서 즉석으로 울린다 (편집이 바로 들린다)
   const [subdiv, setSubdiv] = useSubdiv();
@@ -708,6 +814,39 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
             </button>
           </>
         )}
+        {canEdit && (
+          <>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="audio/*,video/webm,video/mp4"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                e.target.value = "";
+                if (f) void uploadTrack(f, f.name.replace(/\.[^.]+$/, "").slice(0, 40) || "트랙", 0);
+              }}
+            />
+            <button
+              className="ghost"
+              disabled={uploading || !tracks.length}
+              onClick={() => fileRef.current?.click()}
+              title="내 녹음·반주 같은 오디오 파일을 이 곡의 트랙으로 올립니다 (MTR). 올린 뒤 ±ms 로 박을 맞추세요."
+            >
+              트랙 추가
+            </button>
+            {canRecord && (
+              <button
+                className={`ghost${recording ? " on" : ""}`}
+                disabled={uploading || !tracks.length}
+                onClick={() => (recording ? void stopRecording() : void startRecording())}
+                title="마이크로 녹음하면서 곡을 (예비박부터) 틉니다. 멈추면 녹음이 트랙으로 올라가고 시작 위치가 자동으로 맞춰집니다. 헤드폰을 쓰세요."
+              >
+                {recording ? `■ 녹음 중지 ${Math.floor(recSec / 60)}:${String(recSec % 60).padStart(2, "0")}` : "● 녹음"}
+              </button>
+            )}
+          </>
+        )}
         <button
           className="ghost"
           onClick={downloadMix}
@@ -849,6 +988,64 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
             onChange={(e) => engine.setVolume(i, Number(e.target.value) / 100)}
           />
           <span className="pct">{Math.round((vol[i] ?? 1) * 100)}</span>
+          {t.trackId && (() => {
+            const c = customOf(t);
+            if (!c) return null;
+            return (
+              <div className="trkopts">
+                <span className="meta" title="트랙의 0초가 곡의 몇 ms 인지. 녹음이 늦게 들리면 −, 빠르면 + (내 연주를 곡에 맞춥니다)">
+                  시작
+                </span>
+                {canEdit && (
+                  <button className="ghost" onClick={() => void nudgeTrack(c.id, -100, c.offset_ms)} title="−100ms">
+                    −100
+                  </button>
+                )}
+                {canEdit && (
+                  <button className="ghost" onClick={() => void nudgeTrack(c.id, -10, c.offset_ms)} title="−10ms">
+                    −10
+                  </button>
+                )}
+                <span className="meta" style={{ fontVariantNumeric: "tabular-nums" }}>
+                  {c.offset_ms > 0 ? "+" : ""}
+                  {c.offset_ms}ms
+                </span>
+                {canEdit && (
+                  <button className="ghost" onClick={() => void nudgeTrack(c.id, 10, c.offset_ms)} title="+10ms">
+                    +10
+                  </button>
+                )}
+                {canEdit && (
+                  <button className="ghost" onClick={() => void nudgeTrack(c.id, 100, c.offset_ms)} title="+100ms">
+                    +100
+                  </button>
+                )}
+                {canEdit && (
+                  <button
+                    className="ghost"
+                    onClick={() => {
+                      const name = prompt("트랙 이름", c.name);
+                      if (name && name.trim() && name !== c.name)
+                        void api.updateTrack(jobId, c.id, { name: name.trim() }).then(() => onChanged?.(), (e) => setHint((e as Error).message));
+                    }}
+                  >
+                    이름
+                  </button>
+                )}
+                {canEdit && (
+                  <button
+                    className="ghost"
+                    onClick={() => {
+                      if (confirm(`'${c.name}' 트랙을 지울까요? 파일도 지워집니다.`))
+                        void api.deleteTrack(jobId, c.id).then(() => onChanged?.(), (e) => setHint((e as Error).message));
+                    }}
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            );
+          })()}
         </div>
       ))}
     </div>
