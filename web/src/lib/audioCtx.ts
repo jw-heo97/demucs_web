@@ -56,9 +56,11 @@ export function setClickSound(v: ClickSound) {
 // 지연도 없고 작은 소리는 손대지 않는다. 셰이퍼 입력은 -1~1 이라 앞에서 1/8 로 줄이고 곡선에서
 // 8 배로 되돌린다 (볼륨 600% 까지 넣어도 곡선 범위 안).
 const HEAD = 8;
-let limiter: { ctx: BaseAudioContext; input: GainNode } | null = null;
+// 컨텍스트마다 하나 (예비박을 미리 그리는 OfflineAudioContext 도 쓴다)
+const limiters = new WeakMap<BaseAudioContext, GainNode>();
 export function metroOut(ctx: BaseAudioContext): AudioNode {
-  if (!limiter || limiter.ctx !== ctx) {
+  let input = limiters.get(ctx);
+  if (!input) {
     const pre = ctx.createGain();
     pre.gain.value = 1 / HEAD;
     const shaper = ctx.createWaveShaper();
@@ -75,9 +77,10 @@ export function metroOut(ctx: BaseAudioContext): AudioNode {
     // 오버샘플링은 끈다 — 잡음 소리(하이햇)에서 필터 출렁임으로 꼭대기가 +4dB 넘게 튀었다(실측)
     shaper.oversample = "none";
     pre.connect(shaper).connect(ctx.destination);
-    limiter = { ctx, input: pre };
+    limiters.set(ctx, pre);
+    input = pre;
   }
-  return limiter.input;
+  return input;
 }
 
 let noise: AudioBuffer | null = null;

@@ -692,6 +692,35 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
       await startPlay();
       return;
     }
+    // 기기에 저장된 곡: 예비박까지 한 파일에 넣어 합친 재생으로 (기기와 상관없이 정확하다)
+    if (engine.canMix) {
+      engine.prime();
+      const nb = nextBeatAfter(bars, pos);
+      const bb = barAtTime(bars, pos) ?? bars[0];
+      const st = bb ? stepOf(bb.bpm, bb.beat_unit) : 0.5;
+      const bpb = bb?.beats_per_bar ?? 4;
+      const offS = userOffset / 1000;
+      const clicks: { t: number; freq: number }[] = [];
+      for (let k = countIn; k >= 1; k--)
+        clicks.push({ t: nb - k * st + offS, freq: (countIn - k) % bpb === 0 ? 1500 : 1000 });
+      metro.holdUntil(nb - 0.02);
+      voice.cueAt(pos, Math.max(countIn * st, nb - pos) + 0.1);
+      setCounting(countIn);
+      timers.current.i = window.setInterval(() => {
+        const t = engine.audios.current[0]?.currentTime ?? -1e9;
+        const left = clicks.filter((c) => c.t > t - 0.02).length;
+        setCounting(Math.min(countIn, left));
+        if (!left && timers.current.i) clearInterval(timers.current.i);
+      }, 60);
+      try {
+        setHint("");
+        await engine.playCountIn(pos, clicks, 0.9 * Math.max(1, metroVol));
+      } catch (e) {
+        cancelCount();
+        setHint((e as Error).message);
+      }
+      return;
+    }
     const b = barAtTime(bars, pos) ?? bars[0];
     const stepRaw = b ? stepOf(b.bpm, b.beat_unit) : 0.5;
     const step = stepRaw / (rate || 1);
@@ -794,7 +823,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
     <div className="mixer">
       <div className="transport" ref={transportRef}>
         <button className="playbtn" onClick={() => void handlePlay()}>
-          {counting ? counting : preparing || autoPending ? "…" : playing ? "❚❚" : "▶"}
+          {engine.mixBusy ? "…" : counting ? counting : preparing || autoPending ? "…" : playing ? "❚❚" : "▶"}
         </button>
         {loopButton && (
           <button
@@ -821,6 +850,11 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
           <BpmControl base={bars[0].bpm} rate={rate} onRate={setRateShared} />
         ) : null}
         {hint && <span className="err">{hint}</span>}
+        {engine.mixBusy && (
+          <span className="meta" title="기기에 저장된 트랙을 지금 믹서 설정대로 한 파일로 합치는 중입니다. 합친 뒤에는 트랙끼리·메트로놈·예비박이 기기와 상관없이 정확히 맞습니다.">
+            트랙 합치는 중…
+          </span>
+        )}
         {!hint && note && <span className="meta">{note}</span>}
       </div>
 
@@ -1032,7 +1066,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
       {transportHidden && tracks.length > 0 && (
         <div className="minibar">
           <button className="playbtn" onClick={() => void handlePlay()}>
-            {counting ? counting : preparing || autoPending ? "…" : playing ? "❚❚" : "▶"}
+            {engine.mixBusy ? "…" : counting ? counting : preparing || autoPending ? "…" : playing ? "❚❚" : "▶"}
           </button>
           {bars.length > 0 ? (
             <BarJump cur={cur?.bar ?? 0} last={lastBar} onGo={gotoBar} name={cur?.name} />
