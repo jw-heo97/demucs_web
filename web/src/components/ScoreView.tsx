@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { confirmBox } from "../lib/dialog";
 import { api } from "../api";
 import { useMe } from "../lib/me";
 import type { ScoreData, ScoreMeasure } from "../types";
@@ -227,7 +228,8 @@ export function ScorePanel({
   }
 
   async function remove() {
-    if (!confirm("이 곡에서 악보 연결을 끊고 score.pdf 를 지웁니다.")) return;
+    if (!(await confirmBox({ title: "악보 연결 끊기", message: "이 곡에서 악보 연결을 끊고 score.pdf 를 지웁니다.", okText: "끊기", danger: true })))
+      return;
     try {
       await api.deleteScore(jobId);
       setScore(null);

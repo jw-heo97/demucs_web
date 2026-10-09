@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ask, choose, confirmBox } from "../lib/dialog";
 import { api } from "../api";
 import { useAudioEngine } from "../hooks/useAudioEngine";
 import { sectionAt } from "../lib/sectionColors";
@@ -141,21 +142,32 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
   /** 잠그기: PIN 은 선택. 비우면 만든 사람만 풀 수 있다 */
   const lockActive = async () => {
     if (!job || !active) return;
-    const pin = prompt(
-      "이 버전을 잠급니다. 풀 때 쓸 PIN(4~12자)을 정하세요.\n비워 두면 PIN 없이, 만든 사람만 풀 수 있습니다.",
-      "",
-    );
+    const pin = await ask({
+      title: "🔒 이 버전 잠그기",
+      message: "덮어쓰기·이름 변경·삭제·재검출이 막힙니다. 풀 때 쓸 PIN(4~12자)을 정하세요. 비워 두면 PIN 없이, 만든 사람만 풀 수 있습니다.",
+      kind: "pin",
+      placeholder: "PIN (선택)",
+      okText: "잠그기",
+      allowEmpty: true,
+    });
     if (pin === null) return;
+    if (pin.trim() && !/^.{4,12}$/.test(pin.trim())) {
+      setMsg("PIN 은 4~12자여야 합니다.");
+      return;
+    }
     await verAction(() => api.lockVersion(job.id, active, { locked: true, pin: pin.trim() }), "이 버전을 잠갔습니다. 덮어쓰기·삭제가 막힙니다.");
   };
   const unlockActive = async () => {
     if (!job || !active || !activeVer) return;
     let pin = "";
     if (activeVer.has_pin) {
-      const v = prompt("잠금을 풀려면 이 버전의 PIN 을 입력하세요.");
+      const v = await ask({ title: "🔓 잠금 풀기", message: `'${activeVer.name}' 버전의 PIN 을 입력하세요.`, kind: "pin", okText: "풀기" });
       if (v === null) return;
       pin = v.trim();
-    } else if (!confirm("잠금을 풀까요? 이후 저장하면 이 버전이 덮어써집니다.")) return;
+    } else if (
+      !(await confirmBox({ title: "🔓 잠금 풀기", message: "잠금을 풀면 이후 저장할 때 이 버전이 덮어써집니다.", okText: "풀기" }))
+    )
+      return;
     await verAction(() => api.lockVersion(job.id, active, { locked: false, pin }), "잠금을 풀었습니다.");
   };
 
@@ -250,7 +262,12 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
     if (!job || !map) return;
     if (locked) {
       // 잠긴 버전은 덮어쓰지 않는다 — 지금 내용을 내 새 버전으로
-      const name = prompt("잠긴 버전입니다. 지금 내용을 새 버전으로 저장합니다. 이름:", `${activeVer?.name ?? "버전"} 수정`);
+      const name = await ask({
+        title: "새 버전으로 저장",
+        message: "잠긴 버전은 덮어쓰지 않습니다. 지금 내용을 새 버전으로 저장합니다.",
+        value: `${activeVer?.name ?? "버전"} 수정`,
+        okText: "저장",
+      });
       if (name === null) return;
       await verAction(() => api.createVersion(job.id, name, map), `'${name}' 버전으로 저장했습니다.`);
       return;
@@ -270,7 +287,16 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
       setBusy(false);
     }
     // 다 잡은 송 맵은 바로 잠가 두게 — 실수로 덮어쓰는 것을 막는 가장 쉬운 길
-    if (saved && mine && confirm("저장했습니다. 이 버전을 잠글까요? (덮어쓰기·삭제가 막히고, 풀 때 PIN 을 쓸 수 있습니다)"))
+    if (
+      saved &&
+      mine &&
+      (await confirmBox({
+        title: "저장했습니다",
+        message: "이 버전을 잠글까요? 덮어쓰기·삭제가 막히고, 풀 때 PIN 을 쓸 수 있습니다.",
+        okText: "잠그기",
+        cancelText: "나중에",
+      }))
+    )
       await lockActive();
   };
 
@@ -344,7 +370,7 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
   };
 
   const [scoreData, setScoreData] = useState<ScoreData | null>(null);
-  const buildFromScore = () => {
+  const buildFromScore = async () => {
     if (!job || !scoreData) return;
     const m = mapFromScore(scoreData);
     if (!m) return;
@@ -352,11 +378,13 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
     let name = "악보";
     for (let k = 2; names.has(name); k++) name = `악보 ${k}`;
     if (
-      !confirm(
-        `악보로 송 맵을 만들어 새 버전에 저장합니다: ${name} (지금 버전은 그대로 남습니다)
-` +
+      !(await confirmBox({
+        title: "악보로 송 맵 만들기",
+        message:
+          `새 버전 '${name}' 에 저장합니다 (지금 버전은 그대로 남습니다). ` +
           `구간 ${m.ranges.length}개 · ♩=${m.bpm} · 1마디 1박은 지금 값(${showTime(m.anchor)})을 씁니다.`,
-      )
+        okText: "만들기",
+      }))
     )
       return;
     void verAction(
@@ -501,7 +529,7 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
             <button
               className="ghost"
               disabled={busy || !canEdit || !scoreData?.marks.length}
-              onClick={buildFromScore}
+              onClick={() => void buildFromScore()}
               title={
                 !scoreData
                   ? "먼저 이 곡의 악보 PDF 를 올려 주세요."
@@ -560,8 +588,8 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
               <button
                 className="ghost"
                 disabled={!canEdit}
-                onClick={() => {
-                  const name = prompt("새 버전 이름 (지금 화면 내용을 복사합니다)", "연습용");
+                onClick={async () => {
+                  const name = await ask({ title: "+ 새 버전", message: "지금 화면 내용을 복사해 새 버전을 만듭니다.", value: "연습용", okText: "만들기" });
                   if (name != null)
                     verAction(() => api.createVersion(job.id, name, map), `'${name}' 버전 생성`);
                 }}
@@ -572,9 +600,9 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
                 <button
                   className="ghost"
                   disabled={!canEdit || locked}
-                  onClick={() => {
+                  onClick={async () => {
                     const cur = versions.find((v) => v.id === active);
-                    const name = prompt("버전 이름", cur?.name ?? "");
+                    const name = await ask({ title: "버전 이름", value: cur?.name ?? "", okText: "바꾸기" });
                     if (name != null)
                       verAction(() => api.renameVersion(job.id, active, name), "이름 변경");
                   }}
@@ -586,10 +614,17 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
                 <button
                   className="ghost"
                   disabled={!canEdit || locked}
-                  onClick={() =>
-                    confirm("이 버전과 메트로놈 파일을 삭제합니다.") &&
-                    verAction(() => api.deleteVersion(job.id, active), "버전 삭제")
-                  }
+                  onClick={async () => {
+                    if (
+                      await confirmBox({
+                        title: `'${activeVer?.name ?? ""}' 버전 삭제`,
+                        message: "이 버전과 그 메트로놈 파일을 지웁니다.",
+                        okText: "삭제",
+                        danger: true,
+                      })
+                    )
+                      void verAction(() => api.deleteVersion(job.id, active), "버전 삭제");
+                  }}
                 >
                   삭제
                 </button>
@@ -598,16 +633,17 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
                 <button
                   className="ghost"
                   disabled={!canEdit || locked}
-                  onClick={() => {
-                    const lines = payload.history
-                      .map(
-                        (h) =>
-                          `${h.index}: ♩=${h.bpm} · 마디 ${h.ranges}개${h.names?.length ? ` · ${h.names.join("/")}` : ""}`,
-                      )
-                      .join("\n");
-                    const pick = prompt("되돌릴 이력 번호\n\n" + lines, "0");
-                    if (pick != null)
-                      verAction(() => api.restoreMap(job.id, parseInt(pick, 10)), "이력에서 되돌림");
+                  onClick={async () => {
+                    const pick = await choose({
+                      title: "이력에서 되돌리기",
+                      message: "지금 버전을 이 이력의 구성표로 바꿉니다 (지금 것은 다시 이력에 남습니다).",
+                      items: payload.history.map((h) => ({
+                        label: `${h.index + 1}. ♩=${h.bpm} · 구간 ${h.ranges}개`,
+                        sub: h.names?.length ? h.names.join(" / ") : undefined,
+                        value: h.index,
+                      })),
+                    });
+                    if (pick != null) void verAction(() => api.restoreMap(job.id, pick), "이력에서 되돌림");
                   }}
                 >
                   이력 {payload.history.length}

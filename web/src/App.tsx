@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { DialogHost } from "./lib/dialog";
 import { api } from "./api";
 import { MeContext, type Me } from "./lib/me";
 import { AccessTab } from "./components/AccessTab";
@@ -113,6 +114,7 @@ export function App() {
           }}
         />
       )}
+      <DialogHost />
     </div>
     </MeContext.Provider>
   );

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { ask, confirmBox } from "../lib/dialog";
 import { api } from "../api";
 import { useMe } from "../lib/me";
 import { useAudioEngine } from "../hooks/useAudioEngine";
@@ -150,7 +151,7 @@ export function PlaylistTab({ jobs, onChanged }: Props) {
   }
 
   async function create() {
-    const name = prompt("새 플레이리스트 이름", `플레이리스트 ${(lists?.length ?? 0) + 1}`);
+    const name = await ask({ title: "새 플레이리스트", value: `플레이리스트 ${(lists?.length ?? 0) + 1}`, okText: "만들기" });
     if (!name?.trim()) return;
     try {
       const p = await api.createPlaylist(name.trim());
@@ -164,7 +165,7 @@ export function PlaylistTab({ jobs, onChanged }: Props) {
 
   async function rename() {
     if (!sel) return;
-    const name = prompt("플레이리스트 이름", sel.name);
+    const name = await ask({ title: "플레이리스트 이름", value: sel.name, okText: "바꾸기" });
     if (!name?.trim() || name.trim() === sel.name) return;
     try {
       const p = await api.updatePlaylist(sel.id, { name: name.trim() });
@@ -175,7 +176,11 @@ export function PlaylistTab({ jobs, onChanged }: Props) {
   }
 
   async function removeList() {
-    if (!sel || !confirm(`"${sel.name}" 플레이리스트를 삭제할까요? (곡 파일은 그대로 남습니다)`)) return;
+    if (
+      !sel ||
+      !(await confirmBox({ title: `'${sel.name}' 삭제`, message: "플레이리스트만 지웁니다. 곡 파일은 그대로 남습니다.", okText: "삭제", danger: true }))
+    )
+      return;
     try {
       await api.deletePlaylist(sel.id);
       setLists((ls) => ls?.filter((x) => x.id !== sel.id) ?? ls);
