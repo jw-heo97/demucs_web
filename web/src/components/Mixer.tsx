@@ -259,7 +259,7 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
     const toBeat = (nextBeat - pos) / (rate || 1); // 재생 속도를 반영한 실제 시간
     const tBeat = ctx.currentTime + margin + Math.max(countIn * step, toBeat);
 
-    // 곧 시작하는 구간(곡 맨 앞 Intro 등)은 예비박 동안 미리 읽는다
+    // 곧 시작하는 구간(곡 맨 앞 Intro 등)은 읽지 않는다 — 예비박과 겹친다
     voice.cueAt(pos, Math.max(countIn * stepRaw, nextBeat - pos) + 0.1);
 
     timers.current.oscs = [];
