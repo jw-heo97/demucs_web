@@ -46,6 +46,8 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
 
   const [map, setMap] = useState<SongMap | null>(null);
   const [payload, setPayload] = useState<MapPayload | null>(null);
+  // 다른 기기에서 송 맵이 바뀌었는데 이 화면에 저장 안 한 편집이 있어 자동으로 못 불러온 상태
+  const [stale, setStale] = useState(false);
   const [peaks, setPeaks] = useState<number[] | null>(null);
   // 파형에 어떤 트랙을 그릴지. 드럼이 타점이 뚜렷해 마디 잡기엔 제일 좋지만,
   // 드럼이 늦게 들어오는 곡은 앞부분이 비어 보여서 원본으로 바꿀 수 있어야 한다.
@@ -94,6 +96,7 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
     const d = await api.map(id);
     if (id !== jobIdRef.current) return;
     setPayload(d);
+    setStale(false);
     setMap(
       d.map?.ranges?.length
         ? d.map
@@ -138,6 +141,28 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
   // 잠긴 버전이 활성이면 덮어쓰지 못한다 — 저장은 '새 버전으로 저장' 이 된다
   const locked = !!activeVer?.locked;
   const mine = ownsVersion(me, activeVer?.owner);
+
+  /**
+   * 다른 기기(또는 다른 탭)에서 이 곡의 송 맵·버전·잠금이 바뀌면 다시 불러온다.
+   * 목록은 8초마다(앱으로 돌아오면 바로) 갱신되는데 송 맵 화면은 곡을 고를 때 한 번만 받아서,
+   * 예전엔 새로고침 전까지 다른 곳의 변경(잠금 등)이 안 보였다. 저장 안 한 편집이 있으면
+   * 덮어쓰지 않고 띠로 알린다.
+   */
+  const sigOf = (activeId: string | null | undefined, vers: MapVersion[] | undefined, m: unknown) =>
+    JSON.stringify([
+      activeId ?? null,
+      (vers ?? []).map((v) => [v.id, v.name, !!v.locked, !!v.has_pin, v.updated ?? null]),
+      m ?? null,
+    ]);
+  const serverSig = job ? sigOf(job.map_active, job.map_versions, job.songmap) : "";
+  const loadedSig = payload ? sigOf(payload.active, payload.versions, payload.map) : "";
+  const dirty = !!payload && !!map && JSON.stringify(map) !== JSON.stringify(payload.map);
+  useEffect(() => {
+    if (!job || !payload || !serverSig || serverSig === loadedSig) return;
+    if (dirty) setStale(true);
+    else void load(job.id).then(() => setMsg("다른 기기에서 바뀐 송 맵을 불러왔습니다."));
+    // serverSig 가 바뀔 때만 (내 저장 직후 목록이 아직 옛것이어도 다시 불러오지 않게)
+  }, [serverSig]);
 
   /** 잠그기: PIN 은 선택. 비우면 만든 사람만 풀 수 있다 */
   const lockActive = async () => {
@@ -545,6 +570,12 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
           </ScorePanel>
 
           <div className="panel">
+            {stale && (
+              <div className="updatebar">
+                다른 기기에서 이 곡의 송 맵이 바뀌었습니다. 지금 화면에는 저장 안 한 편집이 있습니다.
+                <button onClick={() => job && void load(job.id)}>다시 불러오기 (편집 버림)</button>
+              </div>
+            )}
             <div className="vertabs">
               {versions.map((v) => (
                 <button
