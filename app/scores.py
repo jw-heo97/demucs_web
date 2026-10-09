@@ -192,13 +192,15 @@ def analyze(pdf_path: Path, out_dir: Path) -> dict:
         eq_rows = [w[1] for w in words if "=" in w[4]]
         staves = find_staves(drawings)
         for si, st in enumerate(staves):
-            # 잘라 보여줄 세로 범위: 위아래 이웃 보표와의 가운데까지
+            # 잘라 보여줄 세로 범위
             prev_bot = staves[si - 1]["bot"] if si > 0 else None
             next_top = staves[si + 1]["top"] if si + 1 < len(staves) else None
             # 첫 줄 위에는 구간 표시와 템포가 함께 있어 더 넓게 본다
             room = (9 if si == 0 else 6) * st["gap"]
-            y0 = (prev_bot + st["top"]) / 2 if prev_bot is not None else st["top"] - room
-            y1 = (st["bot"] + next_top) / 2 if next_top is not None else st["bot"] + room
+            # 위쪽은 구간 표시·템포가 올라가 있어 넓게(앞 보표 쪽으로 70%), 아래는 가사·
+            # 발 아래 음표가 들어갈 만큼(다음 보표 쪽으로 50%). 이웃 줄이 조금 비쳐도 괜찮다.
+            y0 = prev_bot + 0.3 * (st["top"] - prev_bot) if prev_bot is not None else st["top"] - room
+            y1 = st["bot"] + 0.5 * (next_top - st["bot"]) if next_top is not None else st["bot"] + room
             y0 = max(0.0, min(y0, st["top"] - 2 * st["gap"]))
             y1 = min(H, max(y1, st["bot"] + 2 * st["gap"]))
 
