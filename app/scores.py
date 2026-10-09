@@ -8,8 +8,10 @@ MuseScore 같은 악보 프로그램이 만든 **벡터 PDF** 를 전제로 한�
 스캔본(이미지만 있는 PDF)은 마디를 찾지 못한다 — measures 가 비어 돌아간다.
 
 결과는 {곡}/_score.json 과 {곡}/_score/page-N.png 에 둔다.
-_score.json 의 order 는 손으로 넣는 값이다: 반복 기호(‖: :‖)처럼 음원의 마디 순서가
-악보와 다를 때 "음원 n번째 마디 = 악보 몇 번째 마디(1부터)" 목록. 다시 분석해도 남긴다.
+_score.json 의 order 는 "음원 n번째 마디 = 악보 몇 번째 마디(1부터)" 목록이다.
+반복 기호(‖: :‖)가 있으면 반복 점 글자를 찾아 자동으로 펼친다(order_auto). 1·2번
+괄호(볼타)처럼 자동으로 못 펼치는 악보는 손으로 넣는다 — 손으로 넣은 것은 다시
+분석해도 남긴다.
 """
 from __future__ import annotations
 
@@ -27,6 +29,45 @@ SCORE_DIR = "_score"
 RENDER_DPI = 144
 
 _NUM = re.compile(r"^\d{1,4}$")
+# 악보 글꼴(SMuFL: Bravura·Leland 등)의 반복 점. MuseScore 는 반복 기호의 점을 이 글자로 찍는다.
+REPEAT_DOT = "\ue044"
+
+
+def _repeat_dots(page) -> list[tuple[float, float]]:
+    """반복 점 글자들의 (x, 세로 가운데)."""
+    out = []
+    for b in page.get_text("rawdict")["blocks"]:
+        for ln in b.get("lines", []):
+            for sp in ln.get("spans", []):
+                for ch in sp.get("chars", []):
+                    if ch["c"] == REPEAT_DOT:
+                        # 글자 상자는 글꼴 높이만큼 크다 — 실제 점은 기준선(origin) 근처에 있다
+                        out.append((ch["origin"][0], ch["origin"][1]))
+    return out
+
+
+def expand_repeats(n: int, starts: set[int], ends: set[int]) -> Optional[list[int]]:
+    """‖: :‖ 를 펼친 연주 순서(악보 마디 번호, 1부터). 반복이 없으면 None.
+
+    끝 반복(:‖)을 처음 만나면 가장 최근의 시작 반복(없으면 1마디)으로 돌아간다.
+    1·2번 괄호(볼타)는 아직 모른다 — 그런 악보는 order 를 손으로 고쳐야 한다.
+    """
+    if not ends:
+        return None
+    order: list[int] = []
+    done: set[int] = set()
+    start = 1
+    i = 1
+    while i <= n and len(order) < 4 * n:
+        if i in starts:
+            start = i
+        order.append(i)
+        if i in ends and i not in done:
+            done.add(i)
+            i = start
+            continue
+        i += 1
+    return order
 
 
 def _horizontal_segments(drawings) -> list[tuple[float, float, float]]:
@@ -170,6 +211,8 @@ def analyze(pdf_path: Path, out_dir: Path) -> dict:
 
     doc = pymupdf.open(pdf_path)
     pages, measures, marks = [], [], []
+    rep_starts: set[int] = set()   # 반복 시작 마디 (1부터)
+    rep_ends: set[int] = set()
     tempo: Optional[float] = None
     for pi, page in enumerate(doc):
         pix = page.get_pixmap(dpi=RENDER_DPI)
@@ -191,6 +234,7 @@ def analyze(pdf_path: Path, out_dir: Path) -> dict:
                         small.add((round(sp["bbox"][0]), round(sp["bbox"][1])))
         eq_rows = [w[1] for w in words if "=" in w[4]]
         staves = find_staves(drawings)
+        dots = _repeat_dots(page)
         for si, st in enumerate(staves):
             # 잘라 보여줄 세로 범위
             prev_bot = staves[si - 1]["bot"] if si > 0 else None
@@ -220,6 +264,18 @@ def analyze(pdf_path: Path, out_dir: Path) -> dict:
             if number is not None and first < len(measures):
                 measures[first]["number"] = number
 
+            # 반복 점: 마디선 바로 왼쪽이면 끝 반복(:‖), 마디 시작 바로 오른쪽이면 시작 반복(‖:)
+            g = st["gap"]
+            for x, y in dots:
+                if not (st["top"] - g <= y <= st["bot"] + g):
+                    continue
+                for k in range(first, len(measures)):
+                    m = measures[k]
+                    if 0 < m["x1"] - x < 3 * g:
+                        rep_ends.add(k + 1)
+                    elif 0 <= x - m["x0"] < 7 * g and (k == first or x - m["x0"] < 3 * g):
+                        rep_starts.add(k + 1)
+
             # 이 줄 위의 구간 표시 → 그 x 에 걸치는(가장 가까운) 마디에 붙인다
             for b in _boxed_texts(words, drawings, (0, y0, W, st["top"])):
                 cand = [k for k in range(first, len(measures))]
@@ -241,14 +297,20 @@ def analyze(pdf_path: Path, out_dir: Path) -> dict:
         for key in ("x0", "x1", "y0", "y1", "top", "bot", "sys_x0", "sys_x1"):
             m[key] = round(m[key], 2)
 
-    return {
+    data = {
         "version": 1,
         "pages": pages,
         "measures": measures,
         "marks": marks,
         "tempo": tempo,
         "warnings": warnings,
+        "repeats": {"starts": sorted(rep_starts), "ends": sorted(rep_ends)},
     }
+    order = expand_repeats(len(measures), rep_starts, rep_ends)
+    if order:
+        data["order"] = order
+        data["order_auto"] = True
+    return data
 
 
 def load(out_dir: Path) -> Optional[dict]:
@@ -267,11 +329,12 @@ def save(out_dir: Path, data: dict) -> None:
 
 
 def rebuild(out_dir: Path) -> dict:
-    """score.pdf 를 다시 분석한다. 손으로 넣은 order 는 남긴다."""
+    """score.pdf 를 다시 분석한다. 손으로 넣은 order 는 남긴다 (자동으로 펼친 것은 새로)."""
     old = load(out_dir) or {}
     data = analyze(out_dir / SCORE_PDF, out_dir)
-    if isinstance(old.get("order"), list):
+    if isinstance(old.get("order"), list) and not old.get("order_auto"):
         data["order"] = old["order"]
+        data.pop("order_auto", None)
     save(out_dir, data)
     return data
 
