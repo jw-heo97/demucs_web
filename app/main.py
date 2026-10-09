@@ -9,11 +9,13 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+import access
 import downloader
 import scores
 import separator
@@ -44,6 +46,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Demucs Web", version="2.0.0", lifespan=lifespan)
 
+# 접속자 기록 + funnel·다른 계정 차단 (app/access.py)
+app.middleware("http")(access.middleware)
+
 # 앱(Capacitor/Tauri)이나 개발 서버처럼 다른 오리진에서 부를 때만 쓴다.
 # 비어 있으면 동일 오리진만 허용 — 웹으로만 쓸 때는 켤 필요가 없다.
 if CORS_ORIGINS:
@@ -60,6 +65,68 @@ if CORS_ORIGINS:
 @app.get("/healthz")
 def healthz():
     return {"ok": True, "queue": store.queue_depth()}
+
+
+@app.get("/api/me")
+def api_me(request: Request):
+    """지금 접속한 경로와 관리 화면을 볼 수 있는지 (탭 표시용)."""
+    who = getattr(request.state, "who", None) or access.classify(request)
+    dv = getattr(request.state, "device", None)
+    return {"via": who["via"], "login": who["login"], "admin": access.is_admin(who),
+            "device": dv["name"] if dv else None}
+
+
+# --- 접속자 관리 (허용 계정의 tailnet 기기·이 PC 만 — 미들웨어가 /api/admin/* 를 막는다) ---
+def _invite_url(request: Request, key: str) -> str:
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+    # tailnet 으로 들어왔으면 그 주소(…ts.net)가 funnel 주소와 같다. 이 PC 에서 직접이면 모른다.
+    if not host or host.startswith(("127.0.0.1", "localhost")):
+        return f"/?key={key}"
+    return f"https://{host}/?key={key}"
+
+
+@app.get("/api/admin/access")
+def admin_access():
+    return {"devices": access.store.devices(), "invites": access.store.invites(),
+            "clients": access.recent_clients(),
+            "allow_users": sorted(access.TAILSCALE_ALLOW_USERS),
+            "invite_days": access.INVITE_DAYS}
+
+
+@app.post("/api/admin/invites")
+def admin_invite_create(request: Request, payload: dict = Body(default={})):
+    """{name} — 1회용 초대 링크. 링크 원문은 이 응답에서만 보인다(서버엔 해시만)."""
+    key, inv = access.store.create_invite(payload.get("name") or "")
+    return {**inv, "url": _invite_url(request, key)}
+
+
+@app.delete("/api/admin/invites/{iid}")
+def admin_invite_cancel(iid: str):
+    try:
+        access.store.cancel_invite(iid)
+    except KeyError:
+        raise HTTPException(404, "그 초대를 찾을 수 없습니다 (이미 쓰였거나 만료).")
+    return {"ok": True}
+
+
+@app.patch("/api/admin/devices/{did}")
+def admin_device_update(did: str, payload: dict = Body(...)):
+    """{name?, blocked?}"""
+    try:
+        return access.store.update(did, payload.get("name"),
+                                   payload.get("blocked") if "blocked" in payload else None)
+    except KeyError:
+        raise HTTPException(404, "그 기기를 찾을 수 없습니다.")
+
+
+@app.delete("/api/admin/devices/{did}")
+def admin_device_delete(did: str):
+    """등록 해제 — 그 기기는 초대 링크로 다시 등록해야 들어온다."""
+    try:
+        access.store.delete(did)
+    except KeyError:
+        raise HTTPException(404, "그 기기를 찾을 수 없습니다.")
+    return {"ok": True}
 
 
 @app.get("/api/info")

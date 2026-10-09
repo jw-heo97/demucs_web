@@ -66,3 +66,12 @@ JOB_RETENTION_SEC = _int("JOB_RETENTION_SEC", 0)
 # 앱(Capacitor/Tauri)에서 다른 오리진으로 호출할 때 허용할 목록. 쉼표 구분.
 # 웹으로만 쓸 때는 비워둔다.
 CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
+
+# --- 접근 제한 (Tailscale serve/funnel 경유, app/access.py) ---
+# funnel(인터넷 공개) 접속은 접속자 관리 탭에서 만든 1회용 초대 링크로 등록한 기기만 받는다.
+# 1 이면 등록 없이 전부 허용 — 로그인이 없는 앱이라 권하지 않는다.
+ALLOW_FUNNEL = os.getenv("ALLOW_FUNNEL", "0").strip().lower() in ("1", "true", "yes", "on")
+# 이 Tailscale 계정(로그인)의 기기만 허용. 비우면 tailnet 기기는 모두 허용.
+TAILSCALE_ALLOW_USERS = {
+    u.strip().lower() for u in os.getenv("TAILSCALE_ALLOW_USERS", "").split(",") if u.strip()
+}

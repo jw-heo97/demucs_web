@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
+import { AccessTab } from "./components/AccessTab";
 import { LibraryTab } from "./components/LibraryTab";
 import { PlaylistTab } from "./components/PlaylistTab";
 import { SearchTab } from "./components/SearchTab";
@@ -7,13 +8,15 @@ import { SongMapTab } from "./components/SongMapTab";
 import { WorkTab } from "./components/WorkTab";
 import type { Job } from "./types";
 
-type TabKey = "work" | "library" | "playlist" | "map" | "tube";
+type TabKey = "work" | "library" | "playlist" | "map" | "tube" | "access";
 
 export function App() {
   const [tab, setTab] = useState<TabKey>("work");
   const [jobs, setJobs] = useState<Job[]>([]);
   const [info, setInfo] = useState<string>("");
   const [pick, setPick] = useState<{ videoId: string; title: string } | null>(null);
+  // 접속자 관리 탭은 내 Tailscale 계정 기기(와 이 PC)에서만 보인다 (서버도 /api/admin/* 를 막는다)
+  const [admin, setAdmin] = useState(false);
   const timer = useRef<number | undefined>(undefined);
 
   const refresh = useCallback(async () => {
@@ -40,6 +43,10 @@ export function App() {
         ),
       )
       .catch(() => setInfo(""));
+    api
+      .me()
+      .then((d) => setAdmin(d.admin))
+      .catch(() => setAdmin(false));
     return () => window.clearTimeout(timer.current);
   }, [refresh]);
 
@@ -56,6 +63,7 @@ export function App() {
             ["playlist", "플레이리스트"],
             ["map", "송 맵"],
             ["tube", "YouTube 검색"],
+            ...(admin ? ([["access", "접속자 관리"]] as [TabKey, string][]) : []),
           ] as [TabKey, string][]
         ).map(([k, label]) => (
           <button
@@ -76,6 +84,7 @@ export function App() {
       {tab === "library" && <LibraryTab jobs={jobs} onChanged={refresh} />}
       {tab === "playlist" && <PlaylistTab jobs={jobs} onChanged={refresh} />}
       {tab === "map" && <SongMapTab jobs={jobs} onChanged={refresh} />}
+      {tab === "access" && admin && <AccessTab />}
       {tab === "tube" && (
         <SearchTab
           onPick={(videoId, title) => {
