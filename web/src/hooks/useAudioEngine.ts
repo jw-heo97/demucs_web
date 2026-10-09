@@ -78,6 +78,9 @@ export function useAudioEngine(job: Job | null) {
   const [muted, setMuted] = useState<boolean[]>([]);
   const [solo, setSolo] = useState<boolean[]>([]);
   const [vol, setVol] = useState<number[]>([]);
+  // 트랙이 바뀌는 순간 직전 믹스 상태를 읽기 위한 사본
+  const mixRef = useRef({ tracks, muted, solo, vol });
+  mixRef.current = { tracks, muted, solo, vol };
   const audiosRef = useRef<HTMLAudioElement[]>([]);
   const selfRef = useRef<{ stop: () => void }>({ stop: () => {} });
   selfRef.current.stop = () => {
@@ -103,7 +106,16 @@ export function useAudioEngine(job: Job | null) {
     const j = jobRef.current;
     // 같은 곡인데 파일만 바뀐 경우(송 맵 저장 → 메트로놈 재생성)에는 듣던 자리를 유지한다.
     // 곡이 바뀌면 처음부터.
-    const resumeAt = j && prevJobId.current === j.id ? lastTime.current : 0;
+    const sameJob = !!j && prevJobId.current === j.id;
+    const resumeAt = sameJob ? lastTime.current : 0;
+    const prevMix = new Map<string, { muted: boolean; solo: boolean; vol: number }>();
+    // 같은 곡의 파일만 바뀐 경우(메트로놈 재생성)에는 음소거·솔로·볼륨도 이어간다
+    if (sameJob) {
+      const m = mixRef.current;
+      m.tracks.forEach((t, i) =>
+        prevMix.set(t.key, { muted: !!m.muted[i], solo: !!m.solo[i], vol: m.vol[i] ?? 1 }),
+      );
+    }
     prevJobId.current = j?.id ?? null;
     audiosRef.current.forEach((a) => {
       a.pause();
@@ -116,9 +128,9 @@ export function useAudioEngine(job: Job | null) {
 
     const ts = j ? tracksOf(j) : [];
     setTracks(ts);
-    setMuted(ts.map(() => false));
-    setSolo(ts.map(() => false));
-    setVol(ts.map(() => 1));
+    setMuted(ts.map((t) => prevMix.get(t.key)?.muted ?? false));
+    setSolo(ts.map((t) => prevMix.get(t.key)?.solo ?? false));
+    setVol(ts.map((t) => prevMix.get(t.key)?.vol ?? 1));
     if (!ts.length) {
       setDuration(j?.duration ?? 0);
       return;
