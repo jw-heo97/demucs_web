@@ -7,7 +7,11 @@ Tailscale 이 맡는다 — 내 tailnet 에 속한 기기만 접속할 수 있�
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import threading
+import urllib.error
+import urllib.request
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -251,6 +255,7 @@ def create_job(request: Request, payload: dict = Body(...)):
             owner=access.owner_key(*_who(request)),
             owner_name=access.owner_name(*_who(request)),
             owner_link=access.link_of(_who(request)[1]),
+            score_src=payload.get("score_url"),
         )
     except (DownloadError, ValueError) as e:
         raise HTTPException(400, str(e)) from e
@@ -623,6 +628,67 @@ def _score_dir(job_id: str) -> Path:
 def _score_payload(job_id: str, data: dict) -> dict:
     return {**data, "page_urls": [f"/api/jobs/{job_id}/score/pages/{i + 1}"
                                   for i in range(len(data.get("pages", [])))]}
+
+
+# --- AI 악보 (agent/ 컨테이너의 에이전트에 맡긴다) ---
+AGENT_URL = os.environ.get("AGENT_URL", "http://agent:8090").rstrip("/")
+
+
+def _agent(method: str, path: str, body: Optional[dict] = None, timeout: float = 10) -> dict:
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(AGENT_URL + path, data=data, method=method,
+                                 headers={"Content-Type": "application/json"} if data else {})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try:
+            detail = json.loads(e.read()).get("detail")
+        except ValueError:
+            detail = None
+        raise HTTPException(e.code, detail or f"AI 에이전트 오류 ({e.code})") from e
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        raise HTTPException(503, "AI 에이전트가 켜져 있지 않습니다 (docker compose 의 agent).") from e
+
+
+def start_ai(job_id: str, score_url: str, overwrite: bool = False) -> dict:
+    return _agent("POST", "/runs", {"job_id": job_id, "score_url": score_url, "overwrite": overwrite})
+
+
+# 분리가 끝나면 주소가 있는 작업은 바로 AI 악보로
+store.on_done = lambda job: start_ai(job.id, job.score_src or "")
+
+
+@app.get("/api/ai/health")
+def ai_health():
+    try:
+        return {"available": True, **_agent("GET", "/health", timeout=3)}
+    except HTTPException as e:
+        return {"available": False, "detail": e.detail}
+
+
+@app.post("/api/jobs/{job_id}/ai-score", status_code=202)
+def ai_score_start(job_id: str, payload: dict = Body(...)):
+    """{score_url, overwrite?} — 악보가 나오는 연주 영상으로 악보 PDF·송 맵 새 버전을 만든다."""
+    job = _require_job(job_id, done=True)
+    url = (payload.get("score_url") or "").strip()
+    if not url:
+        raise HTTPException(400, "악보 영상 주소가 필요합니다.")
+    try:
+        downloader.extract_video_id(url)
+    except DownloadError as e:
+        raise HTTPException(400, str(e)) from e
+    res = start_ai(job_id, url, bool(payload.get("overwrite")))
+    if job.score_src != url:
+        job.score_src = url
+        store._save_meta(job)
+    return res
+
+
+@app.get("/api/jobs/{job_id}/ai-score")
+def ai_score_status(job_id: str):
+    _require_job(job_id)
+    return _agent("GET", f"/runs/{job_id}")
 
 
 @app.get("/api/jobs/{job_id}/score")

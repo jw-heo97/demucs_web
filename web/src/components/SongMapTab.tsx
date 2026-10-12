@@ -12,6 +12,7 @@ import type { Job, MapPayload, MapRange, MapVersion, ScoreData, SongMap } from "
 import { Mixer, type MixerControl } from "./Mixer";
 import { ScorePanel } from "./ScoreView";
 import { PickedSong, SongPicker } from "./SongPicker";
+import { AiScore } from "./AiScore";
 import { TimeInput } from "./TimeInput";
 import { Waveform, type LoopRegion, type WaveMode } from "./Waveform";
 
@@ -447,6 +448,7 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
       ) : (
         <div className="panel">
           <PickedSong job={job} onBack={() => setJobId("")} />
+          <AiScore job={job} onChanged={() => { onChanged(); void load(job.id); }} />
           {payload && (
             <div className="meta">
               길이 {showTime(duration)} · {bars.length}마디

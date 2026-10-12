@@ -356,3 +356,17 @@ button.danger { background: var(--err); }
 .barcell.inloop { background: color-mix(in srgb, #f59e0b 22%, transparent); color: var(--text); }
 .barcell.on { border-color: var(--accent); box-shadow: inset 0 0 0 2px var(--accent); color: var(--text); font-weight: 600; }
 .barcell.picking { background: color-mix(in srgb, #10b981 30%, transparent); border-color: #10b981; }
+
+/* AI 악보 */
+.aiscore { margin: 2px 0 6px; }
+.aiscore .aistatus { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.aiscore .dots::after { content: "…"; animation: aiblink 1.2s infinite; }
+@keyframes aiblink { 50% { opacity: .2; } }
+.ailog { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-top: 6px; background: var(--bg); max-height: 320px; overflow: auto; }
+.ailog ol { margin: 6px 0 0; padding-left: 18px; font-size: .78rem; }
+.ailog li { margin: 2px 0; white-space: pre-wrap; word-break: break-word; }
+.ailog .ai-tool { color: var(--accent); }
+.ailog .ai-say { color: var(--text); }
+.ailog .ai-warn, .ailog .ai-error { color: var(--err); }
+.ailog .ai-info { color: var(--muted); }
+.aireport { font-size: .85rem; margin-bottom: 6px; white-space: pre-wrap; }

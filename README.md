@@ -67,6 +67,34 @@ funnel 로 들어온 기기는 초대 링크(`/join/<코드>`)에서 이름과 �
 > 포트포워딩이나 `WEB_BIND=0.0.0.0` 으로 직접 여는 것은 여전히 금물이다 — Tailscale 헤더가
 > 없어 접근 제한이 전혀 걸리지 않는다.
 
+## AI 악보 (드럼 악보 영상 → 악보 PDF + 송 맵)
+
+드럼 커버 영상처럼 **악보 띠가 화면에 나오는 연주 영상**의 주소를 주면, AI 에이전트가 띠를 모아 악보 PDF 를 만들고
+곡 음원에 맞춘 송 맵(1마디 1박·BPM·박자·구간 이름)을 새 버전 `AI 악보` 로 저장한다. 기존 송 맵 버전은 남는다.
+
+- 분리할 때 `✨ AI 악보` 칸에 영상 주소를 넣으면 분리가 끝난 뒤 자동으로 시작한다.
+- 이미 있는 곡은 재생 창·송 맵의 `✨ AI 악보` 버튼으로.
+
+`agent` 컨테이너가 [Claude Agent SDK](https://docs.claude.com/en/docs/agent-sdk/overview) 로 돈다. 로그인은 **OAuth(Claude 구독)** —
+API 키를 쓰지 않는다. 둘 중 하나로 한 번 설정한다:
+
+```bash
+# 1) 토큰 받기 (브라우저 로그인 → 토큰이 출력된다) → .env 의 CLAUDE_CODE_OAUTH_TOKEN 에 넣고 agent 재시작
+docker compose run --rm agent claude setup-token
+docker compose up -d agent
+```
+
+```bash
+# 2) 또는 컨테이너 안에서 바로 로그인 (자격 증명은 agent-home 볼륨에 남는다)
+docker compose exec -it agent claude
+#   → /login 후 종료
+```
+
+구성: 결정적인 처리(영상 받기·악보 띠 뽑기·마디선 찾기·소리 맞대기·PDF 만들기)는 [agent/scorevid.py](agent/scorevid.py)·
+[app/scorebuild.py](app/scorebuild.py) 가 하고, 에이전트는 그림을 보고 판단한다(악보 위치, 마디선 확인·수정, 반복 띠,
+구간 이름, 못갖춘마디). 작업 순서는 스킬 [agent/workspace/.claude/skills/drum-score-video](agent/workspace/.claude/skills/drum-score-video/SKILL.md),
+안전장치는 훅([agent/runner.py](agent/runner.py)): score 도구만 허용, 마디 수 검산이 틀리면 저장 거부, 결과 보고 없이 끝내기 거부.
+
 ## 기술 스택
 
 Python · FastAPI · demucs(htdemucs) · librosa · ffmpeg /
