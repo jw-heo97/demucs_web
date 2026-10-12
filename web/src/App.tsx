@@ -4,18 +4,20 @@ import { api } from "./api";
 import { MeContext, type Me } from "./lib/me";
 import { AccessTab } from "./components/AccessTab";
 import { LibraryTab } from "./components/LibraryTab";
+import { PlayerTab } from "./components/PlayerTab";
 import { PlaylistTab } from "./components/PlaylistTab";
 import { SearchTab } from "./components/SearchTab";
 import { SongMapTab } from "./components/SongMapTab";
 import { WorkTab } from "./components/WorkTab";
 import type { Job } from "./types";
 
-type TabKey = "work" | "library" | "playlist" | "map" | "tube" | "access";
+type TabKey = "work" | "library" | "play" | "playlist" | "map" | "tube" | "access";
 
 export function App() {
-  // 홈은 보관함 — 곡을 고르면 송 맵으로 간다
+  // 홈은 보관함 — 곡을 고르면 재생 창으로 간다
   const [tab, setTab] = useState<TabKey>("library");
-  // 보관함에서 고른 곡 (n 은 같은 곡을 다시 골라도 송 맵이 알아채게)
+  // 고른 곡 (n 은 같은 곡을 다시 골라도 재생 창·송 맵이 알아채게)
+  const [playPick, setPlayPick] = useState<{ id: string; n: number } | null>(null);
   const [mapPick, setMapPick] = useState<{ id: string; n: number } | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [info, setInfo] = useState<string>("");
@@ -109,6 +111,7 @@ export function App() {
           [
             ["work", "분리 작업"],
             ["library", "보관함"],
+            ["play", "재생"],
             ["playlist", "플레이리스트"],
             ["map", "송 맵"],
             ["tube", "YouTube 검색"],
@@ -135,9 +138,21 @@ export function App() {
           jobs={jobs}
           onChanged={refresh}
           onOpen={(id) => {
+            setPlayPick((p) => ({ id, n: (p?.n ?? 0) + 1 }));
+            setTab("play");
+          }}
+        />
+      )}
+      {tab === "play" && (
+        <PlayerTab
+          jobs={jobs}
+          onChanged={refresh}
+          pick={playPick}
+          onOpenMap={(id) => {
             setMapPick((p) => ({ id, n: (p?.n ?? 0) + 1 }));
             setTab("map");
           }}
+          onPickSong={(id) => setPlayPick((p) => ({ id, n: (p?.n ?? 0) + 1 }))}
         />
       )}
       {tab === "playlist" && <PlaylistTab jobs={jobs} onChanged={refresh} />}
