@@ -21,7 +21,7 @@ import traceback
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from urllib.parse import quote
 
 import numpy as np
@@ -94,6 +94,8 @@ class Job:
     metronome: bool = True
     # '_no_보컬' 같은 제외 믹스도 파일로 구울지. 믹스다운으로 언제든 만들 수 있어 기본은 끔.
     minus_mixes: bool = False
+    # AI 악보: 악보가 나오는 연주 영상 주소. 분리가 끝나면 에이전트(agent/)가 악보·송 맵을 만든다
+    score_src: Optional[str] = None
 
     status: str = "queued"       # queued|downloading|separating|encoding|done|error
     stage: str = "대기 중"
@@ -186,12 +188,16 @@ class Job:
             "owner_name": self.owner_name,
             "owner_link": self.owner_link,
             "shared_links": list(self.shared_links),
+            "score_src": self.score_src,
             "created_at": self.created_at,
             "elapsed": round((self.finished_at or time.time()) - (self.started_at or self.created_at), 1),
         }
 
 
 class JobStore:
+    # 분리가 끝났을 때 부를 함수 (main.py 가 AI 악보 에이전트를 연결한다)
+    on_done: Optional[Callable[[Job], None]] = None
+
     def __init__(self) -> None:
         self._jobs: dict[str, Job] = {}
         self._lock = threading.Lock()
@@ -225,7 +231,8 @@ class JobStore:
     def submit(self, url: str, fmt: str, target: str, save_original: bool,
                title_override: Optional[str] = None, metronome: bool = True,
                minus_mixes: bool = False, owner: Optional[str] = None,
-               owner_name: Optional[str] = None, owner_link: Optional[str] = None) -> Job:
+               owner_name: Optional[str] = None, owner_link: Optional[str] = None,
+               score_src: Optional[str] = None) -> Job:
         if fmt not in FORMATS:
             raise ValueError(f"format 은 {FORMATS} 중 하나여야 합니다.")
         if target != "all" and target not in STEMS:
@@ -258,7 +265,8 @@ class JobStore:
                   metronome=metronome, minus_mixes=minus_mixes, video_id=video_id,
                   # 대기 중에도 목록에 제목·길이가 보이게 미리 채운다
                   title=meta.get("title"), duration=duration,
-                  owner=owner, owner_name=owner_name, owner_link=owner_link)
+                  owner=owner, owner_name=owner_name, owner_link=owner_link,
+                  score_src=(score_src or "").strip() or None)
         with self._lock:
             self._jobs[job.id] = job
         try:
@@ -372,6 +380,7 @@ class JobStore:
             owner_name=data.get("owner_name"),
             owner_link=data.get("owner_link"),
             shared_links=[x for x in data.get("shared_links") or [] if isinstance(x, str)],
+            score_src=data.get("score_src"),
             status="done",
             stage="완료",
             progress=1.0,
@@ -597,6 +606,11 @@ class JobStore:
             job.stage = "완료"
             job.finished_at = time.time()
             self._save_meta(job)      # 재시작 후 복원용
+            if job.score_src and self.on_done:
+                try:
+                    self.on_done(job)     # AI 악보 시작 (main.py 가 연결)
+                except Exception as e:  # noqa: BLE001
+                    print(f"[ai] 시작 실패: {e}", flush=True)
 
         except Exception:
             # 실패한 작업의 폴더는 통째로 지운다. 파일이 일부만 남으면 재시작 때

@@ -3,7 +3,7 @@
  *
  * 인증은 없다 — 접근 제어는 Tailscale 이 맡는다 (README 참고).
  */
-import type { Job, JobTrack, MapPayload, MapVersion, Playlist, ScoreData, SearchItem, SongMap } from "./types";
+import type { AiRun, Job, JobTrack, MapPayload, MapVersion, Playlist, ScoreData, SearchItem, SongMap } from "./types";
 
 /** 앱에서는 다른 오리진의 서버를 봐야 하므로 베이스 URL 을 바꿀 수 있게 한다. */
 export const BASE =
@@ -160,7 +160,16 @@ export const api = {
     save_original?: boolean;
     metronome?: boolean;
     minus_mixes?: boolean;
+    /** 악보가 나오는 연주 영상 — 분리가 끝나면 AI 가 악보·송 맵을 만든다 */
+    score_url?: string;
   }) => post<Job>("/api/jobs", body),
+
+  // --- AI 악보 ---
+  aiHealth: () =>
+    get<{ available: boolean; auth?: { ready: boolean }; detail?: string }>("/api/ai/health"),
+  aiStart: (id: string, score_url: string, overwrite = false) =>
+    post<AiRun>(`/api/jobs/${id}/ai-score`, { score_url, overwrite }),
+  aiStatus: (id: string) => get<AiRun>(`/api/jobs/${id}/ai-score`),
   deleteJob: (id: string) => del(`/api/jobs/${id}`),
 
   // --- 검색 ---

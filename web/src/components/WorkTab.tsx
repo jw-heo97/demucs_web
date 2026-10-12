@@ -20,6 +20,7 @@ export function WorkTab({ jobs, onChanged, picked, onPickedUsed }: Props) {
   const [saveOriginal, setSaveOriginal] = useState(true);
   const [metronome, setMetronome] = useState(true);
   const [minusMixes, setMinusMixes] = useState(false);
+  const [scoreUrl, setScoreUrl] = useState("");
   const [hint, setHint] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
 
@@ -48,9 +49,11 @@ export function WorkTab({ jobs, onChanged, picked, onPickedUsed }: Props) {
         save_original: saveOriginal,
         metronome,
         minus_mixes: minusMixes,
+        score_url: scoreUrl.trim() || undefined,
       });
       setUrl("");
       setTitle("");
+      setScoreUrl("");
       setHint("대기열에 추가했습니다.");
       onChanged();
     } catch (e) {
@@ -83,6 +86,11 @@ export function WorkTab({ jobs, onChanged, picked, onPickedUsed }: Props) {
           <button className="ghost" onClick={fetchTitle}>YouTube 제목 가져오기</button>
         </div>
         <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={100} placeholder="비워두면 YouTube 제목을 사용합니다" />
+
+        <label style={{ marginTop: 12 }}>
+          ✨ AI 악보 <span className="meta">(선택) 이 곡의 드럼 악보가 화면에 나오는 연주 영상 — 분리가 끝나면 AI 가 악보와 송 맵을 만듭니다</span>
+        </label>
+        <input value={scoreUrl} onChange={(e) => setScoreUrl(e.target.value)} placeholder="https://www.youtube.com/watch?v=… (드럼 커버·악보 영상)" />
 
         <div className="row" style={{ marginTop: 12 }}>
           <div>

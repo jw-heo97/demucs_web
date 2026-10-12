@@ -4,6 +4,7 @@ import { useAudioEngine } from "../hooks/useAudioEngine";
 import { colorOf, sectionColors } from "../lib/sectionColors";
 import { barAtTime, barsFromMap } from "../lib/songmap";
 import type { Bar, Job, ScoreData } from "../types";
+import { AiScore } from "./AiScore";
 import { Mixer, type MixerControl } from "./Mixer";
 import { ScoreSheet, useBarDrag } from "./ScoreView";
 import { PickedSong, SongPicker } from "./SongPicker";
@@ -103,6 +104,7 @@ export function PlayerTab({ jobs, onChanged, pick, onOpenMap, onPickSong }: Prop
             송 맵 편집
           </button>
         </PickedSong>
+        <AiScore job={job} onChanged={onChanged} />
 
         {parts.length > 0 && (
           <div className="parts">

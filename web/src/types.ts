@@ -112,6 +112,8 @@ export interface Job {
   owner_link?: string | null;
   /** 관리자가 이 곡을 공유한 접속 링크 (관리자에게만 채워진다) */
   shared_links?: string[];
+  /** AI 악보: 악보가 나오는 연주 영상 주소 */
+  score_src?: string | null;
   /** 잠긴 송 맵 버전 수 (하나라도 있으면 곡을 지울 수 없다) */
   locked_versions?: number;
   created_at: number;
@@ -167,4 +169,18 @@ export interface ScoreData {
   warnings: string[];
   /** 음원 n번째 마디 = 악보 order[n-1] 번째 마디 (반복 기호가 있는 악보) */
   order?: number[];
+}
+
+/** AI 악보 에이전트의 진행 상황 (agent/service.py) */
+export interface AiRun {
+  job_id: string;
+  score_url: string;
+  phase: "queued" | "running" | "done" | "failed";
+  state: string;
+  started?: number | null;
+  finished?: number | null;
+  error?: string | null;
+  report?: { status: string; summary: string } | null;
+  saved?: { version?: string; dry_run?: boolean } | null;
+  log: { t: number; kind: "info" | "tool" | "say" | "warn" | "error"; msg: string }[];
 }
