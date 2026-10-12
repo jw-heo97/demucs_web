@@ -5,16 +5,7 @@ import { api } from "../api";
 import type { Track, useAudioEngine } from "../hooks/useAudioEngine";
 import { OFFSET_LIMIT, useClickOffset, useLiveMetronome, useSubdiv } from "../hooks/useLiveMetronome";
 import { useSectionVoice } from "../hooks/useSectionVoice";
-import {
-  CLICK_SOUNDS,
-  audioCtx,
-  getClickSound,
-  metroOut,
-  scheduleClick,
-  setClickSound,
-  type ClickHandle,
-  type ClickSound,
-} from "../lib/audioCtx";
+import { audioCtx, metroOut, scheduleClick, type ClickHandle } from "../lib/audioCtx";
 import type { Bar } from "../types";
 import { barAtTime, stepOf } from "../lib/songmap";
 import { clock } from "../lib/time";
@@ -71,6 +62,10 @@ interface Props {
  */
 export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, control, countIn, onCountInChange, autoStart }: Props) {
   const { tracks, playing, time, duration, rate, muted, solo, vol } = engine;
+  // 준비(받기·풀기)를 기다리는 사이 다른 곡으로 옮겼으면 그 재생 요청은 조용히 버린다 — 안 그러면
+  // 지난 곡의 실패("준비하지 못했습니다")가 새 곡 화면에 떴다
+  const jobIdRef = useRef(jobId);
+  jobIdRef.current = jobId;
   const [counting, setCounting] = useState(0);
   const [hint, setHint] = useState("");
   const [note, setNote] = useState("");
@@ -183,7 +178,6 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
   const timers = useRef<{ i?: number; oscs: ClickHandle[] }>({ oscs: [] });
   // 메트로놈 트랙은 파일이 아니라 송 맵에서 즉석으로 울린다 (편집이 바로 들린다)
   const [subdiv, setSubdiv] = useSubdiv();
-  const [clickSound, setClickSoundState] = useState<ClickSound>(getClickSound);
   const metroIdx = tracks.findIndex((t) => t.key === "click");
   const metroVol = metroIdx >= 0 ? (vol[metroIdx] ?? 1) : 1;
   const hasMetronome = tracks.some((t) => t.virtual);
@@ -266,10 +260,12 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
 
   /** 재생 실패(자동재생 차단, 파일 없음)를 버튼 옆에 보여준다. 조용히 삼키면 ▶ 만 남는다. */
   async function startPlay() {
+    const forJob = jobId;
     try {
       setHint("");
       await engine.play();
     } catch (e) {
+      if (jobIdRef.current !== forJob) return;
       setHint((e as Error).message);
     }
   }
@@ -403,7 +399,10 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
     // 재생기를 준비한다 (처음 한 번은 받기·풀기에 몇 초). 음악이 예비박 클릭과 같은 AudioContext
     // 시계에 걸리므로 마지막 클릭 → 1마디 1박이 기기와 상관없이 정확히 한 박이다.
     setHint("");
-    if (!(await engine.prepare())) {
+    const forJob = jobId;
+    const ok = await engine.prepare();
+    if (jobIdRef.current !== forJob) return; // 기다리는 사이 다른 곡으로 옮겼다
+    if (!ok) {
       setHint("재생할 트랙을 준비하지 못했습니다. 기기에 저장을 다시 시도해 주세요.");
       return;
     }
@@ -556,32 +555,6 @@ export function Mixer({ engine, bars, jobId, onChanged, showRate, loopButton, co
           >
             <option value="1">클릭 4비트</option>
             <option value="2">클릭 8비트</option>
-          </select>
-        )}
-        {(hasMetronome || countIn > 0) && (
-          <select
-            style={{ width: 128 }}
-            value={clickSound}
-            onChange={(e) => {
-              const v = e.target.value as ClickSound;
-              setClickSound(v);
-              setClickSoundState(v);
-              // 고르면 한 번 들려준다 (첫 박 소리)
-              try {
-                const ctx = audioCtx();
-                void ctx.resume();
-                scheduleClick(ctx, ctx.currentTime + 0.03, 1500, metroOut(ctx), { peak: 0.9 * Math.max(1, metroVol) });
-              } catch {
-                /* Web Audio 미지원 */
-              }
-            }}
-            title="메트로놈·예비박 소리. 이 기기에 기억합니다. 재생 중에도 바로 바뀝니다."
-          >
-            {CLICK_SOUNDS.map((s) => (
-              <option key={s.value} value={s.value}>
-                소리: {s.label}
-              </option>
-            ))}
           </select>
         )}
         {(hasMetronome || countIn > 0) && (
