@@ -11,6 +11,7 @@ import { showTime } from "../lib/time";
 import type { Job, MapPayload, MapRange, MapVersion, ScoreData, SongMap } from "../types";
 import { Mixer, type MixerControl } from "./Mixer";
 import { ScorePanel } from "./ScoreView";
+import { PickedSong, SongPicker } from "./SongPicker";
 import { TimeInput } from "./TimeInput";
 import { Waveform, type LoopRegion, type WaveMode } from "./Waveform";
 
@@ -441,24 +442,20 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
 
   return (
     <div>
-      <div className="panel">
-        <label htmlFor="mapSong">곡 선택</label>
-        <select id="mapSong" value={jobId} onChange={(e) => setJobId(e.target.value)}>
-          <option value="">— 보관함에서 곡을 고르세요 —</option>
-          {done.map((j) => (
-            <option key={j.id} value={j.id}>
-              {j.folder ?? j.title ?? j.id}
-            </option>
-          ))}
-        </select>
-        {payload && (
-          <div className="meta" style={{ marginTop: 6 }}>
-            길이 {showTime(duration)} · {bars.length}마디
-            {payload.octave_note ? ` · ${payload.octave_note}` : ""}
-            {payload.raw_bpm ? ` (검출 원본 ${payload.raw_bpm})` : ""}
-          </div>
-        )}
-      </div>
+      {!job ? (
+        <SongPicker jobs={jobs} title="송 맵 — 곡 고르기" onPick={setJobId} />
+      ) : (
+        <div className="panel">
+          <PickedSong job={job} onBack={() => setJobId("")} />
+          {payload && (
+            <div className="meta">
+              길이 {showTime(duration)} · {bars.length}마디
+              {payload.octave_note ? ` · ${payload.octave_note}` : ""}
+              {payload.raw_bpm ? ` (검출 원본 ${payload.raw_bpm})` : ""}
+            </div>
+          )}
+        </div>
+      )}
 
       {job && map && (
         <>

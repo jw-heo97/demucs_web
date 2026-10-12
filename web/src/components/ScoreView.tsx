@@ -389,3 +389,145 @@ export function ScorePages({
     </div>
   );
 }
+
+/** 마디(data-bar) 위를 끌어 범위를 고르는 포인터 처리. 끌지 않고 떼면 그 마디 하나를 누른 것. */
+export function useBarDrag(onSelect: (a: number, b: number) => void, onClick: (bar: number) => void) {
+  const [sel, setSel] = useState<{ a: number; b: number } | null>(null);
+  const st = useRef<{ a: number; b: number; id: number } | null>(null);
+  const barAt = (x: number, y: number) => {
+    const el = document.elementFromPoint(x, y)?.closest("[data-bar]") as HTMLElement | null;
+    const v = el ? Number(el.dataset.bar) : NaN;
+    return Number.isFinite(v) ? v : null;
+  };
+  return {
+    sel,
+    props: {
+      onPointerDown: (e: React.PointerEvent) => {
+        const b = barAt(e.clientX, e.clientY);
+        if (b == null || e.button > 0) return;
+        e.preventDefault();
+        (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+        st.current = { a: b, b, id: e.pointerId };
+        setSel({ a: b, b });
+      },
+      onPointerMove: (e: React.PointerEvent) => {
+        const s = st.current;
+        if (!s || s.id !== e.pointerId) return;
+        const b = barAt(e.clientX, e.clientY);
+        if (b != null && b !== s.b) {
+          s.b = b;
+          setSel({ a: s.a, b });
+        }
+      },
+      onPointerUp: (e: React.PointerEvent) => {
+        const s = st.current;
+        if (!s || s.id !== e.pointerId) return;
+        st.current = null;
+        setSel(null);
+        if (s.a === s.b) onClick(s.a);
+        else onSelect(Math.min(s.a, s.b), Math.max(s.a, s.b));
+      },
+      onPointerCancel: () => {
+        st.current = null;
+        setSel(null);
+      },
+    },
+  };
+}
+
+/**
+ * 재생 창의 악보: 한 쪽 전체를 화면 높이에 맞춰 보여준다. 연주 위치의 쪽을 따라가고(쪽의 마지막
+ * 마디에서 미리 넘긴다), ‹ › 로 넘길 수도 있다. 마디를 누르면 그 마디로 이동, 여러 마디를 끌면
+ * 그 범위를 반복한다. 반복 중인 마디는 칠해 둔다.
+ */
+export function ScoreSheet({
+  score,
+  bar,
+  loop,
+  onPickBar,
+  onSelect,
+}: {
+  score: ScoreData;
+  bar: number;
+  /** 반복 중인 음원 마디 범위 */
+  loop: { from: number; to: number } | null;
+  onPickBar: (bar: number) => void;
+  onSelect: (from: number, to: number) => void;
+}) {
+  const k = measureOfBar(score, Math.max(1, bar)) ?? 0;
+  const m = score.measures[k];
+  let page = m?.page ?? 0;
+  const nextK = measureOfBar(score, Math.max(1, bar) + 1);
+  if (m && nextK != null && score.measures[nextK].page !== page) page = score.measures[nextK].page;
+
+  const firstBarOf = useMemo(() => {
+    const out = new Map<number, number>();
+    const n = score.order ? score.order.length : score.measures.length;
+    for (let b = 1; b <= n; b++) {
+      const kk = measureOfBar(score, b);
+      if (kk != null && !out.has(kk)) out.set(kk, b);
+    }
+    return out;
+  }, [score]);
+  // 반복 범위에 드는 악보 마디들
+  const inLoop = useMemo(() => {
+    const s = new Set<number>();
+    if (loop) for (let b = loop.from; b <= loop.to; b++) {
+      const kk = measureOfBar(score, b);
+      if (kk != null) s.add(kk);
+    }
+    return s;
+  }, [score, loop]);
+
+  const [view, setView] = useState(page);
+  const followed = useRef(page);
+  useEffect(() => {
+    if (followed.current === page) return;
+    followed.current = page;
+    setView(page);
+  }, [page]);
+  const pages = score.pages.length;
+  const pv = Math.max(0, Math.min(pages - 1, view));
+  const pg = score.pages[pv];
+
+  const drag = useBarDrag(onSelect, onPickBar);
+  const dragSet = useMemo(() => {
+    const s = new Set<number>();
+    if (drag.sel) for (let b = Math.min(drag.sel.a, drag.sel.b); b <= Math.max(drag.sel.a, drag.sel.b); b++) {
+      const kk = measureOfBar(score, b);
+      if (kk != null) s.add(kk);
+    }
+    return s;
+  }, [score, drag.sel]);
+
+  return (
+    <div className="sheet" style={{ maxWidth: `calc((100vh - 70px) * ${pg.w / pg.h})` }}>
+      <div className="score-page sheet-page" style={{ aspectRatio: `${pg.w} / ${pg.h}` }} {...drag.props}>
+        <img src={api.fileUrl(score.page_urls[pv])} alt={`${pv + 1}쪽`} draggable={false} />
+        {score.measures.map((ms, mi) =>
+          ms.page !== pv || !firstBarOf.has(mi) ? null : (
+            <div
+              key={mi}
+              data-bar={firstBarOf.get(mi)}
+              className={`score-bar${mi === k ? " on" : ""}${inLoop.has(mi) ? " inloop" : ""}${dragSet.has(mi) ? " picking" : ""}`}
+              title={`${firstBarOf.get(mi)}마디 — 누르면 이동, 끌면 구간 반복`}
+              style={{
+                left: `${(ms.x0 / pg.w) * 100}%`,
+                width: `${((ms.x1 - ms.x0) / pg.w) * 100}%`,
+                top: `${((ms.top - (ms.bot - ms.top) * 0.9) / pg.h) * 100}%`,
+                height: `${(((ms.bot - ms.top) * 2.8) / pg.h) * 100}%`,
+              }}
+            />
+          ),
+        )}
+      </div>
+      {pages > 1 && (
+        <div className="score-nav">
+          <button className="ghost" onClick={() => setView(pv - 1)} disabled={pv <= 0} aria-label="이전 쪽">‹</button>
+          <span className="meta">{pv + 1} / {pages}</span>
+          <button className="ghost" onClick={() => setView(pv + 1)} disabled={pv >= pages - 1} aria-label="다음 쪽">›</button>
+        </div>
+      )}
+    </div>
+  );
+}
