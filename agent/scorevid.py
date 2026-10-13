@@ -423,3 +423,46 @@ def estimate_anchor(strips: list[dict], offset: float, grid: dict, beats_per_mea
     anchor = grid["phase"] + n * beat
     lead = [round(e - anchor, 3) for e in est]      # 음수 = 띠가 마디보다 먼저 바뀜
     return {"anchor": round(anchor, 4), "raw_median": round(a, 3), "strip_lead_sec": lead}
+
+
+# ---------------------------------------------------------------- 받아 적은 음표 ↔ 드럼 소리 대조
+
+BANDS = {"bd": (30, 140), "sn": (150, 400), "hh": (6000, 11000)}
+
+
+def drum_onsets(path: Path) -> dict[str, np.ndarray]:
+    """드럼 스템에서 대역별 타격 시각 (킥 = 저음, 스네어 = 중저음 몸통, 하이햇 = 고음)."""
+    sr = 22050
+    y = load_mono(path, sr)
+    hop, n = 220, 1024
+    mag = _stft_mag(y, hop, n)
+    f = np.fft.rfftfreq(n, 1 / sr)
+    out = {}
+    for k, (lo, hi) in BANDS.items():
+        band = np.log1p(mag[:, (f >= lo) & (f < hi)].sum(axis=1) * 10)
+        flux = np.maximum(0, np.diff(band, prepend=band[0]))
+        thr = np.percentile(flux, 92)
+        peaks = []
+        last = -1e9
+        for i in range(1, len(flux) - 1):
+            if flux[i] > thr and flux[i] >= flux[i - 1] and flux[i] >= flux[i + 1]:
+                t = i * hop / sr + 0.7 * n / sr
+                if t - last > 0.06:
+                    peaks.append(t)
+                    last = t
+        out[k] = np.array(peaks)
+    return out
+
+
+def check_measure(hits: list[tuple[float, str]], start: float, end: float, onsets: dict[str, np.ndarray],
+                  tol: float = 0.045) -> dict:
+    """한 마디: 악보의 킥·스네어 타격(초)과 소리의 타격을 맞춰 본다.
+    돌려주는 값: 악기마다 {악보, 맞음, 소리에만 있음}."""
+    res = {}
+    for k in ("bd", "sn"):
+        want = [t for t, lane in hits if lane == k]
+        got = [t for t in onsets[k] if start - tol <= t < end - tol]
+        matched = sum(1 for t in want if any(abs(t - g) <= tol for g in got))
+        extra = sum(1 for g in got if not any(abs(t - g) <= tol for t in want))
+        res[k] = {"score": len(want), "hit": matched, "extra": extra}
+    return res

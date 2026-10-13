@@ -16,6 +16,7 @@ from typing import Any, Optional
 import httpx
 from PIL import Image, ImageDraw
 
+import notation as nota
 import scorebuild as sb
 import scores
 import scorevid as sv
@@ -43,6 +44,10 @@ class Run:
         self.log_lines: list[dict] = []
         self.state = "대기"
         self.align: Optional[dict] = None
+        # 받아 적은 음표: 마디 번호(1부터) → 마디 (app/notation.py 형식)
+        self.notes: dict[int, dict] = {}
+        self.timing: Optional[dict] = None     # 소리 대조에 쓰는 anchor·bpm·beats
+        self._onsets: Optional[dict] = None
 
     def log(self, msg: str, kind: str = "info") -> None:
         self.log_lines.append({"t": round(time.time(), 1), "kind": kind, "msg": msg})
@@ -114,6 +119,98 @@ def _strip_table(run: Run, bpm: Optional[float] = None, beats: float = 4.0) -> s
             line += f"  [구간 {marks}]"
         rows.append(line)
     return "\n".join(rows) + f"\n합계 {sb.total_measures(run.proj)}마디"
+
+
+def _measure_index(run: Run) -> list[tuple[dict, int, int, int]]:
+    """연주 순서 마디마다 (띠, 띠 번호, 보표 번호, 보표 안 마디 번호)."""
+    out = []
+    for si, s in enumerate(run.proj["strips"]):
+        if s.get("skip"):
+            continue
+        for _ in range(max(1, s.get("repeat", 1))):
+            for k, st in enumerate(s.get("staves", [])):
+                for j in range(len(st.get("bars", []))):
+                    out.append((s, si, k, j))
+    return out
+
+
+def _measure_crop(run: Run, n: int) -> Optional[Image.Image]:
+    idx = _measure_index(run)
+    if not 1 <= n <= len(idx):
+        return None
+    s, si, k, j = idx[n - 1]
+    st = s["staves"][k]
+    im = Image.open(run.strip_dir / s["img"]).convert("RGB")
+    left = st["bars"][j - 1] if j > 0 else max(0, st["x0"] - 10)
+    right = st["bars"][j]
+    g = st["gap"]
+    # 위아래로 넉넉히 (구간 상자·위 음표·발 음표), 양옆은 조금 겹쳐 이음매가 보이게
+    box = (max(0, int(left - 1.5 * g)), max(0, int(st["top"] - 7 * g)), min(im.size[0], int(right + 1.5 * g)),
+           min(im.size[1], int(st["bot"] + 6 * g)))
+    return im.crop(box)
+
+
+def _onsets(run: Run) -> dict:
+    if run._onsets is None:
+        drums = run.file_of("drums")
+        if not drums:
+            raise RuntimeError("드럼 트랙이 없습니다")
+        run._onsets = sv.drum_onsets(drums)
+    return run._onsets
+
+
+def _bar_times(run: Run, total: int) -> list[tuple[float, float, float]]:
+    """마디마다 (시작, 끝, ♩ 길이)."""
+    tm = run.timing or {}
+    q = 60 / tm["bpm"]
+    t = tm["anchor"]
+    out = []
+    for m in range(1, total + 1):
+        nb = tm["beats"].get(m, 4.0)
+        out.append((t, t + nb * q, q))
+        t += nb * q
+    return out
+
+
+def _check(run: Run, a: int, b: int) -> str:
+    if not run.timing:
+        return "(소리 대조는 set_timing 뒤에 됩니다)"
+    total = max(len(_measure_index(run)), max(run.notes) if run.notes else 0)
+    times = _bar_times(run, total)
+    on = _onsets(run)
+    def stat(n: int) -> Optional[dict]:
+        m = run.notes.get(n)
+        if not m or n > len(times):
+            return None
+        start, end, q = times[n - 1]
+        # 틱(♩=48) → 초. 박자표 분모와 상관없이 ♩ 기준이다
+        hits = [(start + tick / nota.TPQ * q, lane) for tick, lane, c in nota.hits(m) if c != "g"]
+        return sv.check_measure(hits, start, end, on)
+
+    # '소리에만 있는 타격'은 탐·필인·스템 번짐으로 늘 조금 있다 — 곡 전체의 보통 수준보다 많을 때만 본다
+    allst = {n: stat(n) for n in run.notes}
+    extras = sorted(r["bd"]["extra"] + r["sn"]["extra"] for r in allst.values() if r)
+    med = extras[len(extras) // 2] if extras else 0
+    rows, bad = [], []
+    for n in range(a, b + 1):
+        r = allst.get(n)
+        if not r:
+            continue
+        bd, sn = r["bd"], r["sn"]
+        miss = (bd["score"] - bd["hit"]) + (sn["score"] - sn["hit"])
+        extra = bd["extra"] + sn["extra"]
+        why = []
+        if miss >= 2 or (miss == 1 and bd["score"] + sn["score"] <= 4):
+            why.append(f"악보 타격 {miss}개가 소리에 없음")
+        if extra > med + 3:
+            why.append(f"소리에만 있는 타격 {extra}개 (보통 {med})")
+        if why:
+            bad.append(n)
+        rows.append(f"{n:4d}: 킥 {bd['hit']}/{bd['score']}  스네어 {sn['hit']}/{sn['score']}  (+{extra})"
+                    + (f"  ⚠ {', '.join(why)}" if why else ""))
+    head = ("마디: 킥 맞음/악보, 스네어 맞음/악보, (+소리에만 있는 타격) — 곡의 드럼(원곡 연주)과 대조. 커버 악보가 원곡을 "
+            "단순화했으면 전체적으로 낮게 나온다 — ⚠ 마디만 다시 본다.")
+    return head + "\n" + "\n".join(rows) + (f"\n다시 볼 마디: {bad}" if bad else "\n⚠ 없음")
 
 
 async def _api(method: str, path: str, **kw) -> Any:
@@ -330,9 +427,12 @@ def build_server(run: Run):
             prev_b, prev_n = b, nm or prev_n
         songmap = {"anchor": float(args["anchor"]), "bpm": float(args["bpm"]), "ranges": ranges}
         vname = (args.get("version_name") or "AI 악보").strip()
+        run.timing = run.timing or {"anchor": songmap["anchor"], "bpm": songmap["bpm"], "beats": beats}
         if run.dry_run:
             out = run.dir / "result.json"
-            out.write_text(json.dumps({"map": songmap, "built": run.built}, ensure_ascii=False, indent=1), encoding="utf-8")
+            out.write_text(json.dumps({"map": songmap, "built": run.built,
+                                       "notes": {str(k): v for k, v in sorted(run.notes.items())}},
+                                      ensure_ascii=False, indent=1), encoding="utf-8")
             run.saved = {"dry_run": True, "map": songmap}
             return _ok(f"(시험 실행) 저장하지 않고 {out} 에 남겼습니다.\n" + json.dumps(songmap, ensure_ascii=False))
         has_score = any(f["rel"] == "score.pdf" for f in (await _api("GET", f"/api/jobs/{run.job_id}")).get("files", []))
@@ -350,6 +450,21 @@ def build_server(run: Run):
             await _api("POST", f"/api/jobs/{run.job_id}/map/versions", json={"name": vname, "map": songmap})
         except RuntimeError as e:
             return _err(str(e))
+        # 받아 적은 음표 악보 (전부 적었을 때만 — 일부만 있으면 편집 화면에 빈 마디가 섞여 헷갈린다)
+        nt_note = ""
+        if run.notes:
+            ms = [run.notes.get(n) for n in range(1, total + 1)]
+            if all(ms):
+                doc = {"version": 1, "tempo": float(args["bpm"]), "source": run.score_url,
+                       "measures": [{**m, **({"section": names[i + 1]} if names.get(i + 1) else {})}
+                                    for i, m in enumerate(ms)]}
+                try:
+                    await _api("PUT", f"/api/jobs/{run.job_id}/notation", json={"notation": doc, "note": "AI 악보"})
+                    nt_note = f", 음표 악보 {total}마디"
+                except RuntimeError as e:
+                    nt_note = f", 음표 악보 저장 실패: {e}"
+            else:
+                nt_note = f", 음표 악보는 {sum(1 for m in ms if m)}/{total}마디뿐이라 저장 안 함"
         # 악보 편집(송 맵)용 원본: 띠 그림 + 프로젝트
         dst = run.song_dir / sb.SRC_DIR
         if dst.exists():
@@ -357,7 +472,76 @@ def build_server(run: Run):
         shutil.copytree(run.strip_dir, dst)
         sb.save_project(run.song_dir, run.proj)
         run.saved = {"version": vname, "map": songmap}
-        return _ok(f"저장했습니다 — 악보 {total}마디, 송 맵 버전 '{vname}' (활성)")
+        return _ok(f"저장했습니다 — 악보 {total}마디, 송 맵 버전 '{vname}' (활성){nt_note}")
+
+    @tool("measure_images",
+          "받아 적기용: 마디들을 하나씩 잘라 확대해 보여준다 (연주 순서 마디 번호, 한 번에 최대 6마디).",
+          S(["from"], **{"from": "integer", "to": "integer"}))
+    async def measure_images(args):
+        a = int(args["from"])
+        b = min(int(args.get("to") or a), a + 5)
+        ims = []
+        for n in range(a, b + 1):
+            im = await asyncio.to_thread(_measure_crop, run, n)
+            if im is None:
+                continue
+            im = im.resize((int(im.size[0] * 1.6), int(im.size[1] * 1.6)))
+            d = ImageDraw.Draw(im)
+            d.rectangle([0, 0, 120, 30], fill="black")
+            d.text((4, 3), f"#{n}", fill="yellow", font=sv._font(22))   # 그림 글꼴에 한글이 없다
+            ims.append(im)
+        if not ims:
+            return _err("그 마디가 없습니다")
+        W = max(i.size[0] for i in ims)
+        sheet = Image.new("RGB", (W, sum(i.size[1] + 8 for i in ims)), (90, 90, 90))
+        y = 0
+        for im in ims:
+            sheet.paste(im, (0, y))
+            y += im.size[1] + 8
+        return _ok(f"{a}~{b}마디", _img(sheet, 1500))
+
+    @tool("write_measures",
+          "받아 적은 마디들을 기록한다. measures=[{m: 마디 번호, beats, unit, steps, lanes: {악기: 칸 문자열}, "
+          "simile?: true(악보에 %), section?: 구간 이름}]. 악기: cr cr2 spl chn rd rb hh t1 t2 sn rim ft cb bd hhp. "
+          "칸: '-' 없음 x 침 > 악센트 g 고스트 f 플램 o 열린 하이햇. 소리 대조 결과를 함께 돌려준다.",
+          S(["measures"], measures="array"))
+    async def write_measures(args):
+        done, errs = [], []
+        for m in args["measures"]:
+            try:
+                n = int(m["m"])
+                one = nota.normalize({"measures": [{k: v for k, v in m.items() if k != "m"}]})["measures"][0]
+            except (nota.NotationError, KeyError, ValueError, TypeError) as e:
+                errs.append(f"{m.get('m')}마디: {e}")
+                continue
+            run.notes[n] = one
+            done.append(n)
+        total = len(_measure_index(run))
+        left = [n for n in range(1, total + 1) if n not in run.notes]
+        msg = f"기록 {len(done)}마디. 남은 마디 {len(left)}개" + (f" (처음 {left[:10]})" if left else "")
+        if errs:
+            msg += "\n틀린 것: " + "; ".join(errs)
+        if done:
+            try:
+                msg += "\n" + await asyncio.to_thread(_check, run, min(done), max(done))
+            except RuntimeError as e:
+                msg += f"\n(소리 대조 안 됨: {e})"
+        return {"content": [_text(msg)], "is_error": bool(errs) and not done}
+
+    @tool("set_timing", "소리 대조에 쓸 1마디 1박·BPM·박 수 예외(align_audio 결과). 받아 적기 전에 한 번.",
+          S(["anchor", "bpm"], anchor="number", bpm="number", beats="object"))
+    async def set_timing(args):
+        run.timing = {"anchor": float(args["anchor"]), "bpm": float(args["bpm"]),
+                      "beats": {int(k): float(v) for k, v in (args.get("beats") or {}).items()}}
+        return _ok("기록했습니다. 이제 write_measures 가 소리 대조 결과를 함께 보여줍니다.")
+
+    @tool("check_measures", "받아 적은 마디들을 곡의 드럼 소리와 다시 대조한다.",
+          S(["from", "to"], **{"from": "integer", "to": "integer"}))
+    async def check_measures(args):
+        try:
+            return _ok(await asyncio.to_thread(_check, run, int(args["from"]), int(args["to"])))
+        except RuntimeError as e:
+            return _err(str(e))
 
     @tool("report", "끝내기 전에 반드시 부른다. status: done | failed. summary: 사용자에게 보일 한국어 요약 (무엇을 했고, 무엇이 불확실한지).",
           S(["status", "summary"], status="string", summary="string"))
@@ -366,6 +550,7 @@ def build_server(run: Run):
         return _ok("기록했습니다. 이제 끝내도 됩니다.")
 
     tools = [get_job, download_video, look, find_score_band, extract_strips, show_strips, strip_table,
-             edit_strip, align_audio, build_score, save_result, report]
+             edit_strip, align_audio, build_score, set_timing, measure_images, write_measures, check_measures,
+             save_result, report]
     run.tools = {t.name: t for t in tools}   # 시험용: 에이전트 없이 바로 부를 수 있게
     return create_sdk_mcp_server("score", "1.0.0", tools), [f"mcp__score__{t.name}" for t in tools]

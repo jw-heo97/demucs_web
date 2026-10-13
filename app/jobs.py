@@ -416,10 +416,11 @@ class JobStore:
         out = []
         for p in sorted(d.rglob("*")):
             if not p.is_file() or p.name in (META_FILE, MAP_HISTORY_FILE, PEAKS_FILE, "_score.json",
-                                             user_tracks.TRACKS_FILE):
+                                             user_tracks.TRACKS_FILE, "_notation_history.json"):
                 continue
-            # 악보 분석 결과(페이지 이미지)는 내려받을 파일이 아니다
-            if "_score" in p.relative_to(d).parts[:-1]:
+            # 악보 분석 결과(페이지 이미지)·AI 악보 원본(띠 그림)은 내려받을 파일이 아니다.
+            # _notation.json(음표 악보)은 목록에 남긴다 — 화면이 '편집 가능한 악보가 있다'를 이걸로 안다
+            if {"_score", "_score_src"} & set(p.relative_to(d).parts[:-1]):
                 continue
             out.append(JobStore._file_entry(job, d, p))
         return out
