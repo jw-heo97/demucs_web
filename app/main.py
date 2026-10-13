@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 import access
 import downloader
 import lock as song_lock
+import notation
 import scores
 import separator
 import tracks as user_tracks
@@ -689,6 +690,42 @@ def ai_score_start(job_id: str, payload: dict = Body(...)):
 def ai_score_status(job_id: str):
     _require_job(job_id)
     return _agent("GET", f"/runs/{job_id}")
+
+
+# --- 음표 악보 (_notation.json, app/notation.py) ---
+@app.get("/api/jobs/{job_id}/notation")
+def get_notation(job_id: str):
+    d = _score_dir(job_id)
+    data = notation.load(d)
+    if data is None:
+        raise HTTPException(404, "편집 가능한 악보가 없습니다.")
+    return data
+
+
+@app.put("/api/jobs/{job_id}/notation")
+def put_notation(job_id: str, payload: dict = Body(...)):
+    """{notation, note?} — 통째로 저장 (바로 전 것은 이력에)."""
+    d = _score_dir(job_id)
+    try:
+        data = notation.save(d, payload.get("notation"), str(payload.get("note") or "")[:80])
+    except notation.NotationError as e:
+        raise HTTPException(400, str(e)) from e
+    job = _require_job(job_id)
+    job.files = store._scan_files(job, d)
+    return data
+
+
+@app.get("/api/jobs/{job_id}/notation/history")
+def notation_history(job_id: str):
+    return {"history": notation.history(_score_dir(job_id))}
+
+
+@app.post("/api/jobs/{job_id}/notation/restore")
+def notation_restore(job_id: str, payload: dict = Body(...)):
+    try:
+        return notation.restore(_score_dir(job_id), int(payload.get("index", -1)))
+    except (notation.NotationError, OSError, ValueError) as e:
+        raise HTTPException(400, str(e)) from e
 
 
 @app.get("/api/jobs/{job_id}/score")

@@ -3,6 +3,7 @@
  *
  * 인증은 없다 — 접근 제어는 Tailscale 이 맡는다 (README 참고).
  */
+import type { Notation } from "./lib/notation";
 import type { AiRun, Job, JobTrack, MapPayload, MapVersion, Playlist, ScoreData, SearchItem, SongMap } from "./types";
 
 /** 앱에서는 다른 오리진의 서버를 봐야 하므로 베이스 URL 을 바꿀 수 있게 한다. */
@@ -170,6 +171,14 @@ export const api = {
   aiStart: (id: string, score_url: string, overwrite = false) =>
     post<AiRun>(`/api/jobs/${id}/ai-score`, { score_url, overwrite }),
   aiStatus: (id: string) => get<AiRun>(`/api/jobs/${id}/ai-score`),
+
+  // --- 음표 악보 (편집 가능) ---
+  notation: (id: string) => get<Notation>(`/api/jobs/${id}/notation`),
+  saveNotation: (id: string, notation: Notation, note = "") =>
+    put<Notation>(`/api/jobs/${id}/notation`, { notation, note }),
+  notationHistory: (id: string) =>
+    get<{ history: { at: number; note: string; measures: number }[] }>(`/api/jobs/${id}/notation/history`),
+  restoreNotation: (id: string, index: number) => post<Notation>(`/api/jobs/${id}/notation/restore`, { index }),
   deleteJob: (id: string) => del(`/api/jobs/${id}`),
 
   // --- 검색 ---

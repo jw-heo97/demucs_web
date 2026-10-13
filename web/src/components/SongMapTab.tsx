@@ -13,6 +13,7 @@ import { Mixer, type MixerControl } from "./Mixer";
 import { ScorePanel } from "./ScoreView";
 import { PickedSong, SongPicker } from "./SongPicker";
 import { AiScore } from "./AiScore";
+import { NotationEditor } from "./NotationEditor";
 import { TimeInput } from "./TimeInput";
 import { Waveform, type LoopRegion, type WaveMode } from "./Waveform";
 
@@ -573,6 +574,26 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
               악보로 송 맵 만들기
             </button>
           </ScorePanel>
+
+          {/* 음표 악보 편집 (AI 가 받아 적은 것 또는 빈 악보에서) */}
+          <NotationEditor
+            job={job}
+            bars={bars}
+            bar={barAtTime(bars, engine.time)?.bar ?? 1}
+            map={map}
+            onSeek={(b) => {
+              const t = bars.find((x) => x.bar === b)?.start;
+              if (t != null) engine.seek(t);
+            }}
+            onPlayFrom={(b) => {
+              const t = bars.find((x) => x.bar === b)?.start;
+              if (t != null) mixer.current?.playFrom(t, loop);
+            }}
+            onApplyMap={(m) => {
+              setMap(m);
+              setMsg("악보의 박자·구간으로 송 맵을 바꿨습니다 — 아래 구성표에서 확인하고 저장하세요.");
+            }}
+          />
 
           <div className="panel">
             {stale && (

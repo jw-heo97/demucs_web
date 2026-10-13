@@ -12,7 +12,7 @@ RUN ln -s "$(python -c 'import claude_agent_sdk,os;print(os.path.join(os.path.di
 
 RUN useradd -m -u 1000 app
 WORKDIR /srv
-COPY app/scores.py app/scorebuild.py ./
+COPY app/scores.py app/scorebuild.py app/notation.py ./
 COPY agent/*.py ./
 COPY agent/workspace ./workspace
 RUN mkdir -p /work /home/app/.claude && chown -R app /work /srv /home/app/.claude

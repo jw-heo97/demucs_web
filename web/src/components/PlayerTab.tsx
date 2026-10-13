@@ -7,6 +7,8 @@ import type { Bar, Job, ScoreData } from "../types";
 import { AiScore } from "./AiScore";
 import { Mixer, type MixerControl } from "./Mixer";
 import { ScoreSheet, useBarDrag } from "./ScoreView";
+import { NotationView } from "./NotationView";
+import type { Notation } from "../lib/notation";
 import { PickedSong, SongPicker } from "./SongPicker";
 
 interface Props {
@@ -93,6 +95,18 @@ export function PlayerTab({ jobs, onChanged, pick, onOpenMap, onPickSong }: Prop
     };
   }, [scoreJob]);
 
+  // 편집 가능한 음표 악보가 있으면 그걸 그린다 (PDF 그림보다 우선)
+  const [notation, setNotation] = useState<Notation | null>(null);
+  const notationSig = job?.files.find((f) => f.rel === "_notation.json")?.mtime ?? null;
+  useEffect(() => {
+    let alive = true;
+    setNotation(null);
+    if (job && notationSig != null) api.notation(job.id).then((n) => alive && setNotation(n)).catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [job?.id, notationSig]);
+
   if (!job) return <SongPicker jobs={jobs} title="재생할 곡" onPick={choose} />;
 
   const colors = sectionColors(bars);
@@ -159,7 +173,15 @@ export function PlayerTab({ jobs, onChanged, pick, onOpenMap, onPickSong }: Prop
         />
       </div>
 
-      {score && score.measures.length > 0 ? (
+      {notation ? (
+        <NotationView
+          notation={notation}
+          bar={cur}
+          loop={loopBars}
+          onPickBar={seekBar}
+          onSelect={(a, b) => startLoop(a, b, "")}
+        />
+      ) : score && score.measures.length > 0 ? (
         <ScoreSheet
           score={score}
           bar={cur}

@@ -85,6 +85,13 @@ def _hooks(run: Run, tool_names: list[str]):
             return {}
         if run.reported is None:
             return {"decision": "block", "reason": "끝내기 전에 report 도구로 결과를 알리세요 (done 또는 failed)."}
+        if run.reported["status"] == "done" and run.built:
+            total = run.built["measures"]
+            got = sum(1 for n in range(1, total + 1) if n in run.notes)
+            if got < total and stops["n"] <= 2:
+                return {"decision": "block",
+                        "reason": f"음표를 {got}/{total}마디만 받아 적었습니다. 나머지를 write_measures 로 적고 "
+                                  "save_result 를 다시 부르세요. 정말 못 하겠으면 report 에 이유를 적으세요."}
         if run.reported["status"] == "done" and not run.saved:
             return {"decision": "block",
                     "reason": "report 는 done 인데 save_result 를 하지 않았습니다. 저장하거나 failed 로 다시 report 하세요."}
