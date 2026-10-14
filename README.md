@@ -95,6 +95,13 @@ docker compose exec -it agent claude
 구간 이름, 못갖춘마디). 작업 순서는 스킬 [agent/workspace/.claude/skills/drum-score-video](agent/workspace/.claude/skills/drum-score-video/SKILL.md),
 안전장치는 훅([agent/runner.py](agent/runner.py)): score 도구만 허용, 마디 수 검산이 틀리면 저장 거부, 결과 보고 없이 끝내기 거부.
 
+### 손으로 그려 고치기 (아이패드 펜)
+
+송 맵 → 악보 편집 → `✏ 편집` → 마디를 누르면 그 마디 아래에 편집 칸이 뜬다. `✍ 그리기`(고른 마디들) 나 `✍ 이 줄`(그 줄 전체,
+8마디까지)을 누르면 오선·마디선·박 점선·악기 자리가 그려진 판이 나오고, 펜으로 그린 뒤 `인식` 을 누르면 에이전트가 그림을 읽어
+칸으로 바꾼다([agent/recognize.py](agent/recognize.py), 같은 OAuth). 결과를 미리 보고 `적용` → `저장`. 4마디 한 줄에 약 13초.
+펜을 한 번 쓰면 손가락 터치는 무시한다(손바닥이 닿아도 그려지지 않게).
+
 ## 기술 스택
 
 Python · FastAPI · demucs(htdemucs) · librosa · ffmpeg /

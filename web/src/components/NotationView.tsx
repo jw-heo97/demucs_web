@@ -28,6 +28,7 @@ export function NotationView({
   score,
   popupBar,
   popup,
+  onLines,
 }: {
   notation: Notation;
   /** 지금 음원 마디 */
@@ -45,6 +46,8 @@ export function NotationView({
   /** 이 마디 바로 아래에 띄울 것 (악보 편집 칸) */
   popupBar?: number | null;
   popup?: ReactNode;
+  /** 그린 줄 나눔 [첫 마디, 끝 마디][] */
+  onLines?: (lines: [number, number][]) => void;
 }) {
   const host = useRef<HTMLDivElement | null>(null);
   const svgBox = useRef<HTMLDivElement | null>(null);
@@ -129,6 +132,10 @@ export function NotationView({
     return m;
   }, [res]);
   const curLine = lineOf.get(bar) ?? -1;
+  useEffect(() => {
+    if (res) onLines?.(res.lines);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [res]);
   const lastLine = useRef(-1);
   useEffect(() => {
     if (usePages || !follow || curLine < 0 || curLine === lastLine.current) return;
