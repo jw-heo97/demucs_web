@@ -34,7 +34,7 @@ def view(run: Run) -> dict:
         "job_id": run.job_id, "score_url": run.score_url, "phase": m.get("phase", "queued"),
         "state": run.state, "started": m.get("started"), "finished": m.get("finished"),
         "error": m.get("error"), "report": run.reported, "saved": run.saved,
-        "log": run.log_lines[-120:], "dry_run": run.dry_run,
+        "log": run.log_lines[-120:], "dry_run": run.dry_run, "mode": run.mode,
     }
 
 
@@ -86,14 +86,15 @@ def health():
 async def start(payload: dict = Body(...)):
     job_id = str(payload.get("job_id") or "")
     url = str(payload.get("score_url") or "").strip()
-    if not job_id or not url:
+    mode = "pdf" if payload.get("mode") == "pdf" else "video"
+    if not job_id or (mode == "video" and not url):
         raise HTTPException(400, "job_id 와 score_url 이 필요합니다.")
     if not auth_status()["ready"]:
         raise HTTPException(503, "Claude 로그인이 안 되어 있습니다. README 'AI 악보' 의 OAuth 설정을 해 주세요.")
     cur: Optional[Run] = runs.get(job_id)
     if cur and meta.get(job_id, {}).get("phase") in ("queued", "running"):
         raise HTTPException(409, "이 곡은 이미 AI 악보 작업 중입니다.")
-    run = Run(job_id, url, overwrite=bool(payload.get("overwrite")), dry_run=bool(payload.get("dry_run")))
+    run = Run(job_id, url, overwrite=bool(payload.get("overwrite")), dry_run=bool(payload.get("dry_run")), mode=mode)
     runs[job_id] = run
     meta[job_id] = {"phase": "queued"}
     run.log("대기열에 들어갔습니다")

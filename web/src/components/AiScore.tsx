@@ -14,6 +14,15 @@ const LABEL: Record<AiRun["phase"], string> = {
 /** 도구 이름 → 사람이 읽는 단계 */
 const STEP: Record<string, string> = {
   get_job: "곡 확인",
+  pdf_overview: "악보 쪽 보기",
+  set_sections: "구간 이름",
+  audio_grid: "음원 박 재기",
+  set_timing: "박 위치 기록",
+  measure_images: "마디 보기",
+  write_measures: "음표 받아 적기",
+  check_measures: "소리와 대조",
+  refine_timing: "1마디 1박 검산",
+  add_strip: "띠 끼워 넣기",
   download_video: "영상 받기",
   look: "화면 보기",
   find_score_band: "악보 위치 찾기",
@@ -101,6 +110,33 @@ export function AiScore({ job, onChanged }: { job: Job; onChanged: () => void })
     }
   }
 
+  // 곡에 이미 있는 악보 PDF 로 (PDF 는 그대로, 음표 악보 + 송 맵 새 버전)
+  async function fromPdf() {
+    setErr("");
+    const hasNotation = job.files.some((f) => f.rel === "_notation.json");
+    if (
+      !(await confirmBox({
+        title: "악보 PDF 로 음표 악보 만들기",
+        message:
+          "AI 가 이 곡의 악보 PDF 를 마디마다 읽어 음표 악보(송 맵에서 음표를 고칠 수 있는 악보)를 받아 적고, " +
+          "구간 이름·박자·템포를 읽어 송 맵 새 버전('AI 악보')을 만듭니다. PDF 와 지금 송 맵 버전은 그대로 남습니다." +
+          (hasNotation ? " 지금 있는 음표 악보는 이력에 남기고 새로 씁니다." : ""),
+        okText: "시작",
+      }))
+    )
+      return;
+    try {
+      const r = await api.aiFromPdf(job.id);
+      setRun(r);
+      setOpen(true);
+      lastPhase.current = r.phase;
+      void poll(job.id);
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  }
+
+  const hasPdf = job.files.some((f) => f.rel === "score.pdf");
   const busy = run?.phase === "queued" || run?.phase === "running";
   const step = run ? STEP[run.state] ?? run.state : "";
   return (
@@ -109,6 +145,11 @@ export function AiScore({ job, onChanged }: { job: Job; onChanged: () => void })
         {canEdit && (
           <button className="ghost" onClick={() => void start()} disabled={busy} title="연주 영상에 나오는 악보로 악보 PDF·송 맵 만들기">
             ✨ AI 악보
+          </button>
+        )}
+        {canEdit && hasPdf && (
+          <button className="ghost" onClick={() => void fromPdf()} disabled={busy} title="곡에 있는 악보 PDF 로 음표 악보·송 맵 만들기">
+            ✨ PDF → 음표 악보
           </button>
         )}
         {run && (
@@ -126,7 +167,7 @@ export function AiScore({ job, onChanged }: { job: Job; onChanged: () => void })
         <div className="ailog">
           {run.report && <div className="aireport">{run.report.summary}</div>}
           {run.error && <div className="err">{run.error}</div>}
-          <div className="meta">악보 영상: {run.score_url}</div>
+          <div className="meta">{run.mode === "pdf" ? "기존 악보 PDF 에서" : `악보 영상: ${run.score_url}`}</div>
           <ol>
             {run.log.map((l, i) => (
               <li key={i} className={`ai-${l.kind}`}>

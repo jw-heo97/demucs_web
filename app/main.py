@@ -670,8 +670,13 @@ def ai_health():
 
 @app.post("/api/jobs/{job_id}/ai-score", status_code=202)
 def ai_score_start(job_id: str, payload: dict = Body(...)):
-    """{score_url, overwrite?} — 악보가 나오는 연주 영상으로 악보 PDF·송 맵 새 버전을 만든다."""
+    """{score_url, overwrite?} — 악보가 나오는 연주 영상으로 악보 PDF·송 맵 새 버전을 만든다.
+    {mode: "pdf"} — 곡에 이미 있는 악보 PDF 로 음표 악보·송 맵 새 버전을 만든다 (PDF 는 그대로)."""
     job = _require_job(job_id, done=True)
+    if payload.get("mode") == "pdf":
+        if not (job.out_dir and (job.out_dir / scores.SCORE_PDF).exists()):
+            raise HTTPException(400, "이 곡에는 악보 PDF 가 없습니다.")
+        return _agent("POST", "/runs", {"job_id": job_id, "mode": "pdf"})
     url = (payload.get("score_url") or "").strip()
     if not url:
         raise HTTPException(400, "악보 영상 주소가 필요합니다.")

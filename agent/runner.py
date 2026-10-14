@@ -17,14 +17,16 @@ from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKCli
 from tools import Run, build_server
 
 WORKSPACE = Path(__file__).parent / "workspace"
-SKILL = "drum-score-video"
+SKILLS = ["drum-score-video", "drum-score-pdf"]
 
 SYSTEM = """너는 드럼 연습 앱(demucs-web)의 악보 담당 에이전트다.
-분리가 끝난 곡 하나와, 그 곡의 드럼 악보가 화면에 나오는 연주 영상(YouTube) 하나를 받는다.
-할 일: 영상에서 악보 띠를 뽑아 악보 PDF 를 만들고, 곡 음원에 맞춘 송 맵(1마디 1박·BPM·박자·구간 이름)을 저장한다.
+분리가 끝난 곡 하나를 받는다. 악보는 둘 중 하나에서 온다:
+- 드럼 악보가 화면에 나오는 연주 영상(YouTube) → drum-score-video 스킬 (악보 PDF 도 만든다)
+- 곡에 이미 있는 악보 PDF → drum-score-pdf 스킬 (PDF 는 그대로 둔다)
+할 일: 음표 악보(마디별 악기 칸)를 받아 적고, 곡 음원에 맞춘 송 맵(1마디 1박·BPM·박자·구간 이름)을 저장한다.
 
 규칙
-- 반드시 drum-score-video 스킬을 먼저 읽고 그 순서를 따른다.
+- 요청에 적힌 스킬을 먼저 읽고 그 순서를 따른다.
 - score 도구만 쓴다. 파일·셸·웹 도구는 없다.
 - 그림을 직접 보고 판단한다: 마디선이 맞는지, 구간 이름(상자 글자), 템포 표기(♩=), 박자표, 못갖춘마디.
 - 추측한 값은 추측이라고 report 에 적는다. 사용자는 한국어를 쓴다 — report 요약은 한국어로.
@@ -111,7 +113,7 @@ def _hooks(run: Run, tool_names: list[str]):
 
 async def run_agent(run: Run) -> None:
     run.state = "시작"
-    run.log(f"악보 영상: {run.score_url}")
+    run.log("기존 악보 PDF 로" if run.mode == "pdf" else f"악보 영상: {run.score_url}")
     server, tool_names = build_server(run)
     env = {}
     if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
@@ -121,19 +123,23 @@ async def run_agent(run: Run) -> None:
         mcp_servers={"score": server},
         allowed_tools=tool_names + ["Read", "ToolSearch"],
         disallowed_tools=["Bash", "Write", "Edit", "NotebookEdit", "WebFetch", "WebSearch", "Task", "Agent"],
-        skills=[SKILL],
+        skills=SKILLS,
         cwd=str(WORKSPACE),
         hooks=_hooks(run, tool_names),
         model=os.environ.get("AGENT_MODEL") or None,
-        max_turns=int(os.environ.get("AGENT_MAX_TURNS") or 90),
+        max_turns=int(os.environ.get("AGENT_MAX_TURNS") or 250),   # 음표 100~200마디면 100턴을 넘는다
         permission_mode="bypassPermissions",
         # 그림을 돌려주는 도구가 많다 — 기본 1MB 면 띠 여러 장을 한 번에 볼 때 넘친다 (라시사에서 실제로 멈춤)
         max_buffer_size=16 * 1024 * 1024,
         env=env,
     )
-    prompt = (f"곡 id {run.job_id} 에 악보를 붙여 줘. 악보 영상: {run.score_url}\n"
-              f"{'시험 실행이다 — save_result 는 파일만 남긴다.' if run.dry_run else ''}"
-              f"{'이미 있는 악보를 덮어써도 된다.' if run.overwrite else ''}")
+    test = "시험 실행이다 — save_result 는 파일만 남긴다." if run.dry_run else ""
+    if run.mode == "pdf":
+        prompt = (f"곡 id {run.job_id} 에 이미 있는 악보 PDF 로 음표 악보와 송 맵을 만들어 줘 (drum-score-pdf 스킬). "
+                  f"PDF 는 바꾸지 않는다.\n{test}")
+    else:
+        prompt = (f"곡 id {run.job_id} 에 악보를 붙여 줘 (drum-score-video 스킬). 악보 영상: {run.score_url}\n{test}"
+                  f"{'이미 있는 악보를 덮어써도 된다.' if run.overwrite else ''}")
     t0 = time.time()
     async with ClaudeSDKClient(options=opts) as client:
         await client.query(prompt)
