@@ -320,11 +320,10 @@ export function NotationEditor({
         onPickBar={editing ? pickBar : onSeek}
         onSelect={editing ? (a, b) => setSel({ from: a, to: b }) : undefined}
         follow={!editing || !sel}
-      />
-
-      {editing && cur && canEdit && (
+        popupBar={editing && cur && canEdit ? sel!.from : null}
+        popup={editing && cur && canEdit && (
         <div className="nted">
-          <div className="actions" style={{ marginTop: 8 }}>
+          <div className="actions" style={{ marginTop: 0 }}>
             <button className="ghost" onClick={() => n > 1 && setSel({ from: n - 1, to: n - 1 })} disabled={n <= 1}>◀</button>
             <b>
               {sel!.from}
@@ -332,6 +331,8 @@ export function NotationEditor({
             </b>
             <button className="ghost" onClick={() => n < nt.measures.length && setSel({ from: n + 1, to: n + 1 })} disabled={n >= nt.measures.length}>▶</button>
             <button className="ghost" onClick={() => onPlayFrom(n)} title="이 마디부터 재생 (예비박)">▶ 여기서 재생</button>
+            <span style={{ flex: 1 }} />
+            <button className="ghost" onClick={() => setSel(null)} aria-label="닫기" title="닫기">✕</button>
             <span className="meta">|</span>
             <label className="inline">
               박자
@@ -440,7 +441,8 @@ export function NotationEditor({
             <div className="meta">앞 마디와 같습니다 — % 로 표시할 수 있습니다.</div>
           )}
         </div>
-      )}
+        )}
+      />
       {editing && !cur && <div className="meta" style={{ marginTop: 6 }}>고칠 마디를 누르세요. 여러 마디를 끌어 고르면 복사·삭제를 한꺼번에.</div>}
       {!editing && canEdit && <div className="meta" style={{ marginTop: 6 }}>마디를 누르면 그 마디로 이동합니다. 고치려면 ✏ 편집.</div>}
     </div>
