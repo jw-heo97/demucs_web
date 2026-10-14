@@ -600,12 +600,16 @@ def build_server(run: Run):
             else:
                 nt_note = f", 음표 악보는 {sum(1 for m in ms if m)}/{total}마디뿐이라 저장 안 함"
         # 악보 편집(송 맵)용 원본: 띠 그림 + 프로젝트 (영상 방식만)
+        # 송 맵·음표 악보는 이미 저장됐으니 여기서 실패해도 저장 실패로 치지 않는다
         if run.mode == "video":
             dst = run.song_dir / sb.SRC_DIR
-            if dst.exists():
-                shutil.rmtree(dst, ignore_errors=True)
-            shutil.copytree(run.strip_dir, dst)
-            sb.save_project(run.song_dir, run.proj)
+            try:
+                if dst.exists():
+                    shutil.rmtree(dst, ignore_errors=True)
+                shutil.copytree(run.strip_dir, dst)
+                sb.save_project(run.song_dir, run.proj)
+            except OSError as e:
+                nt_note += f", 악보 원본 그림(_score_src) 복사 실패: {e}"
         run.saved = {"version": vname, "map": songmap}
         return _ok(f"저장했습니다 — 악보 {total}마디, 송 맵 버전 '{vname}' (활성){nt_note}")
 
