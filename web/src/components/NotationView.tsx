@@ -1,11 +1,20 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { DrawResult } from "../lib/drawNotation";
-import type { Notation } from "../lib/notation";
+import { pageLayout, type Notation } from "../lib/notation";
+import type { ScoreData } from "../types";
 import { useBarDrag } from "./ScoreView";
+
+/** 쪽 비율 (A4 세로) */
+const PAGE_W = 1100;
+const PAGE_H = Math.round(PAGE_W * 1.414);
 
 /**
  * 음표 악보를 오선으로 그린다 (VexFlow). 마디를 누르면 그 마디로, 끌면 구간 반복(onSelect),
- * 지금 마디는 칠하고 그 줄이 보이게 따라 내려간다. 편집 화면에서는 selected 마디를 따로 표시한다.
+ * 지금 마디는 칠한다. 편집 화면에서는 selected 마디를 따로 표시한다.
+ *
+ * paged: 원래 악보 PDF 처럼 쪽으로 나눠 한 쪽씩 화면 높이에 맞춰 보여준다 (태블릿에서 넘겨 보기 좋게).
+ * 줄·쪽 나눔은 원래 PDF(score)를 그대로 따른다. 연주 위치의 쪽을 따라가고, 쪽의 마지막 마디에서 미리 넘긴다.
+ * 폰처럼 좁으면 쪽 대신 한 줄 2마디로 이어서 그린다.
  */
 export function NotationView({
   notation,
@@ -15,6 +24,8 @@ export function NotationView({
   onPickBar,
   onSelect,
   follow = true,
+  paged = false,
+  score,
 }: {
   notation: Notation;
   /** 지금 음원 마디 */
@@ -24,8 +35,11 @@ export function NotationView({
   selected?: { from: number; to: number } | null;
   onPickBar: (bar: number) => void;
   onSelect?: (from: number, to: number) => void;
-  /** 재생 위치를 따라 스크롤 */
+  /** 재생 위치를 따라가기 */
   follow?: boolean;
+  paged?: boolean;
+  /** 원래 악보 PDF 분석 (쪽·줄 나눔을 따른다) */
+  score?: ScoreData | null;
 }) {
   const host = useRef<HTMLDivElement | null>(null);
   const svgBox = useRef<HTMLDivElement | null>(null);
@@ -33,14 +47,37 @@ export function NotationView({
   const [err, setErr] = useState("");
   const [narrow, setNarrow] = useState(false);
 
-  // 폭이 좁으면(폰) 한 줄 2마디
+  // 폭이 좁으면(폰) 한 줄 2마디로 이어서. 쪽 보기는 자기 폭을 화면 높이에 맞춰 줄이므로 바깥 칸의 폭으로 판단한다
+  // (자기 폭으로 보면 줄인 폭 때문에 '좁음'이 되어 쪽 보기와 이어 보기를 오갔다)
   useLayoutEffect(() => {
-    const el = host.current;
+    const el = host.current?.parentElement;
     if (!el) return;
     const ro = new ResizeObserver(() => setNarrow(el.clientWidth < 640));
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  const usePages = paged && !narrow;
+  const pages = useMemo(() => pageLayout(notation.measures.length, score), [notation, score]);
+  const pageOf = useMemo(() => {
+    const m = new Map<number, number>();
+    pages.forEach((lines, p) => lines.forEach(([a, b]) => {
+      for (let n = a; n <= b; n++) m.set(n, p);
+    }));
+    return m;
+  }, [pages]);
+  // 연주 위치의 쪽 — 쪽의 마지막 마디에 들어서면 다음 쪽을 미리 (넘기는 순간 첫 마디를 이미 읽고 있어야 한다)
+  let playPage = pageOf.get(Math.max(1, bar)) ?? 0;
+  const nextPage = pageOf.get(Math.max(1, bar) + 1);
+  if (nextPage != null && nextPage !== playPage) playPage = nextPage;
+  const [view, setView] = useState(playPage);
+  const followed = useRef(playPage);
+  useEffect(() => {
+    if (!follow || followed.current === playPage) return;
+    followed.current = playPage;
+    setView(playPage);
+  }, [playPage, follow]);
+  const pv = Math.max(0, Math.min(pages.length - 1, view));
 
   // VexFlow(약 1MB)는 악보를 그릴 때만 받는다 — 첫 화면을 무겁게 하지 않게
   useEffect(() => {
@@ -50,7 +87,11 @@ export function NotationView({
         const el = svgBox.current;
         if (!alive || !el) return;
         try {
-          setRes(drawNotation(el, notation, { width: narrow ? 560 : 1100, perLine: narrow ? 2 : 4 }));
+          setRes(
+            usePages
+              ? drawNotation(el, notation, { width: PAGE_W, perLine: 4, lines: pages[pv], height: PAGE_H })
+              : drawNotation(el, notation, { width: narrow ? 560 : 1100, perLine: narrow ? 2 : 4 }),
+          );
           setErr("");
         } catch (e) {
           setErr(`악보를 그리지 못했습니다: ${(e as Error).message}`);
@@ -61,13 +102,13 @@ export function NotationView({
     return () => {
       alive = false;
     };
-  }, [notation, narrow]);
+  }, [notation, narrow, usePages, pages, pv]);
 
   const drag = useBarDrag(onSelect ?? (() => {}), onPickBar);
   const lo = drag.sel ? Math.min(drag.sel.a, drag.sel.b) : 0;
   const hi = drag.sel ? Math.max(drag.sel.a, drag.sel.b) : -1;
 
-  // 지금 마디의 줄이 바뀌면 그 줄이 보이게
+  // 이어 그리기: 지금 마디의 줄이 바뀌면 그 줄이 보이게
   const lineOf = useMemo(() => {
     const m = new Map<number, number>();
     res?.lines.forEach(([a, b], i) => {
@@ -78,15 +119,19 @@ export function NotationView({
   const curLine = lineOf.get(bar) ?? -1;
   const lastLine = useRef(-1);
   useEffect(() => {
-    if (!follow || curLine < 0 || curLine === lastLine.current) return;
+    if (usePages || !follow || curLine < 0 || curLine === lastLine.current) return;
     lastLine.current = curLine;
-    const box = res?.boxes.find((b) => b.bar === bar);
-    const el = host.current?.querySelector<HTMLElement>(`[data-bar="${box?.bar}"]`);
+    const el = host.current?.querySelector<HTMLElement>(`[data-bar="${bar}"]`);
     el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [curLine, follow, bar, res]);
+  }, [curLine, follow, bar, usePages]);
 
   return (
-    <div className="notation" ref={host}>
+    <div
+      className={`notation${usePages ? " paged" : ""}`}
+      ref={host}
+      // 화면 높이 − 아래 재생 막대·쪽 넘김 버튼 자리
+      style={usePages ? { maxWidth: `calc((100vh - 150px) * ${PAGE_W / PAGE_H})` } : undefined}
+    >
       {err && <div className="err">{err}</div>}
       <div className="notation-page" {...(onSelect ? drag.props : {})}>
         <div ref={svgBox} className="notation-svg" />
@@ -113,6 +158,13 @@ export function NotationView({
             );
           })}
       </div>
+      {usePages && pages.length > 1 && (
+        <div className="score-nav">
+          <button className="ghost" onClick={() => setView(pv - 1)} disabled={pv <= 0} aria-label="이전 쪽">‹</button>
+          <span className="meta">{pv + 1} / {pages.length}</span>
+          <button className="ghost" onClick={() => setView(pv + 1)} disabled={pv >= pages.length - 1} aria-label="다음 쪽">›</button>
+        </div>
+      )}
     </div>
   );
 }

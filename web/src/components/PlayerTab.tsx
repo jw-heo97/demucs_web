@@ -176,6 +176,8 @@ export function PlayerTab({ jobs, onChanged, pick, onOpenMap, onPickSong }: Prop
       {notation ? (
         <NotationView
           notation={notation}
+          paged
+          score={score}
           bar={cur}
           loop={loopBars}
           onPickBar={seekBar}
