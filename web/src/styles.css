@@ -342,7 +342,8 @@ button.danger { background: var(--err); }
 .parts .part { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .loopinfo { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 30px; }
 .sheet { width: 100%; margin: 0 auto 14px; }
-.sheet-page { border-radius: 8px; border: 1px solid var(--border); touch-action: none; user-select: none; -webkit-user-select: none; }
+.sheet-page { border-radius: 8px; border: 1px solid var(--border); touch-action: pan-y; user-select: none; -webkit-user-select: none; }
+.sheet.selecting .sheet-page { touch-action: none; }
 .sheet-page img { pointer-events: none; }
 .score-bar.inloop { background: color-mix(in srgb, #f59e0b 22%, transparent); }
 .score-bar.on.inloop { background: color-mix(in srgb, var(--accent) 26%, transparent); }
@@ -352,7 +353,8 @@ button.danger { background: var(--err); }
 .bargroup-name { width: 70px; flex-shrink: 0; padding-top: 6px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .barcells { display: flex; flex-wrap: wrap; gap: 4px; flex: 1; }
 .barcell { width: 40px; height: 34px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--border);
-  border-radius: 6px; font-size: .78rem; color: var(--muted); cursor: pointer; touch-action: none; font-variant-numeric: tabular-nums; }
+  border-radius: 6px; font-size: .78rem; color: var(--muted); cursor: pointer; touch-action: manipulation; font-variant-numeric: tabular-nums; }
+.bargrid.selecting .barcell { touch-action: none; }
 .barcell.inloop { background: color-mix(in srgb, #f59e0b 22%, transparent); color: var(--text); }
 .barcell.on { border-color: var(--accent); box-shadow: inset 0 0 0 2px var(--accent); color: var(--text); font-weight: 600; }
 .barcell.picking { background: color-mix(in srgb, #10b981 30%, transparent); border-color: #10b981; }
@@ -394,4 +396,4 @@ button.danger { background: var(--err); }
 
 /* 음표 악보 쪽 보기 (A4, 한 쪽이 화면 높이에 들어오게) */
 .notation.paged { margin: 0 auto 14px; }
-.notation.paged .score-bar { touch-action: none; }   /* 한 쪽이 화면에 다 들어오니 어느 방향으로 끌어도 구간 고르기 */
+.notation.paged.selecting .score-bar { touch-action: none; }   /* 구간 반복 중: 어느 방향으로 끌어도 구간 고르기 */

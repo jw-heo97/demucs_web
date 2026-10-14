@@ -390,6 +390,39 @@ export function ScorePages({
   );
 }
 
+/**
+ * 쪽 보기에서 옆으로 밀어 쪽 넘기기 (구간 고르기가 꺼져 있을 때). 위아래 스크롤은 브라우저에 맡긴다
+ * (touch-action: pan-y). 밀었으면 그 뒤의 '누름'(마디로 이동)은 무시한다.
+ */
+export function useSwipePages(onPrev: () => void, onNext: () => void) {
+  const st = useRef<{ x: number; y: number; id: number } | null>(null);
+  const swiped = useRef(false);
+  return {
+    swiped,
+    props: {
+      onPointerDown: (e: React.PointerEvent) => {
+        swiped.current = false;
+        st.current = { x: e.clientX, y: e.clientY, id: e.pointerId };
+      },
+      onPointerUp: (e: React.PointerEvent) => {
+        const s = st.current;
+        st.current = null;
+        if (!s || s.id !== e.pointerId) return;
+        const dx = e.clientX - s.x;
+        const dy = e.clientY - s.y;
+        if (Math.abs(dx) > 60 && Math.abs(dx) > 1.5 * Math.abs(dy)) {
+          swiped.current = true;
+          if (dx < 0) onNext();
+          else onPrev();
+        }
+      },
+      onPointerCancel: () => {
+        st.current = null;
+      },
+    },
+  };
+}
+
 /** 마디(data-bar) 위를 끌어 범위를 고르는 포인터 처리. 끌지 않고 떼면 그 마디 하나를 누른 것. */
 export function useBarDrag(onSelect: (a: number, b: number) => void, onClick: (bar: number) => void) {
   const [sel, setSel] = useState<{ a: number; b: number } | null>(null);
@@ -406,7 +439,11 @@ export function useBarDrag(onSelect: (a: number, b: number) => void, onClick: (b
         const b = barAt(e.clientX, e.clientY);
         if (b == null || e.button > 0) return;
         e.preventDefault();
-        (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+        try {
+          (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+        } catch {
+          /* 이미 끝난 포인터 — 붙잡지 못해도 고르기는 된다 */
+        }
         st.current = { a: b, b, id: e.pointerId };
         setSel({ a: b, b });
       },
@@ -452,7 +489,8 @@ export function ScoreSheet({
   /** 반복 중인 음원 마디 범위 */
   loop: { from: number; to: number } | null;
   onPickBar: (bar: number) => void;
-  onSelect: (from: number, to: number) => void;
+  /** 구간 반복이 켜져 있을 때만 — 없으면 마디를 누르면 이동, 옆으로 밀면 쪽 넘기기 */
+  onSelect?: (from: number, to: number) => void;
 }) {
   const k = measureOfBar(score, Math.max(1, bar)) ?? 0;
   const m = score.measures[k];
@@ -490,7 +528,8 @@ export function ScoreSheet({
   const pv = Math.max(0, Math.min(pages - 1, view));
   const pg = score.pages[pv];
 
-  const drag = useBarDrag(onSelect, onPickBar);
+  const drag = useBarDrag(onSelect ?? (() => {}), onPickBar);
+  const swipe = useSwipePages(() => setView((v) => Math.max(0, v - 1)), () => setView((v) => Math.min(pages - 1, v + 1)));
   const dragSet = useMemo(() => {
     const s = new Set<number>();
     if (drag.sel) for (let b = Math.min(drag.sel.a, drag.sel.b); b <= Math.max(drag.sel.a, drag.sel.b); b++) {
@@ -501,8 +540,8 @@ export function ScoreSheet({
   }, [score, drag.sel]);
 
   return (
-    <div className="sheet" style={{ maxWidth: `calc((100vh - 70px) * ${pg.w / pg.h})` }}>
-      <div className="score-page sheet-page" style={{ aspectRatio: `${pg.w} / ${pg.h}` }} {...drag.props}>
+    <div className={`sheet${onSelect ? " selecting" : ""}`} style={{ maxWidth: `calc((100vh - 70px) * ${pg.w / pg.h})` }}>
+      <div className="score-page sheet-page" style={{ aspectRatio: `${pg.w} / ${pg.h}` }} {...(onSelect ? drag.props : swipe.props)}>
         <img src={api.fileUrl(score.page_urls[pv])} alt={`${pv + 1}쪽`} draggable={false} />
         {score.measures.map((ms, mi) =>
           ms.page !== pv || !firstBarOf.has(mi) ? null : (
@@ -510,7 +549,8 @@ export function ScoreSheet({
               key={mi}
               data-bar={firstBarOf.get(mi)}
               className={`score-bar${mi === k ? " on" : ""}${inLoop.has(mi) ? " inloop" : ""}${dragSet.has(mi) ? " picking" : ""}`}
-              title={`${firstBarOf.get(mi)}마디 — 누르면 이동, 끌면 구간 반복`}
+              title={`${firstBarOf.get(mi)}마디 — 누르면 이동${onSelect ? ", 끌면 구간 반복" : ""}`}
+              onClick={onSelect ? undefined : () => !swipe.swiped.current && onPickBar(firstBarOf.get(mi)!)}
               style={{
                 left: `${(ms.x0 / pg.w) * 100}%`,
                 width: `${((ms.x1 - ms.x0) / pg.w) * 100}%`,

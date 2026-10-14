@@ -78,6 +78,8 @@ export function PlayerTab({ jobs, onChanged, pick, onOpenMap, onPickSong }: Prop
     const e = bars.find((b) => b.bar === to + 1)?.start ?? duration;
     if (engine.playing && s != null) mixer.current?.playFrom(s, { start: s, end: e });
   };
+  // 마디를 끌어 반복 구간 고르기는 구간 반복이 켜져 있을 때만 — 꺼져 있으면 악보를 자유롭게 밀고 넘긴다
+  const selectLoop = region ? (a: number, b: number) => startLoop(a, b, "") : undefined;
   const seekBar = (b: number) => {
     const t = bars.find((x) => x.bar === b)?.start;
     if (t != null) engine.seek(t);
@@ -147,7 +149,7 @@ export function PlayerTab({ jobs, onChanged, pick, onOpenMap, onPickSong }: Prop
               <button className="ghost" onClick={() => setLoopBars(null)}>반복 해제</button>
             </>
           ) : (
-            "마디를 끌어서 구간 반복 · 마디를 누르면 그 마디로 이동"
+            "마디를 누르면 그 마디로 이동 · 구간 반복을 켜면 마디를 끌어 반복 구간을 고를 수 있습니다"
           )}
         </div>
 
@@ -165,6 +167,8 @@ export function PlayerTab({ jobs, onChanged, pick, onOpenMap, onPickSong }: Prop
               if (region) return setLoopBars(null);
               const p = parts.find((x) => x.from <= cur && cur <= x.to);
               if (p) startLoop(p.from, p.to, p.name);
+              // 구간 이름이 없는 곳(첫 마디 앞 등)은 지금 마디부터 4마디 — 켠 뒤 마디를 끌어 바꾸면 된다
+              else if (bars.length) startLoop(cur, Math.min(bars[bars.length - 1].bar, cur + 3), "");
             },
           }}
           control={mixer}
@@ -181,7 +185,7 @@ export function PlayerTab({ jobs, onChanged, pick, onOpenMap, onPickSong }: Prop
           bar={cur}
           loop={loopBars}
           onPickBar={seekBar}
-          onSelect={(a, b) => startLoop(a, b, "")}
+          onSelect={selectLoop}
         />
       ) : score && score.measures.length > 0 ? (
         <ScoreSheet
@@ -189,11 +193,11 @@ export function PlayerTab({ jobs, onChanged, pick, onOpenMap, onPickSong }: Prop
           bar={cur}
           loop={loopBars}
           onPickBar={seekBar}
-          onSelect={(a, b) => startLoop(a, b, "")}
+          onSelect={selectLoop}
         />
       ) : bars.length > 0 ? (
         <BarGrid bars={bars} cur={cur} loop={loopBars} colors={colors} onPickBar={seekBar}
-          onSelect={(a, b) => startLoop(a, b, "")} />
+          onSelect={selectLoop} />
       ) : (
         <div className="empty">송 맵이 없어 마디를 모릅니다. 송 맵에서 1마디 1박과 BPM 을 잡아 주세요.</div>
       )}
@@ -215,9 +219,9 @@ function BarGrid({
   loop: { from: number; to: number } | null;
   colors: Map<string, string>;
   onPickBar: (bar: number) => void;
-  onSelect: (a: number, b: number) => void;
+  onSelect?: (a: number, b: number) => void;
 }) {
-  const drag = useBarDrag(onSelect, onPickBar);
+  const drag = useBarDrag(onSelect ?? (() => {}), onPickBar);
   const groups = useMemo(() => {
     const out: { name: string; bars: Bar[] }[] = [];
     let name = "";
@@ -232,7 +236,7 @@ function BarGrid({
   const lo = drag.sel ? Math.min(drag.sel.a, drag.sel.b) : 0;
   const hi = drag.sel ? Math.max(drag.sel.a, drag.sel.b) : -1;
   return (
-    <div className="panel bargrid" {...drag.props}>
+    <div className={`panel bargrid${onSelect ? " selecting" : ""}`} {...(onSelect ? drag.props : {})}>
       {groups.map((g) => (
         <div key={g.bars[0].bar} className="bargroup">
           <div className="meta bargroup-name" style={{ color: colorOf(colors, g.name) ?? undefined }}>
@@ -245,6 +249,7 @@ function BarGrid({
                 data-bar={b.bar}
                 className={`barcell${b.bar === cur ? " on" : ""}${loop && b.bar >= loop.from && b.bar <= loop.to ? " inloop" : ""}${b.bar >= lo && b.bar <= hi ? " picking" : ""}`}
                 title={`${b.bar}마디 (${b.beats_per_bar}/${b.beat_unit})`}
+                onClick={onSelect ? undefined : () => onPickBar(b.bar)}
               >
                 {b.bar}
               </div>

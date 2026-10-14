@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { DrawResult } from "../lib/drawNotation";
 import { pageLayout, type Notation } from "../lib/notation";
 import type { ScoreData } from "../types";
-import { useBarDrag } from "./ScoreView";
+import { useBarDrag, useSwipePages } from "./ScoreView";
 
 /** 쪽 비율 (A4 세로) */
 const PAGE_W = 1100;
@@ -111,6 +111,7 @@ export function NotationView({
   }, [notation, narrow, usePages, pages, pv]);
 
   const drag = useBarDrag(onSelect ?? (() => {}), onPickBar);
+  const swipe = useSwipePages(() => setView(Math.max(0, pv - 1)), () => setView(Math.min(pages.length - 1, pv + 1)));
   const lo = drag.sel ? Math.min(drag.sel.a, drag.sel.b) : 0;
   const hi = drag.sel ? Math.max(drag.sel.a, drag.sel.b) : -1;
 
@@ -133,13 +134,13 @@ export function NotationView({
 
   return (
     <div
-      className={`notation${usePages ? " paged" : ""}`}
+      className={`notation${usePages ? " paged" : ""}${onSelect ? " selecting" : ""}`}
       ref={host}
       // 화면 높이 − 아래 재생 막대·쪽 넘김 버튼 자리
       style={usePages ? { maxWidth: `calc((100vh - 150px) * ${PAGE_W / PAGE_H})` } : undefined}
     >
       {err && <div className="err">{err}</div>}
-      <div className="notation-page" {...(onSelect ? drag.props : {})}>
+      <div className="notation-page" {...(onSelect ? drag.props : usePages ? swipe.props : {})}>
         <div ref={svgBox} className="notation-svg" />
         {res &&
           res.boxes.map((b) => {
@@ -153,7 +154,7 @@ export function NotationView({
                 data-bar={b.bar}
                 className={`score-bar${on ? " on" : ""}${inLoop ? " inloop" : ""}${sel ? " editing" : ""}${picking ? " picking" : ""}`}
                 title={`${b.bar}마디`}
-                onClick={onSelect ? undefined : () => onPickBar(b.bar)}
+                onClick={onSelect ? undefined : () => !swipe.swiped.current && onPickBar(b.bar)}
                 style={{
                   left: `${(b.x / res.width) * 100}%`,
                   top: `${(b.y / res.height) * 100}%`,
