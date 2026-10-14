@@ -386,6 +386,10 @@ button.danger { background: var(--err); }
   scroll-margin: 90px 0; }
 .nt-pop-arrow { position: absolute; top: -7px; width: 12px; height: 12px; margin-left: -6px; transform: rotate(45deg);
   background: var(--panel); border-left: 1px solid #8b5cf6; border-top: 1px solid #8b5cf6; }
+.drawpad-canvas { position: relative; width: 100%; margin-top: 6px; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
+.drawpad-canvas canvas { position: absolute; left: 0; top: 0; display: block; }
+.drawpad-canvas canvas:last-child { touch-action: none; cursor: crosshair; }
+.drawpad-result { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border); }
 @media (pointer: coarse) { .ntcell { height: 34px; } .ntrow { grid-template-columns: 44px repeat(var(--steps), minmax(24px, 1fr)); } }
 .nted label.inline { display: inline-flex; align-items: center; gap: 5px; margin: 0; }
 .nted label.inline select, .nted label.inline input { width: auto; padding: 4px 6px; }

@@ -17,6 +17,7 @@ import {
   type Notation,
 } from "../lib/notation";
 import type { Bar, Job, MapRange, SongMap } from "../types";
+import { DrawPad } from "./DrawPad";
 import { NotationView } from "./NotationView";
 
 const SYM_LABEL: Record<string, string> = {
@@ -55,6 +56,9 @@ export function NotationEditor({
   const [sel, setSel] = useState<{ from: number; to: number } | null>(null);
   const [dirty, setDirty] = useState(false);
   const [editing, setEditing] = useState(false);
+  // 손으로 그리기: 그릴 마디 범위 (편집 칸 대신 그리기 판이 뜬다)
+  const [draw, setDraw] = useState<{ from: number; to: number } | null>(null);
+  const [lines, setLines] = useState<[number, number][]>([]);
   const [msg, setMsg] = useState("");
   const [tool, setTool] = useState("x");
   const [clip, setClip] = useState<NMeasure[] | null>(null);
@@ -164,6 +168,7 @@ export function NotationEditor({
     undo.current = [];
     redo.current = [];
     setSel(null);
+    setDraw(null);
     setEditing(false);
   }
 
@@ -247,6 +252,12 @@ export function NotationEditor({
     );
 
   const n = sel?.from ?? 0;
+  // 그리기 범위: 고른 마디들, 또는 그 마디가 있는 줄 전체 (8마디까지)
+  const drawRange = (s: { from: number; to: number }, line: boolean) => {
+    const ln = line ? lines.find(([a, b]) => s.from >= a && s.from <= b) : undefined;
+    const [a, b] = ln ?? [s.from, s.to];
+    return { from: a, to: Math.min(b, a + 7, nt.measures.length) };
+  };
   const pickBar = (b: number) => {
     setSel({ from: b, to: b });
     onSeek(b);
@@ -323,8 +334,29 @@ export function NotationEditor({
         onPickBar={editing ? pickBar : onSeek}
         onSelect={editing ? (a, b) => setSel({ from: a, to: b }) : undefined}
         follow={!editing || !sel}
-        popupBar={editing && cur && canEdit ? sel!.from : null}
-        popup={editing && cur && canEdit && (
+        onLines={setLines}
+        popupBar={editing && cur && canEdit ? (draw ? draw.from : sel!.from) : null}
+        popup={editing && cur && canEdit && (draw ? (
+          <DrawPad
+            key={`${draw.from}-${draw.to}`}
+            jobId={job.id}
+            firstBar={draw.from}
+            measures={nt.measures.slice(draw.from - 1, draw.to)}
+            onClose={() => setDraw(null)}
+            onApply={(ms) => {
+              update((prev) => {
+                const all = prev.measures.slice();
+                ms.forEach((m, i) => {
+                  const k = draw.from - 1 + i;
+                  if (k < all.length) all[k] = { ...all[k], steps: m.steps, lanes: m.lanes, simile: false };
+                });
+                return { ...prev, measures: all };
+              });
+              setSel({ from: draw.from, to: draw.to });
+              setDraw(null);
+            }}
+          />
+        ) : (
         <div className="nted">
           <div className="actions" style={{ marginTop: 0 }}>
             <button className="ghost" onClick={() => n > 1 && setSel({ from: n - 1, to: n - 1 })} disabled={n <= 1}>◀</button>
@@ -335,6 +367,12 @@ export function NotationEditor({
             <button className="ghost" onClick={() => n < nt.measures.length && setSel({ from: n + 1, to: n + 1 })} disabled={n >= nt.measures.length}>▶</button>
             <button className="ghost" onClick={() => onPlayFrom(n)} title="이 마디부터 재생 (예비박)">▶ 여기서 재생</button>
             <span style={{ flex: 1 }} />
+            <button className="ghost" onClick={() => setDraw(drawRange(sel!, false))} title="펜으로 그려서 AI 가 읽기 (고른 마디들)">
+              ✍ 그리기{sel!.to > sel!.from ? ` (${Math.min(8, sel!.to - sel!.from + 1)}마디)` : ""}
+            </button>
+            <button className="ghost" onClick={() => setDraw(drawRange(sel!, true))} title="이 마디가 있는 줄 전체를 펜으로">
+              ✍ 이 줄
+            </button>
             <button className="ghost" onClick={() => setSel(null)} aria-label="닫기" title="닫기">✕</button>
             <span className="meta">|</span>
             <label className="inline">
@@ -444,7 +482,7 @@ export function NotationEditor({
             <div className="meta">앞 마디와 같습니다 — % 로 표시할 수 있습니다.</div>
           )}
         </div>
-        )}
+        ))}
       />
       {editing && !cur && <div className="meta" style={{ marginTop: 6 }}>고칠 마디를 누르세요. 여러 마디를 끌어 고르면 복사·삭제를 한꺼번에.</div>}
       {!editing && canEdit && <div className="meta" style={{ marginTop: 6 }}>마디를 누르면 그 마디로 이동합니다. 고치려면 ✏ 편집.</div>}

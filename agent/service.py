@@ -3,6 +3,7 @@
 POST /runs        {job_id, score_url, overwrite?, dry_run?}  → 대기열에 넣는다 (한 번에 하나씩)
 GET  /runs/{id}   진행 상황 (상태·기록·결과)
 GET  /health      인증(OAuth) 준비 여부
+POST /recognize   {image, measures, first_bar} → 손으로 그린 악보를 칸으로 (몇 초~수십 초, 바로 돌려준다)
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ from typing import Optional
 
 from fastapi import Body, FastAPI, HTTPException
 
+from recognize import recognize
 from runner import auth_status, run_agent
 from tools import WORK, Run
 
@@ -22,6 +24,8 @@ app = FastAPI(title="demucs-agent")
 runs: dict[str, Run] = {}
 queue: "asyncio.Queue[Run]" = asyncio.Queue()
 meta: dict[str, dict] = {}
+# 손글씨 인식은 AI 악보 대기열과 따로, 동시에 둘까지
+draw_slots = asyncio.Semaphore(2)
 
 
 def _status_file(job_id: str) -> Path:
@@ -100,6 +104,24 @@ async def start(payload: dict = Body(...)):
     run.log("대기열에 들어갔습니다")
     await queue.put(run)
     return view(run)
+
+
+@app.post("/recognize")
+async def recognize_drawing(payload: dict = Body(...)):
+    if not auth_status()["ready"]:
+        raise HTTPException(503, "Claude 로그인이 안 되어 있습니다. README 'AI 악보' 의 OAuth 설정을 해 주세요.")
+    img = str(payload.get("image") or "")
+    ms = payload.get("measures")
+    if not img or not isinstance(ms, list):
+        raise HTTPException(400, "image 와 measures 가 필요합니다.")
+    async with draw_slots:
+        try:
+            return await recognize(img, ms, int(payload.get("first_bar") or 1))
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        except Exception as e:  # noqa: BLE001
+            traceback.print_exc()
+            raise HTTPException(502, f"인식하지 못했습니다: {e}") from e
 
 
 @app.get("/runs/{job_id}")

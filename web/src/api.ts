@@ -181,6 +181,11 @@ export const api = {
   notationHistory: (id: string) =>
     get<{ history: { at: number; note: string; measures: number }[] }>(`/api/jobs/${id}/notation/history`),
   restoreNotation: (id: string, index: number) => post<Notation>(`/api/jobs/${id}/notation/restore`, { index }),
+  /** 손으로 그린 마디(PNG) → 칸 (저장은 안 한다) */
+  recognizeDrawing: (
+    id: string,
+    body: { image: string; first_bar: number; measures: { beats: number; unit: number; steps: number }[] },
+  ) => post<{ measures: Notation["measures"]; note?: string; seconds?: number }>(`/api/jobs/${id}/notation/recognize`, body),
   deleteJob: (id: string) => del(`/api/jobs/${id}`),
 
   // --- 검색 ---

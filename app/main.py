@@ -720,6 +720,17 @@ def put_notation(job_id: str, payload: dict = Body(...)):
     return data
 
 
+@app.post("/api/jobs/{job_id}/notation/recognize")
+def notation_recognize(job_id: str, payload: dict = Body(...)):
+    """{image: PNG(base64), measures: [{beats, unit, steps?}], first_bar} — 손으로 그린 마디를 칸으로 (저장은 안 한다)."""
+    _require_job(job_id)
+    img = str(payload.get("image") or "")
+    if len(img) > 8 * 1024 * 1024:
+        raise HTTPException(400, "그림이 너무 큽니다.")
+    return _agent("POST", "/recognize", {"image": img, "measures": payload.get("measures"),
+                                          "first_bar": payload.get("first_bar")}, timeout=240)
+
+
 @app.get("/api/jobs/{job_id}/notation/history")
 def notation_history(job_id: str):
     return {"history": notation.history(_score_dir(job_id))}
