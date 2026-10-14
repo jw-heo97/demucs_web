@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import { confirmBox } from "../lib/dialog";
+import { choose, confirmBox } from "../lib/dialog";
 import { useMe } from "../lib/me";
 import {
   LANES,
@@ -22,7 +22,8 @@ import { NotationView } from "./NotationView";
 const SYM_LABEL: Record<string, string> = { x: "침", ">": "악센트", g: "고스트", f: "플램", o: "열린 HH", "-": "지우개" };
 
 /**
- * 송 맵의 악보 편집 (음표 수준). 마디를 누르면 아래에 그 마디의 칸 편집기가 열린다.
+ * 송 맵의 악보 편집 (음표 수준). 평소에는 보기만 한다 — 마디를 누르면 그 마디로 이동.
+ * '편집' 을 눌러 편집 모드에 들어가면 마디를 누를 때 아래에 그 마디의 칸 편집기가 열린다.
  * 칸을 누르면 고른 기호를 넣고(같은 기호면 지움), 오선 악보가 바로 다시 그려진다.
  * 저장하면 서버에 통째로 (바로 전 것은 이력에).
  */
@@ -50,6 +51,7 @@ export function NotationEditor({
   const [nt, setNt] = useState<Notation | null | undefined>(undefined);
   const [sel, setSel] = useState<{ from: number; to: number } | null>(null);
   const [dirty, setDirty] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [msg, setMsg] = useState("");
   const [tool, setTool] = useState("x");
   const [clip, setClip] = useState<NMeasure[] | null>(null);
@@ -62,6 +64,7 @@ export function NotationEditor({
     setNt(undefined);
     setSel(null);
     setDirty(false);
+    setEditing(false);
     undo.current = [];
     redo.current = [];
     if (!has) {
@@ -113,20 +116,52 @@ export function NotationEditor({
       return m;
     });
     change({ version: 1, tempo: map?.bpm, measures: ms });
+    setEditing(true);
     setSel({ from: 1, to: 1 });
   }
 
-  async function save() {
-    if (!nt) return;
+  async function save(): Promise<boolean> {
+    if (!nt) return false;
     setMsg("저장 중…");
     try {
       const saved = await api.saveNotation(job.id, nt, "편집");
       setNt(saved);
       setDirty(false);
       setMsg("저장했습니다.");
+      return true;
     } catch (e) {
       setMsg((e as Error).message);
+      return false;
     }
+  }
+
+  // 편집 끝 — 저장 안 한 게 있으면 저장할지 버릴지 묻는다
+  async function endEdit() {
+    if (dirty) {
+      const v = await choose({
+        title: "편집 끝내기",
+        message: "저장하지 않은 변경이 있습니다.",
+        items: [
+          { label: "저장하고 끝내기", value: "save" },
+          { label: "변경 버리기", sub: "마지막으로 저장한 악보로 되돌립니다", value: "drop" },
+        ],
+      });
+      if (v === "save") {
+        if (!(await save())) return;
+      } else if (v === "drop") {
+        try {
+          setNt(has ? await api.notation(job.id) : null);
+        } catch {
+          setNt(null);
+        }
+        setDirty(false);
+        setMsg("");
+      } else return;
+    }
+    undo.current = [];
+    redo.current = [];
+    setSel(null);
+    setEditing(false);
   }
 
   // 악보의 박자·구간 → 송 맵 구간 (1마디 1박·BPM 은 그대로)
@@ -165,7 +200,7 @@ export function NotationEditor({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.closest("input, select, textarea")) return;
-      if (!nt) return;
+      if (!nt || !editing) return;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
         e.preventDefault();
         const p = undo.current.pop();
@@ -189,7 +224,7 @@ export function NotationEditor({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [nt, sel]);
+  }, [nt, sel, editing]);
 
   if (nt === undefined) return null;
   if (nt === null)
@@ -259,29 +294,35 @@ export function NotationEditor({
         </h2>
         <span style={{ flex: 1 }} />
         {mismatch && <span className="err" title={mismatch}>⚠ 송 맵과 다름</span>}
-        {canEdit && map && (
+        {editing && canEdit && map && (
           <button className="ghost" onClick={toMap} title="악보의 박자·구간 이름으로 송 맵 구간을 다시 만듭니다 (1마디 1박·BPM 은 그대로)">
             송 맵에 박자·구간 반영
           </button>
         )}
-        {canEdit && (
+        {editing && (
           <button onClick={() => void save()} disabled={!dirty}>
             {dirty ? "저장" : "저장됨"}
           </button>
         )}
+        {canEdit &&
+          (editing ? (
+            <button className="ghost" onClick={() => void endEdit()}>편집 끝</button>
+          ) : (
+            <button className="ghost" onClick={() => setEditing(true)}>✏ 편집</button>
+          ))}
       </div>
       {msg && <div className="meta" style={{ marginBottom: 6 }}>{msg}</div>}
 
       <NotationView
         notation={nt}
         bar={bar}
-        selected={sel}
-        onPickBar={pickBar}
-        onSelect={(a, b) => setSel({ from: a, to: b })}
-        follow={!sel}
+        selected={editing ? sel : null}
+        onPickBar={editing ? pickBar : onSeek}
+        onSelect={editing ? (a, b) => setSel({ from: a, to: b }) : undefined}
+        follow={!editing || !sel}
       />
 
-      {cur && canEdit && (
+      {editing && cur && canEdit && (
         <div className="nted">
           <div className="actions" style={{ marginTop: 8 }}>
             <button className="ghost" onClick={() => n > 1 && setSel({ from: n - 1, to: n - 1 })} disabled={n <= 1}>◀</button>
@@ -400,7 +441,8 @@ export function NotationEditor({
           )}
         </div>
       )}
-      {!cur && <div className="meta" style={{ marginTop: 6 }}>마디를 누르면 그 마디를 고칠 수 있습니다. 여러 마디를 끌어 고르면 복사·삭제를 한꺼번에.</div>}
+      {editing && !cur && <div className="meta" style={{ marginTop: 6 }}>고칠 마디를 누르세요. 여러 마디를 끌어 고르면 복사·삭제를 한꺼번에.</div>}
+      {!editing && canEdit && <div className="meta" style={{ marginTop: 6 }}>마디를 누르면 그 마디로 이동합니다. 고치려면 ✏ 편집.</div>}
     </div>
   );
 }
