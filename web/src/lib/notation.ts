@@ -3,7 +3,8 @@
  *
  *   {beats: 4, unit: 4, steps: 16, lanes: {hh: "x-x-x-x-x-x-x-x-", sn: "----x-------x---", bd: "x-------x-x-----"}}
  *
- * 칸 기호: '-' 없음, 'x' 침, '>' 악센트, 'g' 고스트, 'f' 플램, 'o' 열린 하이햇(hh 만).
+ * 칸 기호: '-' 없음, 'x' 침, '>' 악센트, 'g' 고스트, 'f' 플램, 'o' 열린 하이햇(hh 만),
+ * '1' '2' '3' 기둥 사선(더블 스트로크 — 사선 수만큼 쪼개 친다), 'z' 버즈.
  * 오선으로 그리는 것은 drawNotation.ts.
  */
 
@@ -117,7 +118,7 @@ export function setCell(m: NMeasure, lane: Lane, i: number, c: string): NMeasure
 
 /** 칸을 누를 때 기호 순환 */
 export function nextSymbol(lane: Lane, c: string): string {
-  const order = lane === "hh" ? ["-", "x", "o", ">", "g"] : ["-", "x", ">", "g", "f"];
+  const order = lane === "hh" ? ["-", "x", "o", ">", "g"] : ["-", "x", ">", "g", "f", "1", "2"];
   const i = order.indexOf(c);
   return order[(i + 1) % order.length];
 }

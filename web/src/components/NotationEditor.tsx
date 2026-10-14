@@ -19,7 +19,10 @@ import {
 import type { Bar, Job, MapRange, SongMap } from "../types";
 import { NotationView } from "./NotationView";
 
-const SYM_LABEL: Record<string, string> = { x: "침", ">": "악센트", g: "고스트", f: "플램", o: "열린 HH", "-": "지우개" };
+const SYM_LABEL: Record<string, string> = {
+  x: "침", ">": "악센트", g: "고스트", f: "플램", o: "열린 HH",
+  "1": "더블 (사선 1)", "2": "사선 2", "3": "사선 3", z: "버즈", "-": "지우개",
+};
 
 /**
  * 송 맵의 악보 편집 (음표 수준). 평소에는 보기만 한다 — 마디를 누르면 그 마디로 이동.
@@ -371,7 +374,7 @@ export function NotationEditor({
 
           <div className="actions" style={{ marginTop: 4 }}>
             <span className="meta">넣을 기호</span>
-            {["x", ">", "g", "f", "o", "-"].map((s) => (
+            {["x", ">", "g", "f", "o", "1", "2", "3", "z", "-"].map((s) => (
               <button key={s} className={`ghost sym${tool === s ? " on" : ""}`} onClick={() => setTool(s)} title={SYM_LABEL[s]}>
                 {s === "-" ? "⌫" : s} <span className="meta">{SYM_LABEL[s]}</span>
               </button>

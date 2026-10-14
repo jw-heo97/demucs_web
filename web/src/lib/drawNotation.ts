@@ -19,6 +19,7 @@ import {
   Stave,
   StaveNote,
   Stem,
+  Tremolo,
   Tuplet,
   Voice,
 } from "vexflow/bravura";
@@ -50,6 +51,9 @@ interface Ev {
   ghost: boolean;
   flam: boolean;
   open: boolean;
+  /** 기둥 사선 수 (더블 스트로크 1·2·3) */
+  trem: number;
+  buzz: boolean;
 }
 
 function events(m: NMeasure, feet: boolean): Ev[] {
@@ -60,12 +64,14 @@ function events(m: NMeasure, feet: boolean): Ev[] {
     [...v].forEach((c, i) => {
       if (c === "-") return;
       const t = Math.round(i * st);
-      const e = byTick.get(t) ?? { tick: t, keys: [], accent: false, ghost: true, flam: false, open: false };
+      const e = byTick.get(t) ?? { tick: t, keys: [], accent: false, ghost: true, flam: false, open: false, trem: 0, buzz: false };
       if (!e.keys.includes(KEY[lane])) e.keys.push(KEY[lane]);
       if (c === ">") e.accent = true;
       if (c !== "g") e.ghost = false;
       if (c === "f") e.flam = true;
       if (c === "o") e.open = true;
+      if (c >= "1" && c <= "3") e.trem = Math.max(e.trem, Number(c));
+      if (c === "z") e.buzz = true;
       byTick.set(t, e);
     });
   }
@@ -166,6 +172,8 @@ function buildVoice(m: NMeasure, feet: boolean, solo: boolean) {
       if (t.ev.accent) n.addModifier(new Articulation("a>").setPosition(feet ? 4 : 3), 0);
       if (t.ev.open) n.addModifier(new Annotation("o").setVerticalJustification(Annotation.VerticalJustify.TOP), 0);
       if (t.ev.ghost) Parenthesis.buildAndAttach([n]);
+      if (t.ev.trem) n.addModifier(new Tremolo(t.ev.trem), 0);
+      if (t.ev.buzz) n.addModifier(new Annotation("z").setVerticalJustification(feet ? Annotation.VerticalJustify.BOTTOM : Annotation.VerticalJustify.TOP), 0);
       if (t.ev.flam) {
         const g = new GraceNote({ keys: [t.ev.keys[0]], duration: "8", slash: true, stem_direction: stem });
         n.addModifier(new GraceNoteGroup([g], false), 0);
