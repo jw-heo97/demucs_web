@@ -10,7 +10,8 @@ RUN pip install --no-cache-dir "claude-agent-sdk>=0.2" "yt-dlp[default]" pymupdf
 # SDK 에 들어 있는 Claude Code CLI 를 PATH 에 — `claude setup-token` 으로 OAuth 토큰을 받을 때 쓴다
 RUN ln -s "$(python -c 'import claude_agent_sdk,os;print(os.path.join(os.path.dirname(claude_agent_sdk.__file__),"_bundled","claude"))')" /usr/local/bin/claude
 
-RUN useradd -m -u 1000 app
+# api 컨테이너(appuser 10001)와 같은 uid — 곡 폴더(data/output)에 함께 쓴다
+RUN useradd -m -u 10001 app
 WORKDIR /srv
 COPY app/scores.py app/scorebuild.py app/notation.py ./
 COPY agent/*.py ./
