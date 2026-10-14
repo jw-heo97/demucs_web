@@ -642,7 +642,7 @@ def build_server(run: Run):
     @tool("write_measures",
           "받아 적은 마디들을 기록한다. measures=[{m: 마디 번호, beats, unit, steps, lanes: {악기: 칸 문자열}, "
           "simile?: true(악보에 %), section?: 구간 이름}]. 악기: cr cr2 spl chn rd rb hh t1 t2 sn rim ft cb bd hhp. "
-          "칸: '-' 없음 x 침 > 악센트 g 고스트 f 플램 o 열린 하이햇. 소리 대조 결과를 함께 돌려준다.",
+          "칸: '-' 없음 x 침 > 악센트 g 고스트 f 플램 o 열린 하이햇 1·2·3 기둥 사선(더블 스트로크) z 버즈. 소리 대조 결과를 함께 돌려준다.",
           S(["measures"], measures="array"))
     async def write_measures(args):
         done, errs = [], []
