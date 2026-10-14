@@ -78,11 +78,15 @@ def find_staves(ink, paper=None) -> list[dict]:
         gaps = np.diff(five)
         if gaps.min() > 4 and gaps.max() < 40 and gaps.max() - gaps.min() < max(2.0, 0.15 * gaps.mean()):
             top_g, bot_g = groups[i], groups[i + 4]
-            y_mid = int(round(five[0]))
-            cols = np.where(ink[y_mid])[0]
-            # 가로줄의 실제 범위: 가장 긴 연속 구간
+            # 가로줄의 실제 범위: 다섯 줄 중 셋 이상에 잉크가 있는 열 (줄 하나만 보면 음표 머리·흐린 선 때문에
+            # 끊긴 조각을 범위로 잡는다 — 라시사 띠가 447~679px 로 잡혀 마디선을 전부 놓쳤다)
+            rows5 = [int(round(y)) for y in five]
+            on = np.zeros(W, int)
+            for y in rows5:
+                on += ink[max(0, y - 1):y + 2].any(axis=0)
+            cols = np.where(on >= 3)[0]
             if len(cols):
-                splits = np.where(np.diff(cols) > 3)[0]
+                splits = np.where(np.diff(cols) > 8)[0]
                 segs = np.split(cols, splits + 1)
                 seg = max(segs, key=len)
                 x0, x1 = int(seg[0]), int(seg[-1])
@@ -90,7 +94,8 @@ def find_staves(ink, paper=None) -> list[dict]:
                 x0, x1 = 0, W - 1
             if paper is not None:
                 mids = [int(round((five[j] + five[j + 1]) / 2)) for j in range(4)]
-                if min(paper[m, x0:x1 + 1].mean() for m in mids) < 0.5:
+                # 네 칸 중 둘 이상이 흰 종이면 보표 — 한 칸이 음표로 꽉 찰 수 있다 (라시사의 스네어 16분 필인)
+                if sorted(paper[m, x0:x1 + 1].mean() for m in mids)[2] < 0.5:
                     i += 1
                     continue
             staves.append({"top": int(min(top_g)), "bot": int(max(bot_g)), "gap": float(gaps.mean()),
@@ -243,7 +248,7 @@ def build_pdf(src_dir: Path, proj: dict, out_pdf: Path, title: str = "") -> dict
             y = margin_top
             if not doc.page_count - 1 and title:
                 # 제목은 보이게 (첫 쪽 위)
-                page.insert_text((page_w / 2 - len(title) * 5, 28), title, fontsize=14, fontname="helv")
+                page.insert_text((page_w / 2 - len(title) * 6, 28), title, fontsize=14, fontname=_font_for(title))
         oy = y
         page.insert_image(pymupdf.Rect(0, oy, w_px * SCALE, oy + h), filename=str(img_path))
         sh = page.new_shape()

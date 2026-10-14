@@ -48,6 +48,7 @@ class Run:
         self.notes: dict[int, dict] = {}
         self.timing: Optional[dict] = None     # 소리 대조에 쓰는 anchor·bpm·beats
         self._onsets: Optional[dict] = None
+        self.refined: Optional[dict] = None
 
     def log(self, msg: str, kind: str = "info") -> None:
         self.log_lines.append({"t": round(time.time(), 1), "kind": kind, "msg": msg})
@@ -213,6 +214,42 @@ def _check(run: Run, a: int, b: int) -> str:
     return head + "\n" + "\n".join(rows) + (f"\n다시 볼 마디: {bad}" if bad else "\n⚠ 없음")
 
 
+def _match_rate(run: Run, anchor: float, bpm: float, beats: dict[int, float]) -> float:
+    """받아 적은 킥·스네어 중 곡 드럼 소리와 ±45ms 안에 맞는 비율."""
+    import numpy as np
+    on = _onsets(run)
+    q = 60 / bpm
+    t, tot, hit = anchor, 0, 0
+    for n in range(1, max(run.notes) + 1):
+        m = run.notes.get(n)
+        if m:
+            for tick, lane, c in nota.hits(m):
+                if lane in ("bd", "sn") and c != "g":
+                    tt = t + tick / nota.TPQ * q
+                    tot += 1
+                    g = on[lane]
+                    i = int(np.searchsorted(g, tt))
+                    if any(abs(g[j] - tt) <= 0.045 for j in (i - 1, i) if 0 <= j < len(g)):
+                        hit += 1
+        t += beats.get(n, 4.0) * q
+    return hit / max(tot, 1)
+
+
+def refine_anchor(run: Run, anchor: float, bpm: float, beats: dict[int, float]) -> dict:
+    """1마디 1박을 박 단위(±4박)·10ms 단위로 밀어 보며 받아 적은 음표가 소리와 가장 잘 맞는 자리를 찾는다.
+    띠가 넘어가는 시각만으로는 한 박쯤 틀릴 수 있다 (라시사: -0.26초 → 맞는 자리 0.104초, 일치 53% → 90%)."""
+    import numpy as np
+    q = 60 / bpm
+    rows = []
+    for k in range(-4, 5):
+        best = max((_match_rate(run, anchor + k * q + d, bpm, beats), anchor + k * q + d)
+                   for d in np.arange(-0.06, 0.0601, 0.01))
+        rows.append({"shift_beats": k, "anchor": round(best[1], 4), "match": round(best[0], 3)})
+    top = max(rows, key=lambda r: r["match"])
+    now = next(r for r in rows if r["shift_beats"] == 0)
+    return {"now": now, "best": top, "table": rows}
+
+
 async def _api(method: str, path: str, **kw) -> Any:
     async with httpx.AsyncClient(base_url=API, timeout=120) as c:
         r = await c.request(method, path, **kw)
@@ -299,7 +336,7 @@ def build_server(run: Run):
         if not st:
             return _err("띠가 없습니다")
         start = max(0, int(args.get("start", 0)))
-        count = max(1, min(8, int(args.get("count", 6))))
+        count = max(1, min(6, int(args.get("count", 6))))
         sheet = await asyncio.to_thread(sv.strips_sheet, run.strip_dir, st, start, count)
         return _ok(f"#{start}~#{min(len(st), start + count) - 1} / 전체 {len(st)}개", _img(sheet, 1400))
 
@@ -342,6 +379,32 @@ def build_server(run: Run):
         run.built = None
         sheet = await asyncio.to_thread(sv.strips_sheet, run.strip_dir, st, i, 1)
         return _ok(f"#{i} 고침 — 마디 {sb.measures_of(s)}개, 합계 {sb.total_measures(run.proj)}마디", _img(sheet, 1400))
+
+    @tool("add_strip",
+          "띠 뽑기가 놓친 장면을 띠로 끼워 넣는다: 영상 시각 t 의 악보 띠(extract_strips 에 쓴 box)를 잡아 마디선을 찾고, "
+          "시각 순서 자리에 넣는다. 띠가 화면에 있던 끝 시각 t1 을 주면 그 시간으로 마디 수를 검산할 수 있다.",
+          S(["t"], t="number", t1="number"))
+    async def add_strip(args):
+        if not run.video or not run.proj.get("box"):
+            return _err("먼저 extract_strips")
+        t = float(args["t"])
+        im = await asyncio.to_thread(sv.frame, run.video, t, run.proj["box"])
+        import numpy as np
+        rgb = np.asarray(im)
+        info = sb.analyze_strip(rgb)
+        if not info["staves"]:
+            return _err(f"{t}초 장면에서 보표를 찾지 못했습니다. look 으로 확인하세요.")
+        st = run.proj["strips"]
+        i = sum(1 for s in st if s["t0"] <= t)
+        name = f"strip-add-{int(t * 100):06d}.png"
+        im.save(run.strip_dir / name)
+        t1 = float(args.get("t1") or (st[i]["t0"] if i < len(st) else t + 4))
+        if i > 0 and st[i - 1]["t1"] > t:
+            st[i - 1]["t1"] = t
+        st.insert(i, {"t0": round(t, 2), "t1": round(t1, 2), "img": name, "marks": [], "repeat": 1, **info})
+        run.built = None
+        sheet = await asyncio.to_thread(sv.strips_sheet, run.strip_dir, st, i, 1)
+        return _ok(f"#{i} 에 넣었습니다 — 마디 {sb.measures_of(st[i])}개, 합계 {sb.total_measures(run.proj)}마디", _img(sheet, 1400))
 
     @tool("align_audio",
           "영상 소리와 곡 소리를 맞대 시차를 구하고(offset), 곡 드럼으로 박 간격·위상을 맞춘 뒤, 띠가 나타난 시각으로 "
@@ -397,6 +460,25 @@ def build_server(run: Run):
         page1 = Image.open(ana_dir / "_score" / "page-1.png")
         return _ok(json.dumps(run.built, ensure_ascii=False), _img(page1, 1200))
 
+    @tool("refine_timing",
+          "음표를 다 받아 적은 뒤: 1마디 1박을 한 박씩(±4박) 밀어 보며 킥·스네어가 곡 드럼 소리와 가장 잘 맞는 자리를 찾는다.",
+          S(["anchor", "bpm"], anchor="number", bpm="number", beats="object"))
+    async def refine_timing(args):
+        if not run.notes:
+            return _err("먼저 write_measures 로 음표를 적으세요")
+        beats = {int(k): float(v) for k, v in (args.get("beats") or {}).items()}
+        try:
+            r = await asyncio.to_thread(refine_anchor, run, float(args["anchor"]), float(args["bpm"]), beats)
+        except RuntimeError as e:
+            return _err(str(e))
+        run.refined = r
+        msg = (f"지금 anchor {r['now']['anchor']} 일치 {r['now']['match']*100:.1f}% / "
+               f"가장 잘 맞는 자리 {r['best']['anchor']} ({r['best']['shift_beats']:+d}박) 일치 {r['best']['match']*100:.1f}%\n")
+        msg += "\n".join(f"{x['shift_beats']:+d}박 {x['anchor']:.3f}s {x['match']*100:.1f}%" for x in r["table"])
+        if r["best"]["shift_beats"] != 0 and r["best"]["match"] - r["now"]["match"] >= 0.1:
+            msg += "\n→ 가장 잘 맞는 자리를 1마디 1박으로 쓰세요 (save_result 의 anchor)."
+        return _ok(msg)
+
     @tool("save_result",
           "결과를 곡에 저장한다: 악보 PDF(score.pdf)와 송 맵 새 버전. anchor·bpm 은 align_audio 결과로, "
           "beats 는 박 수 예외 {마디: 박수}, names 는 구간 이름 {마디: 이름} (생략하면 띠의 구간 표시를 쓴다).",
@@ -425,6 +507,17 @@ def build_server(run: Run):
                 ranges.append({"from_bar": m, "name": nm or ("" if m > 1 else ""), "beats_per_bar": bpb,
                                "beat_unit": unit, "bpm": None, "click_beats": None})
             prev_b, prev_n = b, nm or prev_n
+        # 음표가 있으면 1마디 1박을 소리로 검산한다 — 한 박 넘게 틀린 자리로 저장하지 않게
+        if run.notes and len(run.notes) >= max(4, total // 2):
+            try:
+                r = await asyncio.to_thread(refine_anchor, run, float(args["anchor"]), float(args["bpm"]), beats)
+            except RuntimeError:
+                r = None
+            far = r and abs(r["best"]["anchor"] - float(args["anchor"])) > 0.5 * 60 / float(args["bpm"])
+            if far and r["best"]["match"] - r["now"]["match"] >= 0.1:
+                return _err(f"1마디 1박 {args['anchor']} 에서는 받아 적은 킥·스네어가 소리와 {r['now']['match']*100:.0f}% 맞고, "
+                            f"{r['best']['anchor']} ({r['best']['shift_beats']:+d}박) 에서는 {r['best']['match']*100:.0f}% 맞습니다. "
+                            "anchor 를 고쳐 다시 save_result 하세요 (refine_timing 표 참고).")
         songmap = {"anchor": float(args["anchor"]), "bpm": float(args["bpm"]), "ranges": ranges}
         vname = (args.get("version_name") or "AI 악보").strip()
         run.timing = run.timing or {"anchor": songmap["anchor"], "bpm": songmap["bpm"], "beats": beats}
@@ -516,6 +609,9 @@ def build_server(run: Run):
                 continue
             run.notes[n] = one
             done.append(n)
+        if errs:
+            errs.append('형식 예: {"m": 5, "beats": 4, "unit": 4, "steps": 16, "lanes": {"hh": "x-x-x-x-x-x-x-x-", '
+                        '"sn": "----x-------x---", "bd": "x-------x-x-----"}} — 자세한 것은 스킬의 transcribe.md')
         total = len(_measure_index(run))
         left = [n for n in range(1, total + 1) if n not in run.notes]
         msg = f"기록 {len(done)}마디. 남은 마디 {len(left)}개" + (f" (처음 {left[:10]})" if left else "")
@@ -546,11 +642,14 @@ def build_server(run: Run):
     @tool("report", "끝내기 전에 반드시 부른다. status: done | failed. summary: 사용자에게 보일 한국어 요약 (무엇을 했고, 무엇이 불확실한지).",
           S(["status", "summary"], status="string", summary="string"))
     async def report(args):
-        run.reported = {"status": args["status"], "summary": args["summary"]}
+        st = str(args["status"]).strip().lower()
+        # 'ok'·'success' 처럼 적어도 성공으로 본다
+        st = "done" if st in ("done", "ok", "success", "succeeded", "완료") else "failed"
+        run.reported = {"status": st, "summary": args["summary"]}
         return _ok("기록했습니다. 이제 끝내도 됩니다.")
 
     tools = [get_job, download_video, look, find_score_band, extract_strips, show_strips, strip_table,
-             edit_strip, align_audio, build_score, set_timing, measure_images, write_measures, check_measures,
-             save_result, report]
+             edit_strip, add_strip, align_audio, build_score, set_timing, measure_images, write_measures, check_measures,
+             refine_timing, save_result, report]
     run.tools = {t.name: t for t in tools}   # 시험용: 에이전트 없이 바로 부를 수 있게
     return create_sdk_mcp_server("score", "1.0.0", tools), [f"mcp__score__{t.name}" for t in tools]
