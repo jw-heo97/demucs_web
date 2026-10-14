@@ -287,7 +287,8 @@ def build_pdf(src_dir: Path, proj: dict, out_pdf: Path, title: str = "") -> dict
         s.setdefault("_first", first_in_strip)
     out_pdf.parent.mkdir(parents=True, exist_ok=True)
     tmp = out_pdf.with_suffix(".pdf.tmp")
-    doc.save(str(tmp))
+    # 띠 그림은 압축 없이 들어간다 — 1080p 띠 23개면 36MB 라 서버 한도(30MB)를 넘었다 (압축하면 2.5MB)
+    doc.save(str(tmp), deflate=True, garbage=3)
     pages = doc.page_count
     doc.close()
     os.replace(tmp, out_pdf)
