@@ -1,6 +1,6 @@
 ---
 name: drum-score-video
-description: 드럼 연주 영상(YouTube)에 나오는 악보 띠를 뽑아 악보 PDF 와 음표 악보(마디별 악기 칸)를 만들고, 분리된 곡 음원에 맞춘 송 맵(1마디 1박·BPM·박자·구간 이름)을 저장한다. score 도구(get_job, download_video, find_score_band, extract_strips, edit_strip, align_audio, build_score, set_timing, measure_images, write_measures, check_measures, save_result, report)와 함께 쓴다.
+description: 드럼 연주 영상(YouTube)에 나오는 악보 띠를 뽑아 악보 PDF 와 음표 악보(마디별 악기 칸)를 만들고, 분리된 곡 음원에 맞춘 송 맵(1마디 1박·BPM·박자·구간 이름)을 저장한다. score 도구(get_job, download_video, find_score_band, extract_strips, edit_strip, add_strip, align_audio, build_score, set_timing, measure_images, write_measures, check_measures, refine_timing, save_result, report)와 함께 쓴다.
 ---
 
 # 연주 영상 → 악보 + 송 맵
@@ -34,6 +34,9 @@ description: 드럼 연주 영상(YouTube)에 나오는 악보 띠를 뽑아 악
    - **같은 띠가 연달아 두 번** (반복 구간을 같은 그림으로 두 번 보여줌 → 화면이 안 바뀌어 하나로 합쳐짐)
      → 시간이 정확히 2배면 edit_strip(repeat=2). 구간 이름 상자만 다른 경우는 따로 잡힌다.
    - **마지막 띠** — 곡이 끝나고도 띠가 남아 있으면 시간이 길다. 무시해도 된다.
+   - **띠 하나가 통째로 빠짐** → 앞 띠의 끝과 다음 띠의 시작 사이가 비거나, align_audio 의 strip_lead_sec 가
+     어느 띠부터 한 띠 길이만큼 벌어진다. look 으로 그 시각을 보고 add_strip(t, t1) 로 끼워 넣는다
+     (다른 띠를 repeat 로 늘려 마디 수만 맞추지 말 것 — 악보 그림이 틀린다).
    악보가 아닌 장면(제목 화면·엔딩)이 띠로 잡히면 edit_strip(skip=true).
    **모든 띠를 show_strips 로 한 번씩은 본다** (6~8개씩). 마디 번호가 띠 왼쪽에 적혀 있으면
    (예: `21`) 빨간 숫자와 맞는지 대조한다 — 가장 확실한 검산이다.
@@ -58,7 +61,7 @@ description: 드럼 연주 영상(YouTube)에 나오는 악보 띠를 뽑아 악
    다르면 훅이 저장을 막는다. 구간 이름이 marks 로 읽혔는지도 본다.
 
 9. **음표 받아 적기** — [transcribe.md](transcribe.md) 를 읽고 따른다: set_timing → measure_images →
-   write_measures (전부) → ⚠ 마디 다시 보기. 사용자가 송 맵에서 음표를 고치는 출발점이다.
+   write_measures (전부) → ⚠ 마디 다시 보기 → refine_timing 으로 1마디 1박 검산. 사용자가 송 맵에서 음표를 고치는 출발점이다.
 
 10. **save_result(anchor, bpm, beats)** — 송 맵은 새 버전("AI 악보")으로 저장되고 활성화된다
    (사용자의 기존 버전은 남는다). names 를 생략하면 띠의 구간 표시를 쓴다.

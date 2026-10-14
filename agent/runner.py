@@ -42,6 +42,13 @@ def _hooks(run: Run, tool_names: list[str]):
 
     async def pre(inp, tool_use_id, ctx):
         name = inp.get("tool_name", "")
+        # 스킬의 설명서(transcribe.md 등)는 읽게 한다 — 막으면 형식을 시행착오로 맞추느라 턴을 버린다
+        if name == "Read" and str((inp.get("tool_input") or {}).get("file_path", "")).startswith(str(WORKSPACE / ".claude")):
+            run.log(f"설명서 읽기: {Path(inp['tool_input']['file_path']).name}", "tool")
+            return {}
+        # 도구가 많으면 Claude Code 가 도구 설명을 미뤄 두고 ToolSearch 로 불러오게 한다 — 막으면 아무 도구도 못 쓴다
+        if name == "ToolSearch":
+            return {}
         if name in tool_names or name == "Skill":
             short = name.split("__")[-1]
             args = inp.get("tool_input") or {}
@@ -112,7 +119,7 @@ async def run_agent(run: Run) -> None:
     opts = ClaudeAgentOptions(
         system_prompt=SYSTEM,
         mcp_servers={"score": server},
-        allowed_tools=tool_names,
+        allowed_tools=tool_names + ["Read", "ToolSearch"],
         disallowed_tools=["Bash", "Write", "Edit", "NotebookEdit", "WebFetch", "WebSearch", "Task", "Agent"],
         skills=[SKILL],
         cwd=str(WORKSPACE),
@@ -120,6 +127,8 @@ async def run_agent(run: Run) -> None:
         model=os.environ.get("AGENT_MODEL") or None,
         max_turns=int(os.environ.get("AGENT_MAX_TURNS") or 90),
         permission_mode="bypassPermissions",
+        # 그림을 돌려주는 도구가 많다 — 기본 1MB 면 띠 여러 장을 한 번에 볼 때 넘친다 (라시사에서 실제로 멈춤)
+        max_buffer_size=16 * 1024 * 1024,
         env=env,
     )
     prompt = (f"곡 id {run.job_id} 에 악보를 붙여 줘. 악보 영상: {run.score_url}\n"
