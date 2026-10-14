@@ -170,6 +170,8 @@ export const api = {
     get<{ available: boolean; auth?: { ready: boolean }; detail?: string }>("/api/ai/health"),
   aiStart: (id: string, score_url: string, overwrite = false) =>
     post<AiRun>(`/api/jobs/${id}/ai-score`, { score_url, overwrite }),
+  /** 곡에 이미 있는 악보 PDF 로 음표 악보·송 맵 만들기 */
+  aiFromPdf: (id: string) => post<AiRun>(`/api/jobs/${id}/ai-score`, { mode: "pdf" }),
   aiStatus: (id: string) => get<AiRun>(`/api/jobs/${id}/ai-score`),
 
   // --- 음표 악보 (편집 가능) ---

@@ -175,6 +175,7 @@ export interface ScoreData {
 export interface AiRun {
   job_id: string;
   score_url: string;
+  mode?: "video" | "pdf";
   phase: "queued" | "running" | "done" | "failed";
   state: string;
   started?: number | null;

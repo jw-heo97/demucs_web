@@ -28,8 +28,13 @@ WORK = Path("/work")
 
 
 class Run:
-    def __init__(self, job_id: str, score_url: str, overwrite: bool = False, dry_run: bool = False):
+    def __init__(self, job_id: str, score_url: str, overwrite: bool = False, dry_run: bool = False,
+                 mode: str = "video"):
         self.job_id = job_id
+        # video: 연주 영상의 악보 띠에서 / pdf: 곡에 이미 있는 악보 PDF 에서 (PDF 는 그대로 두고 음표·송 맵만)
+        self.mode = mode
+        self.pdf: Optional[dict] = None          # _score.json (scores.py 분석 결과)
+        self.sections: dict[int, str] = {}      # 에이전트가 읽은 구간 이름 {음원 마디: 이름}
         self.score_url = score_url
         self.overwrite = overwrite
         self.dry_run = dry_run
@@ -122,8 +127,18 @@ def _strip_table(run: Run, bpm: Optional[float] = None, beats: float = 4.0) -> s
     return "\n".join(rows) + f"\n합계 {sb.total_measures(run.proj)}마디"
 
 
-def _measure_index(run: Run) -> list[tuple[dict, int, int, int]]:
-    """연주 순서 마디마다 (띠, 띠 번호, 보표 번호, 보표 안 마디 번호)."""
+def _pdf_order(run: Run) -> list[int]:
+    """음원 마디 n → 악보 마디 번호(1부터). 반복 기호가 있으면 펼친 순서."""
+    sc = run.pdf or {}
+    n = len(sc.get("measures", []))
+    order = sc.get("order")
+    return [k for k in order if 1 <= k <= n] if order else list(range(1, n + 1))
+
+
+def _measure_index(run: Run) -> list:
+    """연주 순서 마디마다 (띠, 띠 번호, 보표 번호, 보표 안 마디 번호). pdf 방식이면 악보 마디 번호."""
+    if run.mode == "pdf":
+        return _pdf_order(run)
     out = []
     for si, s in enumerate(run.proj["strips"]):
         if s.get("skip"):
@@ -135,7 +150,29 @@ def _measure_index(run: Run) -> list[tuple[dict, int, int, int]]:
     return out
 
 
+def _pdf_measure_crop(run: Run, n: int) -> Optional[Image.Image]:
+    """악보 PDF 에서 음원 n 번째 마디를 잘라 선명하게(200dpi) 그린다. 줄 첫 마디면 음자리표까지."""
+    import pymupdf
+    order = _pdf_order(run)
+    if not 1 <= n <= len(order):
+        return None
+    m = run.pdf["measures"][order[n - 1] - 1]
+    doc = pymupdf.open(run.song_dir / "score.pdf")
+    try:
+        page = doc[m["page"]]
+        g = (m["bot"] - m["top"]) / 4
+        x0 = m["sys_x0"] - 8 if abs(m["x0"] - m["sys_x0"]) < 1 else m["x0"] - 1.5 * g
+        clip = pymupdf.Rect(max(0, x0), max(0, m["y0"]), min(page.rect.width, m["x1"] + 1.5 * g),
+                            min(page.rect.height, m["y1"]))
+        pix = page.get_pixmap(dpi=200, clip=clip)
+        return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+    finally:
+        doc.close()
+
+
 def _measure_crop(run: Run, n: int) -> Optional[Image.Image]:
+    if run.mode == "pdf":
+        return _pdf_measure_crop(run, n)
     idx = _measure_index(run)
     if not 1 <= n <= len(idx):
         return None
@@ -277,6 +314,7 @@ def build_server(run: Run):
             "active_map": m.get("map"), "bars": len(m.get("bars", [])),
             "versions": [v["name"] for v in m.get("versions", [])],
             "score_video": run.score_url,
+            "mode": run.mode,
         }
         return _ok(json.dumps(info, ensure_ascii=False, indent=1))
 
@@ -485,11 +523,13 @@ def build_server(run: Run):
           S(["anchor", "bpm"], anchor="number", bpm="number", beats="object", names="object", version_name="string"))
     async def save_result(args):
         if not run.built:
-            return _err("먼저 build_score 로 PDF 를 만들고 검산하세요")
+            return _err("먼저 build_score 로 PDF 를 만들고 검산하세요" if run.mode == "video" else "먼저 pdf_overview")
         total = run.built["measures"]
         names: dict[int, str] = {}
         if args.get("names"):
             names = {int(k): str(v) for k, v in args["names"].items()}
+        elif run.mode == "pdf":
+            names = dict(run.sections)
         else:
             n = 1
             for s in sb.expanded(run.proj):
@@ -529,12 +569,13 @@ def build_server(run: Run):
             run.saved = {"dry_run": True, "map": songmap}
             return _ok(f"(시험 실행) 저장하지 않고 {out} 에 남겼습니다.\n" + json.dumps(songmap, ensure_ascii=False))
         has_score = any(f["rel"] == "score.pdf" for f in (await _api("GET", f"/api/jobs/{run.job_id}")).get("files", []))
-        if has_score and not run.overwrite:
+        if run.mode == "video" and has_score and not run.overwrite:
             return _err("이 곡에는 이미 악보가 있습니다. 덮어쓰기가 허락되지 않았으니 report 로 결과만 알리세요.")
         try:
-            pdf_bytes = Path(run.built["pdf"]).read_bytes()
-            await _api("PUT", f"/api/jobs/{run.job_id}/score", content=pdf_bytes,
-                       headers={"Content-Type": "application/pdf"})
+            if run.mode == "video":
+                pdf_bytes = Path(run.built["pdf"]).read_bytes()
+                await _api("PUT", f"/api/jobs/{run.job_id}/score", content=pdf_bytes,
+                           headers={"Content-Type": "application/pdf"})
             names_now = {v["name"] for v in (await _api("GET", f"/api/jobs/{run.job_id}/map")).get("versions", [])}
             base, k = vname, 2
             while vname in names_now:
@@ -558,12 +599,13 @@ def build_server(run: Run):
                     nt_note = f", 음표 악보 저장 실패: {e}"
             else:
                 nt_note = f", 음표 악보는 {sum(1 for m in ms if m)}/{total}마디뿐이라 저장 안 함"
-        # 악보 편집(송 맵)용 원본: 띠 그림 + 프로젝트
-        dst = run.song_dir / sb.SRC_DIR
-        if dst.exists():
-            shutil.rmtree(dst, ignore_errors=True)
-        shutil.copytree(run.strip_dir, dst)
-        sb.save_project(run.song_dir, run.proj)
+        # 악보 편집(송 맵)용 원본: 띠 그림 + 프로젝트 (영상 방식만)
+        if run.mode == "video":
+            dst = run.song_dir / sb.SRC_DIR
+            if dst.exists():
+                shutil.rmtree(dst, ignore_errors=True)
+            shutil.copytree(run.strip_dir, dst)
+            sb.save_project(run.song_dir, run.proj)
         run.saved = {"version": vname, "map": songmap}
         return _ok(f"저장했습니다 — 악보 {total}마디, 송 맵 버전 '{vname}' (활성){nt_note}")
 
@@ -609,6 +651,12 @@ def build_server(run: Run):
                 continue
             run.notes[n] = one
             done.append(n)
+            if run.mode == "pdf":
+                order = _pdf_order(run)
+                if 1 <= n <= len(order):
+                    for j, k in enumerate(order, 1):
+                        if k == order[n - 1] and j not in run.notes:
+                            run.notes[j] = dict(one)       # 반복으로 다시 나오는 같은 악보 마디
         if errs:
             errs.append('형식 예: {"m": 5, "beats": 4, "unit": 4, "steps": 16, "lanes": {"hh": "x-x-x-x-x-x-x-x-", '
                         '"sn": "----x-------x---", "bd": "x-------x-x-----"}} — 자세한 것은 스킬의 transcribe.md')
@@ -639,6 +687,76 @@ def build_server(run: Run):
         except RuntimeError as e:
             return _err(str(e))
 
+    @tool("pdf_overview",
+          "pdf 방식: 곡에 있는 악보 PDF 의 쪽 그림에 앱이 찾은 마디(빨간 상자, 음원 마디 번호)를 그려 보여주고, "
+          "마디 수·반복 순서·구간 표시·템포를 알려 준다. page 를 주면 그 쪽만 (1부터).",
+          S([], page="integer"))
+    async def pdf_overview(args):
+        import pymupdf
+        if not run.job:
+            run.job = await _api("GET", f"/api/jobs/{run.job_id}")
+        sc = await _api("GET", f"/api/jobs/{run.job_id}/score")
+        run.pdf = sc
+        order = _pdf_order(run)
+        if not order:
+            return _err("악보 PDF 에서 마디를 찾지 못했습니다 (스캔본?). 이 방식으로는 만들 수 없습니다.")
+        run.built = {"measures": len(order), "expect": len(order), "marks": sc.get("marks", []),
+                     "tempo": sc.get("tempo"), "warnings": sc.get("warnings", []), "pages": len(sc.get("pages", []))}
+        first_bar: dict[int, int] = {}
+        for n, k in enumerate(order, 1):
+            first_bar.setdefault(k, n)
+        doc = pymupdf.open(run.song_dir / "score.pdf")
+        pages = [int(args["page"]) - 1] if args.get("page") else list(range(min(2, doc.page_count)))
+        ims = []
+        try:
+            for pi in pages:
+                if not 0 <= pi < doc.page_count:
+                    continue
+                pix = doc[pi].get_pixmap(dpi=100)
+                im = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+                d = ImageDraw.Draw(im)
+                z = 100 / 72
+                for k, m in enumerate(sc["measures"], 1):
+                    if m["page"] != pi:
+                        continue
+                    d.rectangle([m["x0"] * z, m["top"] * z - 6, m["x1"] * z, m["bot"] * z + 6], outline=(230, 30, 30), width=2)
+                    d.text((m["x0"] * z + 3, m["bot"] * z + 8), str(first_bar.get(k, f"({k})")), fill=(230, 30, 30),
+                           font=sv._font(14))
+                ims.append(im)
+        finally:
+            doc.close()
+        marks = ", ".join(f"{first_bar.get(mk['measure'], mk['measure'])}:{mk['text']}" for mk in sc.get("marks", []))
+        info = (f"쪽 {len(sc.get('pages', []))} · 악보 마디 {len(sc['measures'])} · 연주 순서 마디 {len(order)}"
+                f"{' (반복 펼침)' if sc.get('order') else ''} · 템포 {sc.get('tempo')}\n"
+                f"구간 표시(음원 마디:이름 — '구간N' 은 글자가 그림이라 못 읽은 것): {marks or '없음'}\n"
+                f"경고: {sc.get('warnings') or '없음'}")
+        return _ok(info, *[_img(im, 1300) for im in ims])
+
+    @tool("set_sections",
+          "구간 이름을 정한다 {음원 마디: 이름}. 악보의 네모 상자 글자를 읽어서 (pdf 방식에서 '구간N' 으로 나온 것을 바로잡을 때).",
+          S(["names"], names="object"))
+    async def set_sections(args):
+        run.sections = {int(k): str(v)[:40] for k, v in args["names"].items() if str(v).strip()}
+        return _ok(f"구간 {len(run.sections)}개: " + ", ".join(f"{k}:{v}" for k, v in sorted(run.sections.items())))
+
+    @tool("audio_grid",
+          "pdf 방식: 곡 드럼에서 BPM·박 위상·첫 타격을 잰다. bpm 은 악보 템포(모르면 곡 검출 BPM). "
+          "1마디 1박 첫 후보 = first_beat_at_hit (못갖춘마디면 그만큼 앞으로). 받아 적은 뒤 refine_timing 으로 한 박 단위 검산.",
+          S(["bpm"], bpm="number"))
+    async def audio_grid(args):
+        if not run.job:
+            run.job = await _api("GET", f"/api/jobs/{run.job_id}")
+        drums = run.file_of("drums")
+        if not drums:
+            return _err("드럼 트랙이 없습니다")
+        grid = await asyncio.to_thread(sv.fit_grid, drums, float(args["bpm"]), 2.0)
+        m = await _api("GET", f"/api/jobs/{run.job_id}/map")
+        now = m.get("map") or {}
+        run.align = {"grid": grid}
+        return _ok(json.dumps({"grid": grid, "current_map": {"anchor": now.get("anchor"), "bpm": now.get("bpm")}},
+                              ensure_ascii=False),
+                   "current_map 은 사용자가 지금 쓰는 송 맵 — 손으로 맞춘 값일 수 있으니 1마디 1박 후보로 함께 본다.")
+
     @tool("report", "끝내기 전에 반드시 부른다. status: done | failed. summary: 사용자에게 보일 한국어 요약 (무엇을 했고, 무엇이 불확실한지).",
           S(["status", "summary"], status="string", summary="string"))
     async def report(args):
@@ -648,8 +766,12 @@ def build_server(run: Run):
         run.reported = {"status": st, "summary": args["summary"]}
         return _ok("기록했습니다. 이제 끝내도 됩니다.")
 
-    tools = [get_job, download_video, look, find_score_band, extract_strips, show_strips, strip_table,
-             edit_strip, add_strip, align_audio, build_score, set_timing, measure_images, write_measures, check_measures,
-             refine_timing, save_result, report]
+    if run.mode == "pdf":
+        tools = [get_job, pdf_overview, set_sections, audio_grid, set_timing, measure_images, write_measures,
+                 check_measures, refine_timing, save_result, report]
+    else:
+        tools = [get_job, download_video, look, find_score_band, extract_strips, show_strips, strip_table,
+                 edit_strip, add_strip, align_audio, build_score, set_timing, measure_images, write_measures,
+                 check_measures, refine_timing, save_result, report]
     run.tools = {t.name: t for t in tools}   # 시험용: 에이전트 없이 바로 부를 수 있게
     return create_sdk_mcp_server("score", "1.0.0", tools), [f"mcp__score__{t.name}" for t in tools]
