@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { DrawResult } from "../lib/drawNotation";
 import { pageLayout, type Notation } from "../lib/notation";
 import type { ScoreData } from "../types";
@@ -26,6 +26,8 @@ export function NotationView({
   follow = true,
   paged = false,
   score,
+  popupBar,
+  popup,
 }: {
   notation: Notation;
   /** 지금 음원 마디 */
@@ -40,6 +42,9 @@ export function NotationView({
   paged?: boolean;
   /** 원래 악보 PDF 분석 (쪽·줄 나눔을 따른다) */
   score?: ScoreData | null;
+  /** 이 마디 바로 아래에 띄울 것 (악보 편집 칸) */
+  popupBar?: number | null;
+  popup?: ReactNode;
 }) {
   const host = useRef<HTMLDivElement | null>(null);
   const svgBox = useRef<HTMLDivElement | null>(null);
@@ -132,6 +137,13 @@ export function NotationView({
     el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [curLine, follow, bar, usePages]);
 
+  // 편집 칸이 열리거나 다른 마디로 옮기면 화면 안으로
+  const popRef = useRef<HTMLDivElement | null>(null);
+  const popBox = popup && popupBar != null ? res?.boxes.find((b) => b.bar === popupBar) : undefined;
+  useEffect(() => {
+    if (popBox) popRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [popupBar, !!popBox]); // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <div
       className={`notation${usePages ? " paged" : ""}${onSelect ? " selecting" : ""}`}
@@ -164,6 +176,17 @@ export function NotationView({
               />
             );
           })}
+        {res && popBox && (
+          <div
+            ref={popRef}
+            className="nt-pop"
+            style={{ top: `${((popBox.y + popBox.h) / res.height) * 100}%` }}
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <span className="nt-pop-arrow" style={{ left: `${((popBox.x + popBox.w / 2) / res.width) * 100}%` }} />
+            {popup}
+          </div>
+        )}
       </div>
       {usePages && pages.length > 1 && (
         <div className="score-nav">
