@@ -22,7 +22,7 @@ import {
   Tuplet,
   Voice,
 } from "vexflow/bravura";
-import { FEET, beatTicks, measureTicks, stepTicks, type Lane, type NMeasure, type Notation } from "./notation";
+import { FEET, lineBreaks, beatTicks, measureTicks, stepTicks, type Lane, type NMeasure, type Notation } from "./notation";
 
 /** 타악기 보표의 자리 (높은음자리표 기준 음 이름 / 머리 모양) */
 const KEY: Record<Lane, string> = {
@@ -224,7 +224,7 @@ export function drawNotation(
   const from = opts.lines?.[0]?.[0] ?? opts.from ?? 1;
   const to = Math.min(nt.measures.length, opts.lines?.[opts.lines.length - 1]?.[1] ?? opts.to ?? nt.measures.length);
   const plan: [number, number][] = opts.lines ?? [];
-  if (!opts.lines) for (let a = from; a <= to; a += perLine) plan.push([a, Math.min(to, a + perLine - 1)]);
+  if (!opts.lines) plan.push(...lineBreaks(nt.measures, to, perLine, perLine <= 2 ? 5 : 8, from));
   const lineCount = Math.max(1, plan.length);
   const TOP = 46;
   // 쪽 높이가 정해져 있으면 줄 사이를 그에 맞춘다 (너무 촘촘하면 음표가 겹치니 최소 112)
@@ -260,7 +260,8 @@ export function drawNotation(
       const feet = m.simile ? null : buildVoice(m, true, false);
       built.push({ n, m, hands, feet });
     }
-    const weights = built.map((x) => Math.max(6, (x.hands?.weight ?? 0) + (x.feet?.weight ?? 0) * 0.6));
+    // '%' 마디는 좁게 (원래 악보처럼 — 반복이 한 줄에 여럿 들어간다)
+    const weights = built.map((x) => (x.m.simile ? 4 : Math.max(6, (x.hands?.weight ?? 0) + (x.feet?.weight ?? 0) * 0.6)));
     // 줄 첫 마디는 음자리표, 박자가 바뀌는 마디는 박자표 자리만큼 넓게
     const extra = built.map((x, i) => {
       const before = i === 0 ? prev : built[i - 1].m;

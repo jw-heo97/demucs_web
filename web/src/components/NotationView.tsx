@@ -52,13 +52,19 @@ export function NotationView({
   useLayoutEffect(() => {
     const el = host.current?.parentElement;
     if (!el) return;
-    const ro = new ResizeObserver(() => setNarrow(el.clientWidth < 640));
+    const update = () => setNarrow(el.clientWidth < 640);
+    update();
+    const ro = new ResizeObserver(update);
     ro.observe(el);
-    return () => ro.disconnect();
+    window.addEventListener("resize", update);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", update);
+    };
   }, []);
 
   const usePages = paged && !narrow;
-  const pages = useMemo(() => pageLayout(notation.measures.length, score), [notation, score]);
+  const pages = useMemo(() => pageLayout(notation.measures, score), [notation, score]);
   const pageOf = useMemo(() => {
     const m = new Map<number, number>();
     pages.forEach((lines, p) => lines.forEach(([a, b]) => {
