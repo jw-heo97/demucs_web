@@ -46,7 +46,7 @@ def _decodes(path: Path, at: float) -> bool:
 def download(url: str, out_dir: Path, log=print) -> Path:
     """영상(1080p 이하)+소리를 하나로 받는다. 깨진 파일(조각만 받힘)이면 다음 클라이언트로."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    meta = json.loads(_run(["yt-dlp", "-J", "--no-download", "--no-warnings", "--js-runtimes", "node", url]).stdout or "{}")
+    meta = json.loads(_run(["yt-dlp", "-J", "--no-download", "--no-warnings", "--js-runtimes", "node", "--no-playlist", url]).stdout or "{}")
     want = float(meta.get("duration") or 0)
     last = ""
     for c in CLIENTS:
