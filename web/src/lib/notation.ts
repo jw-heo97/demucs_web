@@ -134,3 +134,37 @@ export function sameContent(a: NMeasure, b: NMeasure): boolean {
   };
   return key(a) === key(b);
 }
+
+/**
+ * 쪽 나누기: 쪽마다 줄들 [첫 마디, 끝 마디]. 원래 악보 PDF 가 있으면 그 쪽·줄 나눔을 그대로 따른다
+ * (같은 마디가 같은 줄·같은 쪽에 — 종이 악보와 나란히 봐도 헷갈리지 않게). 없으면 한 줄 perLine 마디, 한 쪽 linesPerPage 줄.
+ */
+export function pageLayout(
+  n: number,
+  score?: { measures: { page: number; system: number }[]; order?: number[] | null } | null,
+  perLine = 4,
+  linesPerPage = 10,
+): [number, number][][] {
+  const pages: [number, number][][] = [];
+  if (score && !score.order && score.measures.length === n && n > 0) {
+    let key = "";
+    let page = -1;
+    score.measures.forEach((m, i) => {
+      const k = `${m.page}:${m.system}`;
+      if (m.page !== page) {
+        pages.push([]);
+        page = m.page;
+      }
+      const cur = pages[pages.length - 1];
+      if (k !== key) cur.push([i + 1, i + 1]);
+      else cur[cur.length - 1][1] = i + 1;
+      key = k;
+    });
+    return pages;
+  }
+  for (let a = 1; a <= n; a += perLine) {
+    if (!pages.length || pages[pages.length - 1].length >= linesPerPage) pages.push([]);
+    pages[pages.length - 1].push([a, Math.min(n, a + perLine - 1)]);
+  }
+  return pages;
+}

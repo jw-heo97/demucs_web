@@ -205,17 +205,33 @@ export interface DrawResult {
  * el 안에 SVG 로 그린다 (논리 폭 width — 화면에서는 viewBox 로 늘어난다).
  * perLine: 한 줄에 몇 마디.
  */
-export function drawNotation(el: HTMLElement, nt: Notation, opts: { width: number; perLine: number; from?: number; to?: number }): DrawResult {
+export function drawNotation(
+  el: HTMLElement,
+  nt: Notation,
+  opts: {
+    width: number;
+    perLine: number;
+    from?: number;
+    to?: number;
+    /** 줄마다 [첫 마디, 끝 마디] — 주면 perLine·from·to 대신 이대로 (원래 PDF 의 줄 나눔) */
+    lines?: [number, number][];
+    /** 쪽 높이 — 주면 이 높이에 줄을 고르게 놓는다 (A4 쪽) */
+    height?: number;
+  },
+): DrawResult {
   el.innerHTML = "";
   const { width, perLine } = opts;
-  const from = opts.from ?? 1;
-  const to = Math.min(nt.measures.length, opts.to ?? nt.measures.length);
-  const LINE_H = 150;
+  const from = opts.lines?.[0]?.[0] ?? opts.from ?? 1;
+  const to = Math.min(nt.measures.length, opts.lines?.[opts.lines.length - 1]?.[1] ?? opts.to ?? nt.measures.length);
+  const plan: [number, number][] = opts.lines ?? [];
+  if (!opts.lines) for (let a = from; a <= to; a += perLine) plan.push([a, Math.min(to, a + perLine - 1)]);
+  const lineCount = Math.max(1, plan.length);
   const TOP = 46;
+  // 쪽 높이가 정해져 있으면 줄 사이를 그에 맞춘다 (너무 촘촘하면 음표가 겹치니 최소 112)
+  const LINE_H = opts.height ? Math.max(112, Math.min(170, (opts.height - TOP - 30) / lineCount)) : 150;
   const left = 10;
   const usable = width - 2 * left;
-  const lineCount = Math.max(1, Math.ceil((to - from + 1) / perLine));
-  const height = TOP + lineCount * LINE_H;
+  const height = Math.max(opts.height ?? 0, TOP + lineCount * LINE_H);
 
   const renderer = new Renderer(el as HTMLDivElement, Renderer.Backends.SVG);
   renderer.resize(width, height);
@@ -232,9 +248,8 @@ export function drawNotation(el: HTMLElement, nt: Notation, opts: { width: numbe
   const boxes: MeasureBox[] = [];
   const lines: [number, number][] = [];
   let prev: NMeasure | null = from > 1 ? nt.measures[from - 2] : null;
-  for (let li = 0; li < lineCount; li++) {
-    const a = from + li * perLine;
-    const b = Math.min(to, a + perLine - 1);
+  for (let li = 0; li < plan.length; li++) {
+    const [a, b] = plan[li];
     lines.push([a, b]);
     const y = TOP + li * LINE_H;
     // 마디 폭: 음표 수에 비례하되 최소 폭을 둔다. 줄 첫 마디는 음자리표 자리만큼 더.

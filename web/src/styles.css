@@ -391,3 +391,7 @@ button.danger { background: var(--err); }
 .ntcell.beat { border-left: 2px solid var(--muted); }
 .ntcell.hit { background: var(--accent); color: #fff; border-color: var(--accent); }
 .ntadd { width: auto; grid-column: 2 / span 8; padding: 3px 6px; font-size: .75rem; }
+
+/* 음표 악보 쪽 보기 (A4, 한 쪽이 화면 높이에 들어오게) */
+.notation.paged { margin: 0 auto 14px; }
+.notation.paged .score-bar { touch-action: none; }   /* 한 쪽이 화면에 다 들어오니 어느 방향으로 끌어도 구간 고르기 */
