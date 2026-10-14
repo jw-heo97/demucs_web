@@ -140,11 +140,12 @@ export function sameContent(a: NMeasure, b: NMeasure): boolean {
  * (같은 마디가 같은 줄·같은 쪽에 — 종이 악보와 나란히 봐도 헷갈리지 않게). 없으면 한 줄 perLine 마디, 한 쪽 linesPerPage 줄.
  */
 export function pageLayout(
-  n: number,
+  measures: Pick<NMeasure, "simile">[],
   score?: { measures: { page: number; system: number }[]; order?: number[] | null } | null,
   perLine = 4,
   linesPerPage = 10,
 ): [number, number][][] {
+  const n = measures.length;
   const pages: [number, number][][] = [];
   if (score && !score.order && score.measures.length === n && n > 0) {
     let key = "";
@@ -162,9 +163,37 @@ export function pageLayout(
     });
     return pages;
   }
-  for (let a = 1; a <= n; a += perLine) {
+  for (const line of lineBreaks(measures, n, perLine)) {
     if (!pages.length || pages[pages.length - 1].length >= linesPerPage) pages.push([]);
-    pages[pages.length - 1].push([a, Math.min(n, a + perLine - 1)]);
+    pages[pages.length - 1].push(line);
   }
   return pages;
+}
+
+/**
+ * 줄 나누기: 한 줄 perLine 마디. 줄이 찼는데 바로 뒤가 '%'(앞 마디 반복)면 그 묶음이 끝날 때까지 같은 줄에
+ * 붙이고(4마디를 넘어도), 묶음이 끝나면 줄을 바꾼다 — 원래 악보처럼 (% 는 좁게 그려지고 반복이 한 줄에 모인다).
+ * 한 줄 최대 maxPerLine.
+ */
+export function lineBreaks(
+  measures: Pick<NMeasure, "simile">[] | null | undefined,
+  n: number,
+  perLine: number,
+  maxPerLine = 8,
+  from = 1,
+): [number, number][] {
+  const out: [number, number][] = [];
+  let a = from;
+  while (a <= n) {
+    let b = a;
+    // perLine 마디가 차면 줄을 바꾸되, 바로 뒤가 '%' 면 그 묶음이 끝날 때까지 같은 줄에
+    while (b + 1 <= n && b - a + 1 < maxPerLine) {
+      const sim = !!measures?.[b]?.simile;
+      if (!sim && b - a + 1 >= perLine) break;
+      b += 1;
+    }
+    out.push([a, b]);
+    a = b + 1;
+  }
+  return out;
 }
