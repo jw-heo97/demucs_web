@@ -4,7 +4,7 @@ import { api } from "../api";
 import { useMe } from "../lib/me";
 import type { NMeasure, Notation } from "../lib/notation";
 import type { ScoreData, ScoreMeasure } from "../types";
-import { INK_COLORS, InkLayer, useScoreInk, type InkTool } from "./ScoreInk";
+import { INK_COLORS, InkLayer, InkZoom, useScoreInk, type InkTool } from "./ScoreInk";
 
 /** 한 번에 보여줄 마디 수. 지금 마디가 든 4마디 묶음 + 다음 4마디라 늘 앞이 보인다. */
 const BLOCK = 4;
@@ -570,6 +570,8 @@ export function ScoreSheet({
   // 펜 필기
   const ink = useScoreInk(jobId ?? "");
   const [inking, setInking] = useState(false);
+  // 필기 중에 마디를 누르면 그 마디를 크게 띄워 쓴다
+  const [zoom, setZoom] = useState<number | null>(null);
   const [tool, setTool] = useState<InkTool>({ kind: "pen", color: INK_COLORS[0].c });
   const edited = notation?.measures.some((x) => x.edited) ?? false;
 
@@ -589,7 +591,7 @@ export function ScoreSheet({
               ))}
               <button className={`ghost${tool.kind === "eraser" ? " on" : ""}`} onClick={() => setTool({ kind: "eraser" })}>지우개</button>
               <button className="ghost" onClick={ink.back} disabled={!ink.canUndo}>↶</button>
-              <span className="meta">{ink.state === "saving" ? "저장 중…" : ink.state === "saved" ? "저장됨" : ink.state === "error" ? "저장 실패" : ""}</span>
+              <span className="meta">{ink.state === "saving" ? "저장 중…" : ink.state === "saved" ? "저장됨" : ink.state === "error" ? "저장 실패" : "마디를 누르면 크게 열어 씁니다"}</span>
               <button onClick={() => setInking(false)}>필기 끝</button>
             </>
           ) : (
@@ -597,7 +599,7 @@ export function ScoreSheet({
           )}
         </div>
       )}
-      <div className="score-page sheet-page" style={{ aspectRatio: `${pg.w} / ${pg.h}` }} {...(onSelect ? drag.props : swipe.props)}>
+      <div className="score-page sheet-page" style={{ aspectRatio: `${pg.w} / ${pg.h}` }} {...(onSelect && !inking ? drag.props : swipe.props)}>
         <img src={api.fileUrl(score.page_urls[pv])} alt={`${pv + 1}쪽`} draggable={false} />
         {notation &&
           score.measures.map((ms, mi) => {
@@ -631,7 +633,13 @@ export function ScoreSheet({
               data-bar={firstBarOf.get(mi)}
               className={`score-bar${mi === k ? " on" : ""}${inLoop.has(mi) ? " inloop" : ""}${dragSet.has(mi) ? " picking" : ""}`}
               title={`${firstBarOf.get(mi)}마디 — 누르면 이동${onSelect ? ", 끌면 구간 반복" : ""}`}
-              onClick={onSelect ? undefined : () => !swipe.swiped.current && onPickBar(firstBarOf.get(mi)!)}
+              onClick={
+                inking
+                  ? () => !swipe.swiped.current && setZoom(mi)
+                  : onSelect
+                    ? undefined
+                    : () => !swipe.swiped.current && onPickBar(firstBarOf.get(mi)!)
+              }
               style={{
                 left: `${(ms.x0 / pg.w) * 100}%`,
                 width: `${((ms.x1 - ms.x0) / pg.w) * 100}%`,
@@ -645,12 +653,29 @@ export function ScoreSheet({
           <InkLayer
             key={pv}
             strokes={ink.doc.pages[String(pv)] ?? []}
-            editing={inking}
+            editing={false}
             tool={tool}
             onChange={(f) => ink.change(pv, f)}
           />
         )}
       </div>
+      {jobId && zoom != null && score.measures[zoom] && (
+        <InkZoom
+          imgUrl={(p) => api.fileUrl(score.page_urls[p])}
+          pageW={(p) => score.pages[p].w}
+          pageH={(p) => score.pages[p].h}
+          measures={score.measures}
+          start={zoom}
+          strokesOf={(p) => ink.doc.pages[String(p)] ?? []}
+          onChange={ink.change}
+          tool={tool}
+          setTool={setTool}
+          back={ink.back}
+          canUndo={ink.canUndo}
+          state={ink.state}
+          onClose={() => setZoom(null)}
+        />
+      )}
       {pages > 1 && (
         <div className="score-nav">
           <button className="ghost" onClick={() => setView(pv - 1)} disabled={pv <= 0} aria-label="이전 쪽">‹</button>
