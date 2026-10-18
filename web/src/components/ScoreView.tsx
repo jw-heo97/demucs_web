@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { confirmBox } from "../lib/dialog";
 import { api } from "../api";
 import { useMe } from "../lib/me";
+import type { NMeasure, Notation } from "../lib/notation";
 import type { ScoreData, ScoreMeasure } from "../types";
+import { INK_COLORS, InkLayer, useScoreInk, type InkTool } from "./ScoreInk";
 
 /** 한 번에 보여줄 마디 수. 지금 마디가 든 4마디 묶음 + 다음 4마디라 늘 앞이 보인다. */
 const BLOCK = 4;
@@ -477,13 +479,39 @@ export function useBarDrag(onSelect: (a: number, b: number) => void, onClick: (b
  * 마디에서 미리 넘긴다), ‹ › 로 넘길 수도 있다. 마디를 누르면 그 마디로 이동, 여러 마디를 끌면
  * 그 범위를 반복한다. 반복 중인 마디는 칠해 둔다.
  */
+/** 고친 마디 하나: 원본 그림 위에 흰 칸을 덮고 고친 음표를 그린다 (VexFlow 는 그릴 때만 받는다) */
+function MeasurePatch({ m, aspect }: { m: NMeasure; aspect: number }) {
+  const el = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    let alive = true;
+    import("../lib/drawNotation").then(({ drawMeasurePatch }) => {
+      if (!alive || !el.current) return;
+      try {
+        drawMeasurePatch(el.current, m, aspect);
+      } catch {
+        /* 못 그리면 원본 그대로 보인다 */
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, [m, aspect]);
+  return <div ref={el} className="nt-patch-svg" />;
+}
+
 export function ScoreSheet({
   score,
   bar,
   loop,
   onPickBar,
   onSelect,
+  jobId,
+  notation,
 }: {
+  /** 필기를 저장할 곡 (없으면 필기 없음) */
+  jobId?: string;
+  /** 송 맵에서 고친 마디(edited)는 원본 위에 덮어 그린다 */
+  notation?: Notation | null;
   score: ScoreData;
   bar: number;
   /** 반복 중인 음원 마디 범위 */
@@ -539,10 +567,63 @@ export function ScoreSheet({
     return s;
   }, [score, drag.sel]);
 
+  // 펜 필기
+  const ink = useScoreInk(jobId ?? "");
+  const [inking, setInking] = useState(false);
+  const [tool, setTool] = useState<InkTool>({ kind: "pen", color: INK_COLORS[0].c });
+  const edited = notation?.measures.some((x) => x.edited) ?? false;
+
   return (
     <div className={`sheet${onSelect ? " selecting" : ""}`} style={{ maxWidth: `calc((100vh - 70px) * ${pg.w / pg.h})` }}>
+      {jobId && (
+        <div className="actions ink-bar">
+          {edited && <span className="meta"><span className="patch-key" /> 송 맵에서 고친 마디</span>}
+          <span style={{ flex: 1 }} />
+          {inking ? (
+            <>
+              {INK_COLORS.map((c) => (
+                <button key={c.c} className={`ghost ink-color${tool.kind === "pen" && tool.color === c.c ? " on" : ""}`}
+                  onClick={() => setTool({ kind: "pen", color: c.c })} title={c.label} aria-label={c.label}>
+                  <span style={{ background: c.c }} />
+                </button>
+              ))}
+              <button className={`ghost${tool.kind === "eraser" ? " on" : ""}`} onClick={() => setTool({ kind: "eraser" })}>지우개</button>
+              <button className="ghost" onClick={ink.back} disabled={!ink.canUndo}>↶</button>
+              <span className="meta">{ink.state === "saving" ? "저장 중…" : ink.state === "saved" ? "저장됨" : ink.state === "error" ? "저장 실패" : ""}</span>
+              <button onClick={() => setInking(false)}>필기 끝</button>
+            </>
+          ) : (
+            <button className="ghost" onClick={() => setInking(true)} title="원본 악보 위에 펜으로 쓰기 (자동 저장)">✏ 필기</button>
+          )}
+        </div>
+      )}
       <div className="score-page sheet-page" style={{ aspectRatio: `${pg.w} / ${pg.h}` }} {...(onSelect ? drag.props : swipe.props)}>
         <img src={api.fileUrl(score.page_urls[pv])} alt={`${pv + 1}쪽`} draggable={false} />
+        {notation &&
+          score.measures.map((ms, mi) => {
+            const b = firstBarOf.get(mi);
+            const nm = b != null ? notation.measures[b - 1] : undefined;
+            if (ms.page !== pv || !nm?.edited) return null;
+            const h = ms.bot - ms.top;
+            const x0 = ms.x0 + h * 0.06;
+            const w = ms.x1 - ms.x0 - h * 0.12;
+            const top = ms.top - h * 0.6;
+            return (
+              <div
+                key={`p${mi}`}
+                className="nt-patch"
+                title={`${b}마디 — 송 맵에서 고침`}
+                style={{
+                  left: `${(x0 / pg.w) * 100}%`,
+                  width: `${(w / pg.w) * 100}%`,
+                  top: `${(top / pg.h) * 100}%`,
+                  height: `${((h * 2.3) / pg.h) * 100}%`,
+                }}
+              >
+                <MeasurePatch m={nm} aspect={w / (h * 2.3)} />
+              </div>
+            );
+          })}
         {score.measures.map((ms, mi) =>
           ms.page !== pv || !firstBarOf.has(mi) ? null : (
             <div
@@ -559,6 +640,15 @@ export function ScoreSheet({
               }}
             />
           ),
+        )}
+        {jobId && (
+          <InkLayer
+            key={pv}
+            strokes={ink.doc.pages[String(pv)] ?? []}
+            editing={inking}
+            tool={tool}
+            onChange={(f) => ink.change(pv, f)}
+          />
         )}
       </div>
       {pages > 1 && (

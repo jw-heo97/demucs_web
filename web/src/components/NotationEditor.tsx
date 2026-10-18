@@ -112,7 +112,7 @@ export function NotationEditor({
   const editMeasure = (n: number, f: (m: NMeasure) => NMeasure) =>
     update((prev) => {
       const ms = prev.measures.slice();
-      ms[n - 1] = f(ms[n - 1]);
+      ms[n - 1] = { ...f(ms[n - 1]), edited: true };
       return { ...prev, measures: ms };
     });
 
@@ -268,7 +268,7 @@ export function NotationEditor({
       if (!sel || !clip) return;
       const ms = nt.measures.slice();
       clip.forEach((m, i) => {
-        if (sel.from - 1 + i < ms.length) ms[sel.from - 1 + i] = { ...structuredClone(m), section: ms[sel.from - 1 + i].section };
+        if (sel.from - 1 + i < ms.length) ms[sel.from - 1 + i] = { ...structuredClone(m), section: ms[sel.from - 1 + i].section, edited: true };
       });
       change({ ...nt, measures: ms });
     },
@@ -277,7 +277,7 @@ export function NotationEditor({
       const at = after ? sel.to : sel.from - 1;
       const ref = nt.measures[Math.min(nt.measures.length - 1, at)] ?? emptyMeasure();
       const ms = nt.measures.slice();
-      ms.splice(at, 0, emptyMeasure(ref.beats, ref.unit, ref.steps));
+      ms.splice(at, 0, { ...emptyMeasure(ref.beats, ref.unit, ref.steps), edited: true });
       change({ ...nt, measures: ms });
       setSel({ from: at + 1, to: at + 1 });
     },
@@ -348,7 +348,7 @@ export function NotationEditor({
                 const all = prev.measures.slice();
                 ms.forEach((m, i) => {
                   const k = draw.from - 1 + i;
-                  if (k < all.length) all[k] = { ...all[k], steps: m.steps, lanes: m.lanes, simile: false };
+                  if (k < all.length) all[k] = { ...all[k], steps: m.steps, lanes: m.lanes, simile: false, edited: true };
                 });
                 return { ...prev, measures: all };
               });

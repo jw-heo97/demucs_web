@@ -8,6 +8,7 @@
 import {
   Annotation,
   Articulation,
+  BarlineType,
   Beam,
   Dot,
   Formatter,
@@ -311,4 +312,48 @@ export function drawNotation(
     });
   }
   return { width, height, boxes, lines };
+}
+
+/**
+ * 마디 하나를 원본 악보(PDF) 위에 덮어 그릴 조각으로. 음자리표·마디선 없이 오선과 음표만.
+ * aspect: 덮을 칸의 가로/세로. 칸은 오선 위로 0.6, 아래로 0.7 (오선 높이 기준) 더 크다.
+ */
+export function drawMeasurePatch(el: HTMLElement, m: NMeasure, aspect: number): void {
+  el.innerHTML = "";
+  const SP = 10; // 줄 간격 (VexFlow 기본)
+  const staffH = 4 * SP;
+  const H = staffH * 2.3;
+  const W = Math.max(60, H * aspect);
+  const renderer = new Renderer(el as HTMLDivElement, Renderer.Backends.SVG);
+  renderer.resize(W, H);
+  const ctx = renderer.getContext();
+  const svg = el.querySelector("svg");
+  if (svg) {
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    svg.setAttribute("preserveAspectRatio", "none");
+    svg.removeAttribute("width");
+    svg.removeAttribute("height");
+    svg.style.width = "100%";
+    svg.style.height = "100%";
+  }
+  // 맨 윗줄이 칸 위에서 0.6 오선 높이에 오게 (Stave 는 y 아래 4칸 뒤에 첫 줄을 긋는다)
+  const stave = new Stave(0, staffH * 0.6 - 4 * SP, W, { left_bar: false, right_bar: false });
+  stave.setBegBarType(BarlineType.NONE).setEndBarType(BarlineType.NONE);
+  stave.setContext(ctx).draw();
+  if (m.simile) {
+    ctx.save();
+    ctx.setFont("Arial", 30, "bold");
+    ctx.fillText("%", W / 2 - 12, stave.getYForLine(0) + 31);
+    ctx.restore();
+    return;
+  }
+  const hands = buildVoice(m, false, !events(m, true).length);
+  const feet = buildVoice(m, true, false);
+  const voices = [hands, feet].filter(Boolean) as NonNullable<typeof hands>[];
+  if (!voices.length) return;
+  const fmtW = stave.getNoteEndX() - stave.getNoteStartX() - 10;
+  new Formatter().joinVoices(voices.map((v) => v.voice)).format(voices.map((v) => v.voice), Math.max(20, fmtW));
+  voices.forEach((v) => v.voice.draw(ctx, stave));
+  voices.forEach((v) => v.beams.forEach((bm) => bm.setContext(ctx).draw()));
+  voices.forEach((v) => v.tuplets.forEach((tp) => tp.setContext(ctx).draw()));
 }

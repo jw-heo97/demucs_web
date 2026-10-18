@@ -4,7 +4,7 @@
  * 인증은 없다 — 접근 제어는 Tailscale 이 맡는다 (README 참고).
  */
 import type { Notation } from "./lib/notation";
-import type { AiRun, Job, JobTrack, MapPayload, MapVersion, Playlist, ScoreData, SearchItem, SongMap } from "./types";
+import type { AiRun, InkDoc, Job, JobTrack, MapPayload, MapVersion, Playlist, ScoreData, SearchItem, SongMap } from "./types";
 
 /** 앱에서는 다른 오리진의 서버를 봐야 하므로 베이스 URL 을 바꿀 수 있게 한다. */
 export const BASE =
@@ -181,6 +181,9 @@ export const api = {
   notationHistory: (id: string) =>
     get<{ history: { at: number; note: string; measures: number }[] }>(`/api/jobs/${id}/notation/history`),
   restoreNotation: (id: string, index: number) => post<Notation>(`/api/jobs/${id}/notation/restore`, { index }),
+  /** 원본 악보 위 펜 필기 */
+  scoreInk: (id: string) => get<InkDoc>(`/api/jobs/${id}/score/ink`),
+  saveScoreInk: (id: string, doc: InkDoc) => put<InkDoc>(`/api/jobs/${id}/score/ink`, doc),
   /** 손으로 그린 마디(PNG) → 칸 (저장은 안 한다) */
   recognizeDrawing: (
     id: string,
