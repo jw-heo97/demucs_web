@@ -97,8 +97,23 @@ export function PlayerTab({ jobs, onChanged, pick, onOpenMap, onPickSong }: Prop
     };
   }, [scoreJob]);
 
-  // 편집 가능한 음표 악보가 있으면 그걸 그린다 (PDF 그림보다 우선)
+  // 편집 가능한 음표 악보. 원본 악보(PDF·영상 악보 그림)도 있으면 둘 중 고른다 — 기본은 원본 (보기 익숙한 쪽)
   const [notation, setNotation] = useState<Notation | null>(null);
+  const [sheetView, setSheetView] = useState<"original" | "notation">(() => {
+    try {
+      return localStorage.getItem("player.sheetView") === "notation" ? "notation" : "original";
+    } catch {
+      return "original";
+    }
+  });
+  const pickView = (v: "original" | "notation") => {
+    setSheetView(v);
+    try {
+      localStorage.setItem("player.sheetView", v);
+    } catch {
+      /* 저장 못 해도 이번엔 바뀐다 */
+    }
+  };
   const notationSig = job?.files.find((f) => f.rel === "_notation.json")?.mtime ?? null;
   useEffect(() => {
     let alive = true;
@@ -112,6 +127,7 @@ export function PlayerTab({ jobs, onChanged, pick, onOpenMap, onPickSong }: Prop
   if (!job) return <SongPicker jobs={jobs} title="재생할 곡" onPick={choose} />;
 
   const colors = sectionColors(bars);
+  const hasOriginal = !!score && score.measures.length > 0;
   return (
     <div>
       <div className="panel">
@@ -177,7 +193,16 @@ export function PlayerTab({ jobs, onChanged, pick, onOpenMap, onPickSong }: Prop
         />
       </div>
 
-      {notation ? (
+      {notation && hasOriginal && (
+        <div className="actions sheet-switch">
+          <span className="meta">악보</span>
+          <button className={`ghost${sheetView === "original" ? " on" : ""}`} onClick={() => pickView("original")}
+            title="악보 PDF·영상 악보 그림 그대로">원본</button>
+          <button className={`ghost${sheetView === "notation" ? " on" : ""}`} onClick={() => pickView("notation")}
+            title="송 맵에서 고친 음표 악보 (다시 그린 것)">음표 악보</button>
+        </div>
+      )}
+      {notation && (!hasOriginal || sheetView === "notation") ? (
         <NotationView
           notation={notation}
           paged
