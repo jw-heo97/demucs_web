@@ -373,6 +373,10 @@ button.danger { background: var(--err); }
 .ailog .ai-info { color: var(--muted); }
 .aireport { font-size: .85rem; margin-bottom: 6px; white-space: pre-wrap; }
 
+/* 재생 창: 원본 악보 / 음표 악보 고르기 */
+.sheet-switch { justify-content: center; margin: 4px 0 8px; }
+.sheet-switch button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+
 /* 음표 악보 (VexFlow) */
 .notation { width: 100%; }
 .notation-page { position: relative; background: #fff; border-radius: 8px; border: 1px solid var(--border); padding: 4px 0; user-select: none; -webkit-user-select: none; }
