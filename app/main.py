@@ -744,6 +744,54 @@ def notation_restore(job_id: str, payload: dict = Body(...)):
         raise HTTPException(400, str(e)) from e
 
 
+# --- 원본 악보 위 펜 필기 (_score_ink.json) ---
+INK_FILE = "_score_ink.json"
+MAX_INK_BYTES = 4 * 1024 * 1024
+
+
+@app.get("/api/jobs/{job_id}/score/ink")
+def get_score_ink(job_id: str):
+    p = _score_dir(job_id) / INK_FILE
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"pages": {}}
+
+
+@app.put("/api/jobs/{job_id}/score/ink")
+def put_score_ink(job_id: str, payload: dict = Body(...)):
+    """{pages: {"쪽(0부터)": [{c: 색, w: 굵기(쪽 폭 비율), p: [[x, y], …](0~1)}]}} — 통째로 저장."""
+    pages = payload.get("pages")
+    if not isinstance(pages, dict):
+        raise HTTPException(400, "pages 가 필요합니다.")
+    clean: dict[str, list] = {}
+    for k, strokes in pages.items():
+        if not str(k).isdigit() or not isinstance(strokes, list):
+            raise HTTPException(400, "필기 형식이 아닙니다.")
+        out = []
+        for s in strokes:
+            pts = s.get("p") if isinstance(s, dict) else None
+            if not isinstance(pts, list) or not pts:
+                continue
+            try:
+                pts = [[round(min(1.0, max(0.0, float(x))), 4), round(min(1.0, max(0.0, float(y))), 4)] for x, y in pts]
+                w = min(0.05, max(0.0005, float(s.get("w") or 0.003)))
+            except (TypeError, ValueError):
+                raise HTTPException(400, "필기 좌표가 숫자가 아닙니다.")
+            c = str(s.get("c") or "#d22")[:16]
+            out.append({"c": c, "w": w, "p": pts})
+        if out:
+            clean[str(int(k))] = out
+    body = json.dumps({"pages": clean}, ensure_ascii=False, separators=(",", ":"))
+    if len(body) > MAX_INK_BYTES:
+        raise HTTPException(400, "필기가 너무 많습니다.")
+    d = _score_dir(job_id)
+    tmp = d / (INK_FILE + ".tmp")
+    tmp.write_text(body, encoding="utf-8")
+    os.replace(tmp, d / INK_FILE)
+    return {"pages": clean}
+
+
 @app.get("/api/jobs/{job_id}/score")
 def get_score(job_id: str):
     d = _score_dir(job_id)

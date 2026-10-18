@@ -214,6 +214,8 @@ export function PlayerTab({ jobs, onChanged, pick, onOpenMap, onPickSong }: Prop
         />
       ) : score && score.measures.length > 0 ? (
         <ScoreSheet
+          jobId={job.id}
+          notation={notation}
           score={score}
           bar={cur}
           loop={loopBars}

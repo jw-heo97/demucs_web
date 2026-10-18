@@ -185,3 +185,14 @@ export interface AiRun {
   saved?: { version?: string; dry_run?: boolean } | null;
   log: { t: number; kind: "info" | "tool" | "say" | "warn" | "error"; msg: string }[];
 }
+
+/** 원본 악보 위 펜 필기 한 획: 색, 굵기(쪽 폭 비율), 점들(쪽 기준 0~1) */
+export interface InkStroke {
+  c: string;
+  w: number;
+  p: [number, number][];
+}
+/** 쪽(0부터) → 획들 */
+export interface InkDoc {
+  pages: Record<string, InkStroke[]>;
+}

@@ -15,6 +15,7 @@
 - 칸 기호: '-' 없음, 'x' 침, '>' 악센트, 'g' 고스트, 'f' 플램, 'o' 열린 하이햇(hh 만),
   '1' '2' '3' 기둥 사선(더블 스트로크 — 사선 수만큼 쪼개 친다), 'z' 버즈.
 - simile: 화면에 '%'(앞 마디 반복)로 그린다. lanes 에는 실제 내용을 그대로 둔다 (소리 대조·편집용).
+- edited: 사용자가 송 맵에서 고친 마디. 재생 창의 원본 악보(PDF) 위에 그 마디만 고친 음표로 덮어 그린다.
 """
 from __future__ import annotations
 
@@ -89,6 +90,8 @@ def normalize(data: Any) -> dict:
             item["section"] = sec[:40]
         if m.get("simile"):
             item["simile"] = True
+        if m.get("edited"):
+            item["edited"] = True
         out.append(item)
     res = {"version": 1, "measures": out}
     if data.get("tempo"):

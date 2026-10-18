@@ -19,6 +19,8 @@ export interface NMeasure {
   section?: string;
   /** 화면에 '%'(앞 마디 반복)로 그린다. lanes 에는 실제 내용 */
   simile?: boolean;
+  /** 사용자가 고친 마디 — 원본 악보(PDF) 위에 이 마디만 덮어 그린다 */
+  edited?: boolean;
 }
 
 export interface Notation {
