@@ -774,8 +774,8 @@ def put_score_ink(job_id: str, payload: dict = Body(...)):
             if not isinstance(pts, list) or not pts:
                 continue
             try:
-                pts = [[round(min(1.0, max(0.0, float(x))), 4), round(min(1.0, max(0.0, float(y))), 4)] for x, y in pts]
-                w = min(0.05, max(0.0005, float(s.get("w") or 0.003)))
+                pts = [[round(min(1.0, max(0.0, float(x))), 5), round(min(1.0, max(0.0, float(y))), 5)] for x, y in pts]
+                w = min(0.05, max(0.0002, float(s.get("w") or 0.003)))
             except (TypeError, ValueError):
                 raise HTTPException(400, "필기 좌표가 숫자가 아닙니다.")
             c = str(s.get("c") or "#d22")[:16]

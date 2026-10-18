@@ -381,6 +381,14 @@ button.danger { background: var(--err); }
 .ink-layer { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 3; }
 .ink-layer.editing { pointer-events: auto; touch-action: none; cursor: crosshair; }
 .ink-bar { margin: 0 0 6px; gap: 6px; }
+.ink-zoom-back { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.72); display: flex; align-items: center; justify-content: center; padding: 10px; }
+.ink-zoom { width: min(100%, 1400px); background: var(--panel); border-radius: 10px; padding: 10px; }
+.ink-zoom-box { position: relative; margin: 0 auto; overflow: hidden; background: #fff; border-radius: 6px; }
+.ink-zoom-box img { position: absolute; max-width: none; user-select: none; pointer-events: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .ink-zoom-box { background: #111; }
+  :root:not([data-theme="light"]) .ink-zoom-box img, :root:not([data-theme="light"]) .ink-zoom-box .ink-layer { filter: invert(0.92) hue-rotate(180deg); }
+}
 .ink-bar button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
 .ink-color { padding: 4px 8px; }
 .ink-color span { display: inline-block; width: 14px; height: 14px; border-radius: 50%; vertical-align: middle; }
