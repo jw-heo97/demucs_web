@@ -42,6 +42,7 @@ from config import (
 
 STEMS = ("drums", "bass", "vocals", "other")
 FORMATS = ("wav", "mp3", "both")
+INSTRUMENTS = ("drum", "keyboard", "guitar", "bass")
 MAX_TITLE_LEN = 100
 
 # 결과 폴더마다 남기는 메타데이터. 재시작 후 목록을 복원하는 근거가 된다.
@@ -96,6 +97,8 @@ class Job:
     minus_mixes: bool = False
     # AI 악보: 악보가 나오는 연주 영상 주소. 분리가 끝나면 에이전트(agent/)가 악보·송 맵을 만든다
     score_src: Optional[str] = None
+    # 어느 악기로 연습하는 곡인가 (drum|keyboard|guitar|bass) — 화면은 고른 악기의 곡만 보여 준다
+    instrument: str = "drum"
 
     status: str = "queued"       # queued|downloading|separating|encoding|done|error
     stage: str = "대기 중"
@@ -189,6 +192,7 @@ class Job:
             "owner_link": self.owner_link,
             "shared_links": list(self.shared_links),
             "score_src": self.score_src,
+            "instrument": self.instrument,
             "created_at": self.created_at,
             "elapsed": round((self.finished_at or time.time()) - (self.started_at or self.created_at), 1),
         }
@@ -232,9 +236,11 @@ class JobStore:
                title_override: Optional[str] = None, metronome: bool = True,
                minus_mixes: bool = False, owner: Optional[str] = None,
                owner_name: Optional[str] = None, owner_link: Optional[str] = None,
-               score_src: Optional[str] = None) -> Job:
+               score_src: Optional[str] = None, instrument: str = "drum") -> Job:
         if fmt not in FORMATS:
             raise ValueError(f"format 은 {FORMATS} 중 하나여야 합니다.")
+        if instrument not in INSTRUMENTS:
+            raise ValueError(f"악기는 {INSTRUMENTS} 중 하나여야 합니다.")
         if target != "all" and target not in STEMS:
             raise ValueError(f"target 은 'all' 또는 {STEMS} 중 하나여야 합니다.")
 
@@ -266,7 +272,7 @@ class JobStore:
                   # 대기 중에도 목록에 제목·길이가 보이게 미리 채운다
                   title=meta.get("title"), duration=duration,
                   owner=owner, owner_name=owner_name, owner_link=owner_link,
-                  score_src=(score_src or "").strip() or None)
+                  score_src=(score_src or "").strip() or None, instrument=instrument)
         with self._lock:
             self._jobs[job.id] = job
         try:
@@ -381,6 +387,7 @@ class JobStore:
             owner_link=data.get("owner_link"),
             shared_links=[x for x in data.get("shared_links") or [] if isinstance(x, str)],
             score_src=data.get("score_src"),
+            instrument=data.get("instrument") or "drum",
             status="done",
             stage="완료",
             progress=1.0,
