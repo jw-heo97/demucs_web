@@ -20,7 +20,7 @@ export interface Instrument {
 export const INSTRUMENTS: Instrument[] = [
   { key: "drum", label: "드럼", icon: "🥁", ready: true, target: "drums", minus: true,
     note: "드럼만 분리 + 드럼 뺀 반주" },
-  { key: "keyboard", label: "키보드", icon: "🎹", ready: false, target: "other", minus: true,
+  { key: "keyboard", label: "키보드", icon: "🎹", ready: true, target: "other", minus: true,
     note: "기타(멜로디 라인) 빼고" },
   { key: "guitar", label: "기타", icon: "🎸", ready: false, target: "other", minus: true,
     note: "기타만 빼고" },
