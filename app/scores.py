@@ -61,6 +61,11 @@ class ScoreAnalyzer(ABC):
     def remove(self, out_dir: Path) -> None:
         remove(out_dir)
 
+    def song_map(self, data: dict, current: dict) -> Optional[dict]:
+        """악보를 올렸을 때 자동으로 만들 송 맵 (구간·템포). 없으면 None — 송 맵을 만들지 않는다.
+        current: 지금 활성 송 맵 (1마디 1박 등은 여기서 물려받는다). 드럼은 AI 악보가 송 맵을 만들어 None."""
+        return None
+
 
 _REGISTRY: dict[str, ScoreAnalyzer] = {}
 DEFAULT = "drum"

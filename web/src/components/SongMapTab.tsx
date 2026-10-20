@@ -551,6 +551,11 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
           <ScorePanel
             jobId={job.id}
             onScore={setScoreData}
+            onMapMade={(name) => {
+              onChanged();
+              void load(job.id);
+              setMsg(`악보의 구간·템포로 송 맵 새 버전 '${name}' 을 만들었습니다. 1마디 1박과 첫 마디 박자(못갖춘마디)를 확인하세요.`);
+            }}
             bar={barAtTime(bars, engine.time)?.bar ?? 1}
             onPickBar={(b) => {
               const t = bars.find((x) => x.bar === b)?.start;

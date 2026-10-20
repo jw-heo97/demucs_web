@@ -840,7 +840,8 @@ def get_score(job_id: str, inst: str = "drum"):
 
 @app.put("/api/jobs/{job_id}/score")
 async def put_score(job_id: str, request: Request, inst: str = "drum"):
-    """악보 PDF 를 올린다 (본문 = PDF 그대로). 곡 폴더에 score.pdf 로 저장하고 분석한다."""
+    """악보 PDF 를 올린다 (본문 = PDF 그대로). 곡 폴더에 score.pdf 로 저장하고 분석한다.
+    악기 분석기가 송 맵을 낼 수 있으면(키보드: 구간·템포) 송 맵 새 버전도 만든다."""
     d = _score_dir(job_id, inst, create=True)
     body = await request.body()
     if not body.startswith(b"%PDF"):
@@ -850,13 +851,28 @@ async def put_score(job_id: str, request: Request, inst: str = "drum"):
     tmp = d / (scores.SCORE_PDF + ".tmp")
     tmp.write_bytes(body)
     tmp.replace(d / scores.SCORE_PDF)
+    an = scores.analyzer(_inst(inst))
     try:
-        data = await asyncio.to_thread(scores.analyzer(_inst(inst)).rebuild, d)
+        data = await asyncio.to_thread(an.rebuild, d)
     except Exception as e:                 # 깨진 PDF 등
         raise HTTPException(400, f"악보를 읽지 못했습니다: {e}") from e
     job = store.get(job_id)
     job.files = store._scan_files(job, job.out_dir)   # 곡 폴더 전체 (악기 폴더 포함)
-    return _score_payload(job_id, data, inst)
+    out = _score_payload(job_id, data, inst)
+    sm = an.song_map(data, job.songmap or {})
+    if sm:
+        names = {v["name"] for v in (job.map_versions or [])}
+        name, k = "악보", 2
+        while name in names:
+            name, k = f"악보 {k}", k + 1
+        who, dv = _who(request)
+        try:
+            v = await asyncio.to_thread(store.create_version, job, name, sm,
+                                        access.owner_key(who, dv), access.owner_name(who, dv))
+            out["map_version"] = v["name"]
+        except ValueError as e:            # 버전이 꽉 찬 경우 등 — 악보는 올라갔다
+            out["map_error"] = str(e)
+    return out
 
 
 @app.post("/api/jobs/{job_id}/score/analyze")

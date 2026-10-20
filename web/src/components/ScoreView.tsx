@@ -197,9 +197,12 @@ export function ScorePanel({
   bar,
   onPickBar,
   onScore,
+  onMapMade,
   children,
 }: {
   jobId: string;
+  /** 악보를 올리며 송 맵 새 버전이 만들어졌을 때 (키보드: 구간·템포) */
+  onMapMade?: (name: string) => void;
   bar: number;
   onPickBar?: (bar: number) => void;
   /** 불러온 악보를 바깥(송 맵 만들기)에서도 쓰게 알려준다 */
@@ -232,7 +235,12 @@ export function ScorePanel({
     try {
       const s = await api.uploadScore(jobId, f);
       setScore(s);
-      setMsg(`${s.pages.length}쪽 · ${s.measures.length}마디${s.tempo ? ` · ♩=${s.tempo}` : ""}`);
+      setMsg(
+        `${s.pages.length}쪽 · ${s.measures.length}마디${s.tempo ? ` · ♩=${s.tempo}` : ""}` +
+          (s.map_version ? ` · 송 맵 새 버전 '${s.map_version}' (구간 ${s.marks.length}개)` : "") +
+          (s.map_error ? ` · 송 맵은 못 만들었습니다: ${s.map_error}` : ""),
+      );
+      if (s.map_version) onMapMade?.(s.map_version);
     } catch (e) {
       setMsg((e as Error).message);
     } finally {

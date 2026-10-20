@@ -175,6 +175,9 @@ export interface ScoreData {
   warnings: string[];
   /** 음원 n번째 마디 = 악보 order[n-1] 번째 마디 (반복 기호가 있는 악보) */
   order?: number[];
+  /** 올릴 때 만든 송 맵 새 버전 이름 (키보드) */
+  map_version?: string;
+  map_error?: string;
 }
 
 /** AI 악보 에이전트의 진행 상황 (agent/service.py) */

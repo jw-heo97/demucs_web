@@ -217,5 +217,26 @@ class KeyboardScoreAnalyzer(ScoreAnalyzer):
                 "marks": sorted(uniq, key=lambda m: m["measure"]), "tempo": tempo, "warnings": [],
                 "repeats": {"starts": [], "ends": []}}
 
+    def song_map(self, data: dict, current: dict) -> Optional[dict]:
+        """연습 기호(A, B …)마다 구간, 템포는 악보 값. 1마디 1박·박자는 지금 송 맵 것을 쓴다
+        (키보드는 AI 악보가 없어 악보를 올릴 때 송 맵을 만든다)."""
+        marks = data.get("marks") or []
+        if not marks and not data.get("tempo"):
+            return None
+        first = (current.get("ranges") or [{}])[0]
+        bpb, unit = int(first.get("beats_per_bar") or 4), int(first.get("beat_unit") or 4)
+        order = data.get("order")
+        n = len(order) if order else len(data.get("measures", []))
+        name_at = {m["measure"]: m["text"] for m in marks}
+        ranges = [{"from_bar": 1, "name": name_at.get(order[0] if order else 1, ""), "beats_per_bar": bpb,
+                   "beat_unit": unit, "bpm": None, "click_beats": None}]
+        for b in range(2, n + 1):
+            nm = name_at.get(order[b - 1] if order else b)
+            if nm and nm != ranges[-1]["name"]:
+                ranges.append({"from_bar": b, "name": nm, "beats_per_bar": bpb, "beat_unit": unit,
+                               "bpm": None, "click_beats": None})
+        return {"anchor": float(current.get("anchor") or 0.0),
+                "bpm": float(data.get("tempo") or current.get("bpm") or 120.0), "ranges": ranges}
+
 
 scores.register(KeyboardScoreAnalyzer())
