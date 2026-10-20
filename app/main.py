@@ -561,7 +561,7 @@ def delete_job(request: Request, job_id: str):
 
 
 # --- 악보 ---
-# 곡 폴더의 score.pdf 와 그 분석 결과(_score.json, _score/page-N.png). scores.py 참고.
+# 곡 폴더의 score.pdf 와 그 분석 결과(_score.json, _score/page-N.png). scores.py(악기별 분석기) 참고.
 
 MAX_SCORE_BYTES = 30 * 1024 * 1024
 MAX_TRACK_BYTES = 200 * 1024 * 1024
@@ -820,7 +820,7 @@ def get_score(job_id: str, inst: str = "drum"):
     d = _score_dir(job_id, inst)
     data = scores.load(d)
     if data is None and (d / scores.SCORE_PDF).exists():
-        data = scores.rebuild(d)          # PDF 만 넣어둔 경우 처음 볼 때 분석한다
+        data = scores.analyzer(_inst(inst)).rebuild(d)   # PDF 만 넣어둔 경우 처음 볼 때 분석한다 (악기별 분석기)
     if data is None:
         raise HTTPException(404, "연결된 악보가 없습니다.")
     return _score_payload(job_id, data, inst)
@@ -839,7 +839,7 @@ async def put_score(job_id: str, request: Request, inst: str = "drum"):
     tmp.write_bytes(body)
     tmp.replace(d / scores.SCORE_PDF)
     try:
-        data = await asyncio.to_thread(scores.rebuild, d)
+        data = await asyncio.to_thread(scores.analyzer(_inst(inst)).rebuild, d)
     except Exception as e:                 # 깨진 PDF 등
         raise HTTPException(400, f"악보를 읽지 못했습니다: {e}") from e
     job = store.get(job_id)
@@ -852,7 +852,7 @@ def analyze_score(job_id: str, inst: str = "drum"):
     d = _score_dir(job_id, inst)
     if not (d / scores.SCORE_PDF).exists():
         raise HTTPException(404, "연결된 악보가 없습니다.")
-    data = scores.rebuild(d)
+    data = scores.analyzer(_inst(inst)).rebuild(d)
     job = store.get(job_id)
     job.files = store._scan_files(job, job.out_dir)   # 곡 폴더 전체 (악기 폴더 포함)
     return _score_payload(job_id, data, inst)
