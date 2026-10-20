@@ -10,7 +10,7 @@ import { SearchTab } from "./components/SearchTab";
 import { SongMapTab } from "./components/SongMapTab";
 import { WorkTab } from "./components/WorkTab";
 import { InstrumentPicker } from "./components/InstrumentPicker";
-import { instrumentOf, saveInstrument, savedInstrument, type Instrument } from "./lib/instrument";
+import { instrumentOf, saveInstrument, savedInstrument, setCurrentInstrument, type Instrument } from "./lib/instrument";
 import type { Job } from "./types";
 
 type TabKey = "work" | "library" | "play" | "playlist" | "map" | "tube" | "access";
@@ -24,6 +24,8 @@ export function App() {
   const [jobs, setJobs] = useState<Job[]>([]);
   // 연습할 악기 — 접속하면 먼저 고른다 (이 기기에 기억)
   const [instrument, setInstrument] = useState<Instrument | null>(() => savedInstrument());
+  // 악보 API·파일은 고른 악기 것을 쓴다 (탭들은 악기를 고른 뒤에 그려지므로 그리기 전에 맞춰 둔다)
+  if (instrument) setCurrentInstrument(instrument.key);
   const [info, setInfo] = useState<string>("");
   const [pick, setPick] = useState<{ videoId: string; title: string } | null>(null);
   // 내 권한: 접속자 관리 탭(관리자)·수정 가능 여부. 서버가 정하고 여기선 보여 주기만 한다.
