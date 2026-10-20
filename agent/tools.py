@@ -771,11 +771,11 @@ def build_server(run: Run):
         return _ok("기록했습니다. 이제 끝내도 됩니다.")
 
     if run.mode == "pdf":
-        tools = [get_job, pdf_overview, set_sections, audio_grid, set_timing, measure_images, write_measures,
-                 check_measures, refine_timing, save_result, report]
+        tools = [get_job, pdf_overview, set_sections, audio_grid, save_result, report]
     else:
         tools = [get_job, download_video, look, find_score_band, extract_strips, show_strips, strip_table,
-                 edit_strip, add_strip, align_audio, build_score, set_timing, measure_images, write_measures,
-                 check_measures, refine_timing, save_result, report]
+                 edit_strip, add_strip, align_audio, build_score, save_result, report]
+    # 음표 전체 받아 적기(set_timing·measure_images·write_measures·check_measures·refine_timing)는 쓰지 않는다 —
+    # 정확도가 모자라 손이 더 갔다. 음표는 사용자가 송 맵에서 고칠 마디만 그려 넣는다 (손글씨 인식).
     run.tools = {t.name: t for t in tools}   # 시험용: 에이전트 없이 바로 부를 수 있게
     return create_sdk_mcp_server("score", "1.0.0", tools), [f"mcp__score__{t.name}" for t in tools]
