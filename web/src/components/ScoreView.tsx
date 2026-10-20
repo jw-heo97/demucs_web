@@ -10,6 +10,19 @@ import { INK_COLORS, InkLayer, InkZoom, useScoreInk, type InkTool } from "./Scor
 const BLOCK = 4;
 const SHOW = 8;
 
+/**
+ * 마디를 칠할 상자의 세로 범위 (쪽 좌표). 한 단이면 보표 위아래로 음표가 나가는 만큼(보표 높이의 0.9배씩),
+ * 여러 단 묶음(키보드)이면 묶음 위아래로 줄 간격 2칸씩 — 보표 높이 기준으로 늘리면 옆 줄까지 덮는다.
+ */
+export function barBand(ms: ScoreMeasure): { top: number; height: number } {
+  if (ms.staves && ms.staves.length > 1) {
+    const pad = 2 * (ms.gap ?? (ms.staves[0][1] - ms.staves[0][0]) / 4);
+    return { top: ms.top - pad, height: ms.bot - ms.top + 2 * pad };
+  }
+  const h = ms.bot - ms.top;
+  return { top: ms.top - h * 0.9, height: h * 2.8 };
+}
+
 /** 음원 마디 번호 → 악보 마디(0부터). 반복 기호가 있으면 order 가 순서를 정한다. */
 export function measureOfBar(score: ScoreData, bar: number): number | null {
   const n = score.order ? score.order[bar - 1] : bar;
@@ -148,7 +161,6 @@ function ScoreRow({
     g.drawImage(img, cx0 * s, cy0 * s, cw * s, ch * s, 0, 0, c.width, c.height);
   }, [img, cx0, cy0, cw, ch, page.w]);
 
-  const staffH = first.bot - first.top;
   return (
     <div className="score-row" style={{ width: `${Math.min(100, (cw / fullW) * 100)}%` }}>
       <div className="score-crop" style={{ aspectRatio: `${cw} / ${ch}` }}>
@@ -165,8 +177,8 @@ function ScoreRow({
               style={{
                 left: `${((m.x0 - cx0) / cw) * 100}%`,
                 width: `${((m.x1 - m.x0) / cw) * 100}%`,
-                top: `${((m.top - staffH * 0.9 - cy0) / ch) * 100}%`,
-                height: `${((staffH * 2.8) / ch) * 100}%`,
+                top: `${((barBand(m).top - cy0) / ch) * 100}%`,
+                height: `${(barBand(m).height / ch) * 100}%`,
               }}
             />
           );
@@ -363,8 +375,8 @@ export function ScorePages({
                   style={{
                     left: `${(ms.x0 / pg.w) * 100}%`,
                     width: `${((ms.x1 - ms.x0) / pg.w) * 100}%`,
-                    top: `${((ms.top - (ms.bot - ms.top) * 0.9) / pg.h) * 100}%`,
-                    height: `${(((ms.bot - ms.top) * 2.8) / pg.h) * 100}%`,
+                    top: `${(barBand(ms).top / pg.h) * 100}%`,
+                    height: `${(barBand(ms).height / pg.h) * 100}%`,
                   }}
                 />
               ),
@@ -675,8 +687,8 @@ export function ScoreSheet({
               style={{
                 left: `${(ms.x0 / pg.w) * 100}%`,
                 width: `${((ms.x1 - ms.x0) / pg.w) * 100}%`,
-                top: `${((ms.top - (ms.bot - ms.top) * 0.9) / pg.h) * 100}%`,
-                height: `${(((ms.bot - ms.top) * 2.8) / pg.h) * 100}%`,
+                top: `${(barBand(ms).top / pg.h) * 100}%`,
+                height: `${(barBand(ms).height / pg.h) * 100}%`,
               }}
             />
           ),

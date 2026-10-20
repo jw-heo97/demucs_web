@@ -120,3 +120,4 @@ def rebuild(out_dir: Path) -> dict:
 
 # 구현체 등록 (구현 모듈이 이 파일의 ScoreAnalyzer 를 상속하므로 맨 끝에서 불러온다)
 from drum import scores as _drum_scores  # noqa: E402,F401
+from keyboard import scores as _keyboard_scores  # noqa: E402,F401

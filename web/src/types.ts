@@ -158,6 +158,10 @@ export interface ScoreMeasure {
   bot: number;
   sys_x0: number;
   sys_x1: number;
+  /** 여러 단 묶음(키보드: 멜로디 + 큰보표)일 때 단마다 [위, 아래] — top/bot 은 묶음 전체 */
+  staves?: [number, number][];
+  /** 오선 줄 간격 (여러 단 묶음일 때) */
+  gap?: number;
 }
 
 export interface ScoreData {
