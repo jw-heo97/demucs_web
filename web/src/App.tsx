@@ -9,6 +9,8 @@ import { PlaylistTab } from "./components/PlaylistTab";
 import { SearchTab } from "./components/SearchTab";
 import { SongMapTab } from "./components/SongMapTab";
 import { WorkTab } from "./components/WorkTab";
+import { InstrumentPicker } from "./components/InstrumentPicker";
+import { instrumentOf, saveInstrument, savedInstrument, type Instrument } from "./lib/instrument";
 import type { Job } from "./types";
 
 type TabKey = "work" | "library" | "play" | "playlist" | "map" | "tube" | "access";
@@ -20,6 +22,8 @@ export function App() {
   const [playPick, setPlayPick] = useState<{ id: string; n: number } | null>(null);
   const [mapPick, setMapPick] = useState<{ id: string; n: number } | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
+  // 연습할 악기 — 접속하면 먼저 고른다 (이 기기에 기억)
+  const [instrument, setInstrument] = useState<Instrument | null>(() => savedInstrument());
   const [info, setInfo] = useState<string>("");
   const [pick, setPick] = useState<{ videoId: string; title: string } | null>(null);
   // 내 권한: 접속자 관리 탭(관리자)·수정 가능 여부. 서버가 정하고 여기선 보여 주기만 한다.
@@ -92,7 +96,14 @@ export function App() {
   return (
     <MeContext.Provider value={me}>
     <div className="wrap">
-      <h1>Demucs Web</h1>
+      <div className="titlebar">
+        <h1>Demucs Web</h1>
+        {instrument && (
+          <button className="ghost instrument-chip" onClick={() => setInstrument(null)} title="악기 바꾸기">
+            {instrument.icon} {instrument.label}
+          </button>
+        )}
+      </div>
       <div className="sub">{info}</div>
       {newBuild && (
         <div className="updatebar">
@@ -106,6 +117,15 @@ export function App() {
         </div>
       )}
 
+      {!instrument ? (
+        <InstrumentPicker
+          onPick={(k) => {
+            saveInstrument(k);
+            setInstrument(instrumentOf(k));
+          }}
+        />
+      ) : (
+      <>
       <div className="tabs" role="tablist">
         {(
           [
@@ -131,7 +151,7 @@ export function App() {
       </div>
 
       {tab === "work" && (
-        <WorkTab jobs={jobs} onChanged={refresh} picked={pick} onPickedUsed={() => setPick(null)} />
+        <WorkTab jobs={jobs} onChanged={refresh} picked={pick} onPickedUsed={() => setPick(null)} instrument={instrument} />
       )}
       {tab === "library" && (
         <LibraryTab
@@ -165,6 +185,8 @@ export function App() {
             setTab("work");
           }}
         />
+      )}
+      </>
       )}
       <DialogHost />
     </div>
