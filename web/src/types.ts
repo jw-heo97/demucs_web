@@ -82,6 +82,8 @@ export interface JobTrack {
 export interface Job {
   id: string;
   url: string;
+  /** 어느 악기 곡인가 (drum|keyboard|guitar|bass) — 없으면 drum (예전 곡) */
+  instrument?: string;
   format: "wav" | "mp3" | "both";
   target: string;
   status: "queued" | "downloading" | "separating" | "encoding" | "done" | "error";
