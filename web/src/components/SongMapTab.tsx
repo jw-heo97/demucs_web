@@ -578,6 +578,7 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
           {/* 음표 악보 편집 (AI 가 받아 적은 것 또는 빈 악보에서) */}
           <NotationEditor
             job={job}
+            score={scoreData}
             bars={bars}
             bar={barAtTime(bars, engine.time)?.bar ?? 1}
             map={map}

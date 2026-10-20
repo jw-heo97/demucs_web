@@ -110,17 +110,15 @@ export function AiScore({ job, onChanged }: { job: Job; onChanged: () => void })
     }
   }
 
-  // 곡에 이미 있는 악보 PDF 로 (PDF 는 그대로, 음표 악보 + 송 맵 새 버전)
+  // 곡에 이미 있는 악보 PDF 로 송 맵 새 버전 (PDF 는 그대로)
   async function fromPdf() {
     setErr("");
-    const hasNotation = job.files.some((f) => f.rel === "_notation.json");
     if (
       !(await confirmBox({
-        title: "악보 PDF 로 음표 악보 만들기",
+        title: "악보 PDF 로 송 맵 만들기",
         message:
-          "AI 가 이 곡의 악보 PDF 를 마디마다 읽어 음표 악보(송 맵에서 음표를 고칠 수 있는 악보)를 받아 적고, " +
-          "구간 이름·박자·템포를 읽어 송 맵 새 버전('AI 악보')을 만듭니다. PDF 와 지금 송 맵 버전은 그대로 남습니다." +
-          (hasNotation ? " 지금 있는 음표 악보는 이력에 남기고 새로 씁니다." : ""),
+          "AI 가 이 곡의 악보 PDF 에서 구간 이름·박자·템포를 읽고 곡 음원에 맞춰 송 맵 새 버전('AI 악보')을 만듭니다. " +
+          "글자가 그림으로 바뀐 PDF 도 읽습니다. PDF 와 지금 송 맵 버전은 그대로 남습니다.",
         okText: "시작",
       }))
     )
@@ -148,8 +146,8 @@ export function AiScore({ job, onChanged }: { job: Job; onChanged: () => void })
           </button>
         )}
         {canEdit && hasPdf && (
-          <button className="ghost" onClick={() => void fromPdf()} disabled={busy} title="곡에 있는 악보 PDF 로 음표 악보·송 맵 만들기">
-            ✨ PDF → 음표 악보
+          <button className="ghost" onClick={() => void fromPdf()} disabled={busy} title="곡에 있는 악보 PDF 로 송 맵(구간·박자·템포) 만들기">
+            ✨ PDF → 송 맵
           </button>
         )}
         {run && (
