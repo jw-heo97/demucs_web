@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { currentInstrument, scoreRel } from "../lib/instrument";
 import { ApiError, api } from "../api";
 import { ask, confirmBox } from "../lib/dialog";
 import { useMe } from "../lib/me";
@@ -88,7 +89,7 @@ export function AiScore({ job, onChanged }: { job: Job; onChanged: () => void })
       okText: "시작",
     });
     if (!url?.trim()) return;
-    const hasScore = job.files.some((f) => f.rel === "score.pdf");
+    const hasScore = job.files.some((f) => f.rel === scoreRel("score.pdf"));
     let overwrite = false;
     if (hasScore) {
       overwrite = await confirmBox({
@@ -134,7 +135,9 @@ export function AiScore({ job, onChanged }: { job: Job; onChanged: () => void })
     }
   }
 
-  const hasPdf = job.files.some((f) => f.rel === "score.pdf");
+  const hasPdf = job.files.some((f) => f.rel === scoreRel("score.pdf"));
+  // AI 악보는 드럼만 (다른 악기는 각자 만든다)
+  if (currentInstrument() !== "drum") return null;
   const busy = run?.phase === "queued" || run?.phase === "running";
   const step = run ? STEP[run.state] ?? run.state : "";
   return (

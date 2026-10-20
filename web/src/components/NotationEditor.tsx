@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { scoreRel } from "../lib/instrument";
 import { createPortal } from "react-dom";
 import { api } from "../api";
 import { choose, confirmBox } from "../lib/dialog";
@@ -69,7 +70,7 @@ export function NotationEditor({
   const [clip, setClip] = useState<NMeasure[] | null>(null);
   const undo = useRef<Notation[]>([]);
   const redo = useRef<Notation[]>([]);
-  const has = job.files.some((f) => f.rel === "_notation.json");
+  const has = job.files.some((f) => f.rel === scoreRel("_notation.json"));
 
   useEffect(() => {
     let alive = true;

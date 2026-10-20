@@ -3,6 +3,7 @@
  *
  * 인증은 없다 — 접근 제어는 Tailscale 이 맡는다 (README 참고).
  */
+import { instQuery } from "./lib/instrument";
 import type { Notation } from "./lib/notation";
 import type { AiRun, InkDoc, Job, JobTrack, MapPayload, MapVersion, Playlist, ScoreData, SearchItem, SongMap } from "./types";
 
@@ -169,21 +170,21 @@ export const api = {
   aiHealth: () =>
     get<{ available: boolean; auth?: { ready: boolean }; detail?: string }>("/api/ai/health"),
   aiStart: (id: string, score_url: string, overwrite = false) =>
-    post<AiRun>(`/api/jobs/${id}/ai-score`, { score_url, overwrite }),
+    post<AiRun>(`/api/jobs/${id}/ai-score${instQuery()}`, { score_url, overwrite }),
   /** 곡에 이미 있는 악보 PDF 로 음표 악보·송 맵 만들기 */
-  aiFromPdf: (id: string) => post<AiRun>(`/api/jobs/${id}/ai-score`, { mode: "pdf" }),
+  aiFromPdf: (id: string) => post<AiRun>(`/api/jobs/${id}/ai-score${instQuery()}`, { mode: "pdf" }),
   aiStatus: (id: string) => get<AiRun>(`/api/jobs/${id}/ai-score`),
 
   // --- 음표 악보 (편집 가능) ---
-  notation: (id: string) => get<Notation>(`/api/jobs/${id}/notation`),
+  notation: (id: string) => get<Notation>(`/api/jobs/${id}/notation${instQuery()}`),
   saveNotation: (id: string, notation: Notation, note = "") =>
-    put<Notation>(`/api/jobs/${id}/notation`, { notation, note }),
+    put<Notation>(`/api/jobs/${id}/notation${instQuery()}`, { notation, note }),
   notationHistory: (id: string) =>
-    get<{ history: { at: number; note: string; measures: number }[] }>(`/api/jobs/${id}/notation/history`),
-  restoreNotation: (id: string, index: number) => post<Notation>(`/api/jobs/${id}/notation/restore`, { index }),
+    get<{ history: { at: number; note: string; measures: number }[] }>(`/api/jobs/${id}/notation/history${instQuery()}`),
+  restoreNotation: (id: string, index: number) => post<Notation>(`/api/jobs/${id}/notation/restore${instQuery()}`, { index }),
   /** 원본 악보 위 펜 필기 */
-  scoreInk: (id: string) => get<InkDoc>(`/api/jobs/${id}/score/ink`),
-  saveScoreInk: (id: string, doc: InkDoc) => put<InkDoc>(`/api/jobs/${id}/score/ink`, doc),
+  scoreInk: (id: string) => get<InkDoc>(`/api/jobs/${id}/score/ink${instQuery()}`),
+  saveScoreInk: (id: string, doc: InkDoc) => put<InkDoc>(`/api/jobs/${id}/score/ink${instQuery()}`, doc),
   /** 손으로 그린 마디(PNG) → 칸 (저장은 안 한다) */
   recognizeDrawing: (
     id: string,
@@ -256,14 +257,14 @@ export const api = {
     ),
 
   // --- 악보 ---
-  score: (id: string) => get<ScoreData>(`/api/jobs/${id}/score`),
+  score: (id: string) => get<ScoreData>(`/api/jobs/${id}/score${instQuery()}`),
   uploadScore: (id: string, pdf: Blob) =>
-    request<ScoreData>(`/api/jobs/${id}/score`, {
+    request<ScoreData>(`/api/jobs/${id}/score${instQuery()}`, {
       method: "PUT",
       body: pdf,
       headers: { "Content-Type": "application/pdf" },
     }),
-  deleteScore: (id: string) => del(`/api/jobs/${id}/score`),
+  deleteScore: (id: string) => del(`/api/jobs/${id}/score${instQuery()}`),
 
   // --- 사용자 트랙 (녹음·반주) ---
   uploadTrack: (id: string, audio: Blob, name: string, offsetMs: number) =>

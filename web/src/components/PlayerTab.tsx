@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { scoreRel } from "../lib/instrument";
 import { api } from "../api";
 import { useAudioEngine } from "../hooks/useAudioEngine";
 import { colorOf, sectionColors } from "../lib/sectionColors";
@@ -87,7 +88,7 @@ export function PlayerTab({ jobs, onChanged, pick, onOpenMap, onPickSong }: Prop
 
   // 연결된 악보
   const [score, setScore] = useState<ScoreData | null>(null);
-  const scoreJob = job?.files.some((f) => f.rel === "score.pdf") ? job.id : null;
+  const scoreJob = job?.files.some((f) => f.rel === scoreRel("score.pdf")) ? job.id : null;
   useEffect(() => {
     let alive = true;
     setScore(null);
@@ -99,7 +100,7 @@ export function PlayerTab({ jobs, onChanged, pick, onOpenMap, onPickSong }: Prop
 
   // 음표 악보: 원본 악보(PDF·영상 악보 그림)가 있으면 고친 마디만 원본 위에 덮어 그린다. 원본이 없을 때만 통째로 그린다
   const [notation, setNotation] = useState<Notation | null>(null);
-  const notationSig = job?.files.find((f) => f.rel === "_notation.json")?.mtime ?? null;
+  const notationSig = job?.files.find((f) => f.rel === scoreRel("_notation.json"))?.mtime ?? null;
   useEffect(() => {
     let alive = true;
     setNotation(null);
