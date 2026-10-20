@@ -151,6 +151,39 @@ class KeyboardScoreAnalyzer(ScoreAnalyzer):
         return [sp for sp in spans if any(f in sp["font"] for f in self.REHEARSAL_FONTS)
                 and re.fullmatch(r"[a-zA-Z]", sp["text"].strip())]
 
+    # ---------------------------------------------------------------- 못갖춘마디
+    #: 악보 글꼴(Finale Maestro 계열) — 쉼표·음표 머리 글자가 같은 자리에 있다
+    MUSIC_FONTS = ("Chaconne", "Maestro", "Petrucci", "Engraver", "Broadway", "Jazz")
+    #: 쉼표 글자 → 길이 (4분음표 = 1)
+    RESTS = {"Ó": 4.0, "î": 2.0, "Î": 1.0, "ä": 0.5, "Å": 0.25, "¨": 0.125}
+    #: 음표 머리 글자 (검은 머리·흰 머리·온음표·×머리)
+    HEADS = set("ÏúwÀÌ")
+
+    def pickup_beats(self, page, grp: list[dict], x0: float, x1: float) -> Optional[float]:
+        """첫 마디가 못갖춘마디면 그 길이(4분음표 박 수). 연주할 게 없는 단은 쉼표로만 채워지므로
+        쉼표만 있는 단의 쉼표 길이를 더한다 (점쉼표는 1.5배). 모르면 None."""
+        chars = []
+        for b in page.get_text("rawdict")["blocks"]:
+            for ln in b.get("lines", []):
+                for sp in ln.get("spans", []):
+                    if any(f in sp["font"] for f in self.MUSIC_FONTS):
+                        chars += [(c["c"], c["bbox"]) for c in sp["chars"]]
+        lengths = []
+        for st in grp:
+            lo, hi = st["top"] - 2 * st["gap"], st["bot"] + 2 * st["gap"]
+            mine = [(c, bb) for c, bb in chars if x0 < (bb[0] + bb[2]) / 2 < x1 and lo <= (bb[1] + bb[3]) / 2 <= hi]
+            if any(c in self.HEADS for c, _ in mine):
+                continue
+            rests = [(c, bb) for c, bb in mine if c in self.RESTS]
+            if not rests:
+                continue
+            total = 0.0
+            for c, bb in rests:
+                dotted = any(d in (".", "k") and 0 < dbb[0] - bb[2] < 6 for d, dbb in mine)
+                total += self.RESTS[c] * (1.5 if dotted else 1.0)
+            lengths.append(total)
+        return max(lengths) if lengths else None
+
     # ---------------------------------------------------------------- 분석
     def analyze(self, pdf_path: Path, out_dir: Path) -> dict:
         import pymupdf
@@ -163,6 +196,7 @@ class KeyboardScoreAnalyzer(ScoreAnalyzer):
         doc = pymupdf.open(pdf_path)
         pages, measures, marks = [], [], []
         tempo: Optional[float] = None
+        pickup: Optional[float] = None
         for pi, page in enumerate(doc):
             name = f"page-{pi + 1}.png"
             page.get_pixmap(dpi=RENDER_DPI).save(str(img_dir / name))
@@ -191,7 +225,10 @@ class KeyboardScoreAnalyzer(ScoreAnalyzer):
                 first = len(measures)
                 left = x0
                 staves = [[round(g["top"], 2), round(g["bot"], 2)] for g in grp]
-                for x in self.system_barlines(vl, grp):
+                bars = self.system_barlines(vl, grp)
+                if pi == 0 and si == 0 and bars:
+                    pickup = self.pickup_beats(page, grp, x0, bars[0])
+                for x in bars:
                     measures.append({"page": pi, "system": si, "x0": left, "x1": x, "y0": y0, "y1": y1,
                                      "top": top, "bot": bot, "sys_x0": x0, "sys_x1": x1,
                                      "staves": staves, "gap": round(gap, 2)})
@@ -213,9 +250,12 @@ class KeyboardScoreAnalyzer(ScoreAnalyzer):
             m["number"] = k + 1
             for key in ("x0", "x1", "y0", "y1", "top", "bot", "sys_x0", "sys_x1"):
                 m[key] = round(m[key], 2)
-        return {"version": 1, "kind": "keyboard", "pages": pages, "measures": measures,
-                "marks": sorted(uniq, key=lambda m: m["measure"]), "tempo": tempo, "warnings": [],
-                "repeats": {"starts": [], "ends": []}}
+        out = {"version": 1, "kind": "keyboard", "pages": pages, "measures": measures,
+               "marks": sorted(uniq, key=lambda m: m["measure"]), "tempo": tempo, "warnings": [],
+               "repeats": {"starts": [], "ends": []}}
+        if pickup:
+            out["pickup"] = pickup
+        return out
 
     def song_map(self, data: dict, current: dict) -> Optional[dict]:
         """연습 기호(A, B …)마다 구간, 템포는 악보 값. 1마디 1박·박자는 지금 송 맵 것을 쓴다
@@ -230,13 +270,31 @@ class KeyboardScoreAnalyzer(ScoreAnalyzer):
         name_at = {m["measure"]: m["text"] for m in marks}
         ranges = [{"from_bar": 1, "name": name_at.get(order[0] if order else 1, ""), "beats_per_bar": bpb,
                    "beat_unit": unit, "bpm": None, "click_beats": None}]
+        meter = self.pickup_meter(data.get("pickup"), bpb * 4 / unit)
+        if meter:
+            # 1마디 = 못갖춘마디, 2마디부터 원래 박자
+            ranges[0].update(beats_per_bar=meter[0], beat_unit=meter[1])
+            if not name_at.get(order[1] if order else 2):
+                ranges.append({"from_bar": 2, "name": "", "beats_per_bar": bpb, "beat_unit": unit,
+                               "bpm": None, "click_beats": None})
         for b in range(2, n + 1):
             nm = name_at.get(order[b - 1] if order else b)
-            if nm and nm != ranges[-1]["name"]:
+            if nm and (nm != ranges[-1]["name"] or ranges[-1]["from_bar"] == 1):
                 ranges.append({"from_bar": b, "name": nm, "beats_per_bar": bpb, "beat_unit": unit,
                                "bpm": None, "click_beats": None})
         return {"anchor": float(current.get("anchor") or 0.0),
                 "bpm": float(data.get("tempo") or current.get("bpm") or 120.0), "ranges": ranges}
+
+    @staticmethod
+    def pickup_meter(beats: Optional[float], bar: float) -> Optional[tuple[int, int]]:
+        """못갖춘마디 길이(4분음표 박) → 송 맵 박자 (박 수, 단위). 한 마디를 다 채우면 못갖춘마디가 아니다."""
+        if not beats or beats >= bar - 1e-6:
+            return None
+        for unit in (4, 8, 16):
+            n = beats * unit / 4
+            if abs(n - round(n)) < 1e-6 and round(n) >= 1:
+                return int(round(n)), unit
+        return None
 
 
 scores.register(KeyboardScoreAnalyzer())
