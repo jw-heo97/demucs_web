@@ -164,10 +164,7 @@ export const api = {
     minus_mixes?: boolean;
     /** 악보가 나오는 연주 영상 — 분리가 끝나면 AI 가 악보·송 맵을 만든다 */
     score_url?: string;
-    /** 어느 악기 곡인가 */
-    instrument?: string;
   }) => post<Job>("/api/jobs", body),
-  setJobInstrument: (id: string, instrument: string) => put<Job>(`/api/jobs/${id}/instrument`, { instrument }),
 
   // --- AI 악보 ---
   aiHealth: () =>

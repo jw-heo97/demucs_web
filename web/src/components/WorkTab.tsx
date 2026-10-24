@@ -54,7 +54,6 @@ export function WorkTab({ jobs, onChanged, picked, onPickedUsed, instrument }: P
         metronome,
         minus_mixes: minusMixes,
         score_url: scoreUrl.trim() || undefined,
-        instrument: instrument.key,
       });
       setUrl("");
       setTitle("");

@@ -257,23 +257,11 @@ def create_job(request: Request, payload: dict = Body(...)):
             owner_name=access.owner_name(*_who(request)),
             owner_link=access.link_of(_who(request)[1]),
             score_src=payload.get("score_url"),
-            instrument=(payload.get("instrument") or "drum"),
         )
     except (DownloadError, ValueError) as e:
         raise HTTPException(400, str(e)) from e
     except RuntimeError as e:
         raise HTTPException(429, str(e)) from e
-    return job.to_dict()
-
-
-@app.put("/api/jobs/{job_id}/instrument")
-def set_job_instrument(job_id: str, payload: dict = Body(...)):
-    """{instrument} — 이 곡을 어느 악기 곡으로 둘지 (화면은 고른 악기의 곡만 보여 준다)."""
-    job = _require_job(job_id)
-    inst = _inst(payload.get("instrument"))
-    if job.instrument != inst:
-        job.instrument = inst
-        store._save_meta(job)
     return job.to_dict()
 
 

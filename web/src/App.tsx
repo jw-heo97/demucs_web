@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { DialogHost } from "./lib/dialog";
 import { api } from "./api";
 import { MeContext, type Me } from "./lib/me";
@@ -26,12 +26,6 @@ export function App() {
   const [instrument, setInstrument] = useState<Instrument | null>(() => savedInstrument());
   // 악보 API·파일은 고른 악기 것을 쓴다 (탭들은 악기를 고른 뒤에 그려지므로 그리기 전에 맞춰 둔다)
   if (instrument) setCurrentInstrument(instrument.key);
-  // 고른 악기의 곡만 (예전 곡은 드럼)
-  const allJobs = jobs;
-  const myJobs = useMemo(
-    () => allJobs.filter((j) => (j.instrument ?? "drum") === (instrument?.key ?? "drum")),
-    [allJobs, instrument],
-  );
   const [info, setInfo] = useState<string>("");
   const [pick, setPick] = useState<{ videoId: string; title: string } | null>(null);
   // 내 권한: 접속자 관리 탭(관리자)·수정 가능 여부. 서버가 정하고 여기선 보여 주기만 한다.
@@ -159,11 +153,11 @@ export function App() {
       </div>
 
       {tab === "work" && (
-        <WorkTab jobs={myJobs} onChanged={refresh} picked={pick} onPickedUsed={() => setPick(null)} instrument={instrument} />
+        <WorkTab jobs={jobs} onChanged={refresh} picked={pick} onPickedUsed={() => setPick(null)} instrument={instrument} />
       )}
       {tab === "library" && (
         <LibraryTab
-          jobs={myJobs}
+          jobs={jobs}
           onChanged={refresh}
           onOpen={(id) => {
             setPlayPick((p) => ({ id, n: (p?.n ?? 0) + 1 }));
@@ -173,7 +167,7 @@ export function App() {
       )}
       {tab === "play" && (
         <PlayerTab
-          jobs={myJobs}
+          jobs={jobs}
           onChanged={refresh}
           pick={playPick}
           onOpenMap={(id) => {
@@ -183,8 +177,8 @@ export function App() {
           onPickSong={(id) => setPlayPick((p) => ({ id, n: (p?.n ?? 0) + 1 }))}
         />
       )}
-      {tab === "playlist" && <PlaylistTab jobs={myJobs} onChanged={refresh} />}
-      {tab === "map" && <SongMapTab jobs={myJobs} onChanged={refresh} pick={mapPick} />}
+      {tab === "playlist" && <PlaylistTab jobs={jobs} onChanged={refresh} />}
+      {tab === "map" && <SongMapTab jobs={jobs} onChanged={refresh} pick={mapPick} />}
       {tab === "access" && admin && <AccessTab />}
       {tab === "tube" && (
         <SearchTab
