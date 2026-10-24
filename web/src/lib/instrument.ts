@@ -52,25 +52,3 @@ export function saveInstrument(key: InstrumentKey | null): void {
     /* 저장 못 해도 이번 접속에는 쓴다 */
   }
 }
-
-// ---- 악보는 악기마다 따로 — 지금 고른 악기의 악보를 읽고 쓴다 (송 맵은 곡 하나에 하나로 같이 쓴다)
-let current: InstrumentKey = "drum";
-
-/** App 이 악기를 고를 때 부른다 */
-export function setCurrentInstrument(key: InstrumentKey): void {
-  current = key;
-}
-
-export function currentInstrument(): InstrumentKey {
-  return current;
-}
-
-/** 곡 폴더 안에서 지금 악기의 악보 파일 자리. 드럼은 곡 폴더 바로 아래(예전부터), 나머지는 _inst/<악기>/ */
-export function scoreRel(name: string): string {
-  return current === "drum" ? name : `_inst/${current}/${name}`;
-}
-
-/** 악보 API 에 붙이는 쿼리 (드럼은 붙이지 않는다) */
-export function instQuery(prefix: "?" | "&" = "?"): string {
-  return current === "drum" ? "" : `${prefix}inst=${current}`;
-}

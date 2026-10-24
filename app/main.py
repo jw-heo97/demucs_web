@@ -619,36 +619,15 @@ def delete_track(job_id: str, tid: str):
 
 
 
-# 악보는 악기마다 따로 (드럼 악보와 기타 악보는 다른 파일이다). 송 맵(마디·구간·템포)은 곡 하나에 하나로 같이 쓴다.
-# 드럼은 곡 폴더 바로 아래(예전부터 쓰던 자리), 다른 악기는 곡 폴더/_inst/<악기>/ 아래에 같은 이름으로 둔다.
-INSTRUMENTS = ("drum", "keyboard", "guitar", "bass")
-INST_DIR = "_inst"
-
-
-def _inst(inst: Optional[str]) -> str:
-    inst = (inst or "drum").strip().lower()
-    if inst not in INSTRUMENTS:
-        raise HTTPException(400, f"악기는 {', '.join(INSTRUMENTS)} 중 하나입니다.")
-    return inst
-
-
-def _score_dir(job_id: str, inst: Optional[str] = "drum", create: bool = False) -> Path:
-    """그 악기의 악보 파일이 있는 폴더 (score.pdf, _score/, _notation.json, _score_ink.json …)."""
-    inst = _inst(inst)
+def _score_dir(job_id: str) -> Path:
     job = _require_job(job_id, done=True)
     if not job.out_dir or not job.out_dir.exists():
         raise HTTPException(404, "결과 폴더가 없습니다.")
-    if inst == "drum":
-        return job.out_dir
-    d = job.out_dir / INST_DIR / inst
-    if create:
-        d.mkdir(parents=True, exist_ok=True)
-    return d
+    return job.out_dir
 
 
-def _score_payload(job_id: str, data: dict, inst: Optional[str] = "drum") -> dict:
-    q = "" if _inst(inst) == "drum" else f"?inst={inst}"
-    return {**data, "page_urls": [f"/api/jobs/{job_id}/score/pages/{i + 1}{q}"
+def _score_payload(job_id: str, data: dict) -> dict:
+    return {**data, "page_urls": [f"/api/jobs/{job_id}/score/pages/{i + 1}"
                                   for i in range(len(data.get("pages", [])))]}
 
 
@@ -690,11 +669,9 @@ def ai_health():
 
 
 @app.post("/api/jobs/{job_id}/ai-score", status_code=202)
-def ai_score_start(job_id: str, payload: dict = Body(...), inst: str = "drum"):
+def ai_score_start(job_id: str, payload: dict = Body(...)):
     """{score_url, overwrite?} — 악보가 나오는 연주 영상으로 악보 PDF·송 맵 새 버전을 만든다.
-    {mode: "pdf"} — 곡에 이미 있는 악보 PDF 로 송 맵 새 버전을 만든다 (PDF 는 그대로). 지금은 드럼 악보만."""
-    if _inst(inst) != "drum":
-        raise HTTPException(400, "이 악기의 AI 악보는 아직 없습니다 (드럼만).")
+    {mode: "pdf"} — 곡에 이미 있는 악보 PDF 로 음표 악보·송 맵 새 버전을 만든다 (PDF 는 그대로)."""
     job = _require_job(job_id, done=True)
     if payload.get("mode") == "pdf":
         if not (job.out_dir and (job.out_dir / scores.SCORE_PDF).exists()):
@@ -722,8 +699,8 @@ def ai_score_status(job_id: str):
 
 # --- 음표 악보 (_notation.json, app/notation.py) ---
 @app.get("/api/jobs/{job_id}/notation")
-def get_notation(job_id: str, inst: str = "drum"):
-    d = _score_dir(job_id, inst)
+def get_notation(job_id: str):
+    d = _score_dir(job_id)
     data = notation.load(d)
     if data is None:
         raise HTTPException(404, "편집 가능한 악보가 없습니다.")
@@ -731,20 +708,20 @@ def get_notation(job_id: str, inst: str = "drum"):
 
 
 @app.put("/api/jobs/{job_id}/notation")
-def put_notation(job_id: str, payload: dict = Body(...), inst: str = "drum"):
+def put_notation(job_id: str, payload: dict = Body(...)):
     """{notation, note?} — 통째로 저장 (바로 전 것은 이력에)."""
-    d = _score_dir(job_id, inst, create=True)
+    d = _score_dir(job_id)
     try:
         data = notation.save(d, payload.get("notation"), str(payload.get("note") or "")[:80])
     except notation.NotationError as e:
         raise HTTPException(400, str(e)) from e
     job = _require_job(job_id)
-    job.files = store._scan_files(job, job.out_dir)   # 곡 폴더 전체 (악기 폴더 포함)
+    job.files = store._scan_files(job, d)
     return data
 
 
 @app.post("/api/jobs/{job_id}/notation/recognize")
-def notation_recognize(job_id: str, payload: dict = Body(...), inst: str = "drum"):
+def notation_recognize(job_id: str, payload: dict = Body(...)):
     """{image: PNG(base64), measures: [{beats, unit, steps?}], first_bar} — 손으로 그린 마디를 칸으로 (저장은 안 한다)."""
     _require_job(job_id)
     img = str(payload.get("image") or "")
@@ -755,14 +732,14 @@ def notation_recognize(job_id: str, payload: dict = Body(...), inst: str = "drum
 
 
 @app.get("/api/jobs/{job_id}/notation/history")
-def notation_history(job_id: str, inst: str = "drum"):
-    return {"history": notation.history(_score_dir(job_id, inst))}
+def notation_history(job_id: str):
+    return {"history": notation.history(_score_dir(job_id))}
 
 
 @app.post("/api/jobs/{job_id}/notation/restore")
-def notation_restore(job_id: str, payload: dict = Body(...), inst: str = "drum"):
+def notation_restore(job_id: str, payload: dict = Body(...)):
     try:
-        return notation.restore(_score_dir(job_id, inst), int(payload.get("index", -1)))
+        return notation.restore(_score_dir(job_id), int(payload.get("index", -1)))
     except (notation.NotationError, OSError, ValueError) as e:
         raise HTTPException(400, str(e)) from e
 
@@ -773,8 +750,8 @@ MAX_INK_BYTES = 4 * 1024 * 1024
 
 
 @app.get("/api/jobs/{job_id}/score/ink")
-def get_score_ink(job_id: str, inst: str = "drum"):
-    p = _score_dir(job_id, inst) / INK_FILE
+def get_score_ink(job_id: str):
+    p = _score_dir(job_id) / INK_FILE
     try:
         return json.loads(p.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -782,7 +759,7 @@ def get_score_ink(job_id: str, inst: str = "drum"):
 
 
 @app.put("/api/jobs/{job_id}/score/ink")
-def put_score_ink(job_id: str, payload: dict = Body(...), inst: str = "drum"):
+def put_score_ink(job_id: str, payload: dict = Body(...)):
     """{pages: {"쪽(0부터)": [{c: 색, w: 굵기(쪽 폭 비율), p: [[x, y], …](0~1)}]}} — 통째로 저장."""
     pages = payload.get("pages")
     if not isinstance(pages, dict):
@@ -808,7 +785,7 @@ def put_score_ink(job_id: str, payload: dict = Body(...), inst: str = "drum"):
     body = json.dumps({"pages": clean}, ensure_ascii=False, separators=(",", ":"))
     if len(body) > MAX_INK_BYTES:
         raise HTTPException(400, "필기가 너무 많습니다.")
-    d = _score_dir(job_id, inst, create=True)
+    d = _score_dir(job_id)
     tmp = d / (INK_FILE + ".tmp")
     tmp.write_text(body, encoding="utf-8")
     os.replace(tmp, d / INK_FILE)
@@ -816,20 +793,20 @@ def put_score_ink(job_id: str, payload: dict = Body(...), inst: str = "drum"):
 
 
 @app.get("/api/jobs/{job_id}/score")
-def get_score(job_id: str, inst: str = "drum"):
-    d = _score_dir(job_id, inst)
+def get_score(job_id: str):
+    d = _score_dir(job_id)
     data = scores.load(d)
     if data is None and (d / scores.SCORE_PDF).exists():
         data = scores.rebuild(d)          # PDF 만 넣어둔 경우 처음 볼 때 분석한다
     if data is None:
         raise HTTPException(404, "연결된 악보가 없습니다.")
-    return _score_payload(job_id, data, inst)
+    return _score_payload(job_id, data)
 
 
 @app.put("/api/jobs/{job_id}/score")
-async def put_score(job_id: str, request: Request, inst: str = "drum"):
+async def put_score(job_id: str, request: Request):
     """악보 PDF 를 올린다 (본문 = PDF 그대로). 곡 폴더에 score.pdf 로 저장하고 분석한다."""
-    d = _score_dir(job_id, inst, create=True)
+    d = _score_dir(job_id)
     body = await request.body()
     if not body.startswith(b"%PDF"):
         raise HTTPException(400, "PDF 파일이 아닙니다.")
@@ -843,33 +820,33 @@ async def put_score(job_id: str, request: Request, inst: str = "drum"):
     except Exception as e:                 # 깨진 PDF 등
         raise HTTPException(400, f"악보를 읽지 못했습니다: {e}") from e
     job = store.get(job_id)
-    job.files = store._scan_files(job, job.out_dir)   # 곡 폴더 전체 (악기 폴더 포함)
-    return _score_payload(job_id, data, inst)
+    job.files = store._scan_files(job, d)
+    return _score_payload(job_id, data)
 
 
 @app.post("/api/jobs/{job_id}/score/analyze")
-def analyze_score(job_id: str, inst: str = "drum"):
-    d = _score_dir(job_id, inst)
+def analyze_score(job_id: str):
+    d = _score_dir(job_id)
     if not (d / scores.SCORE_PDF).exists():
         raise HTTPException(404, "연결된 악보가 없습니다.")
     data = scores.rebuild(d)
     job = store.get(job_id)
-    job.files = store._scan_files(job, job.out_dir)   # 곡 폴더 전체 (악기 폴더 포함)
-    return _score_payload(job_id, data, inst)
+    job.files = store._scan_files(job, d)
+    return _score_payload(job_id, data)
 
 
 @app.delete("/api/jobs/{job_id}/score")
-def delete_score(job_id: str, inst: str = "drum"):
-    d = _score_dir(job_id, inst)
+def delete_score(job_id: str):
+    d = _score_dir(job_id)
     scores.remove(d)
     job = store.get(job_id)
-    job.files = store._scan_files(job, job.out_dir)   # 곡 폴더 전체 (악기 폴더 포함)
+    job.files = store._scan_files(job, d)
     return {"deleted": True}
 
 
 @app.get("/api/jobs/{job_id}/score/pages/{n}")
-def get_score_page(job_id: str, n: int, inst: str = "drum"):
-    d = _score_dir(job_id, inst)
+def get_score_page(job_id: str, n: int):
+    d = _score_dir(job_id)
     p = d / scores.SCORE_DIR / f"page-{n}.png"
     if n < 1 or not p.is_file():
         raise HTTPException(404, "페이지가 없습니다.")
