@@ -23,7 +23,7 @@ SYSTEM = """너는 드럼 연습 앱(demucs-web)의 악보 담당 에이전트�
 분리가 끝난 곡 하나를 받는다. 악보는 둘 중 하나에서 온다:
 - 드럼 악보가 화면에 나오는 연주 영상(YouTube) → drum-score-video 스킬 (악보 PDF 도 만든다)
 - 곡에 이미 있는 악보 PDF → drum-score-pdf 스킬 (PDF 는 그대로 둔다)
-할 일: 곡 음원에 맞춘 송 맵(1마디 1박·BPM·박자·구간 이름)을 저장한다. 음표는 받아 적지 않는다.
+할 일: 음표 악보(마디별 악기 칸)를 받아 적고, 곡 음원에 맞춘 송 맵(1마디 1박·BPM·박자·구간 이름)을 저장한다.
 
 규칙
 - 요청에 적힌 스킬을 먼저 읽고 그 순서를 따른다.
@@ -94,6 +94,13 @@ def _hooks(run: Run, tool_names: list[str]):
             return {}
         if run.reported is None:
             return {"decision": "block", "reason": "끝내기 전에 report 도구로 결과를 알리세요 (done 또는 failed)."}
+        if run.reported["status"] == "done" and run.built:
+            total = run.built["measures"]
+            got = sum(1 for n in range(1, total + 1) if n in run.notes)
+            if got < total and stops["n"] <= 2:
+                return {"decision": "block",
+                        "reason": f"음표를 {got}/{total}마디만 받아 적었습니다. 나머지를 write_measures 로 적고 "
+                                  "save_result 를 다시 부르세요. 정말 못 하겠으면 report 에 이유를 적으세요."}
         if run.reported["status"] == "done" and not run.saved:
             return {"decision": "block",
                     "reason": "report 는 done 인데 save_result 를 하지 않았습니다. 저장하거나 failed 로 다시 report 하세요."}
@@ -120,7 +127,7 @@ async def run_agent(run: Run) -> None:
         cwd=str(WORKSPACE),
         hooks=_hooks(run, tool_names),
         model=os.environ.get("AGENT_MODEL") or None,
-        max_turns=int(os.environ.get("AGENT_MAX_TURNS") or 150),
+        max_turns=int(os.environ.get("AGENT_MAX_TURNS") or 250),   # 음표 100~200마디면 100턴을 넘는다
         permission_mode="bypassPermissions",
         # 그림을 돌려주는 도구가 많다 — 기본 1MB 면 띠 여러 장을 한 번에 볼 때 넘친다 (라시사에서 실제로 멈춤)
         max_buffer_size=16 * 1024 * 1024,
@@ -128,7 +135,7 @@ async def run_agent(run: Run) -> None:
     )
     test = "시험 실행이다 — save_result 는 파일만 남긴다." if run.dry_run else ""
     if run.mode == "pdf":
-        prompt = (f"곡 id {run.job_id} 에 이미 있는 악보 PDF 로 송 맵을 만들어 줘 (drum-score-pdf 스킬). "
+        prompt = (f"곡 id {run.job_id} 에 이미 있는 악보 PDF 로 음표 악보와 송 맵을 만들어 줘 (drum-score-pdf 스킬). "
                   f"PDF 는 바꾸지 않는다.\n{test}")
     else:
         prompt = (f"곡 id {run.job_id} 에 악보를 붙여 줘 (drum-score-video 스킬). 악보 영상: {run.score_url}\n{test}"

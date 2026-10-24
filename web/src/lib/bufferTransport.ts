@@ -146,33 +146,6 @@ export class BufferTransport extends EventTarget {
     const a = this.anchor;
     return (a.song + (this.ctx.currentTime * this.sr - a.ctxFrame) * this.tempo) / this.sr;
   }
-  /**
-   * 지금 **들리는** 곡 위치(초) — 화면 표시용(지금 마디·박 칠하기).
-   * currentTime 은 워클릿이 내보낸 프레임 기준이라 실제 소리보다 출력 지연만큼 앞선다
-   * (아이패드 0.05~0.1초, 블루투스 이어폰은 0.2초 넘게). 그대로 쓰면 마디가 소리보다 먼저 넘어간다.
-   * 출력 시각표(getOutputTimestamp)로 지금 스피커에서 나오는 프레임을 구하고, 없으면 outputLatency 만큼 뺀다.
-   * 재생·탐색·조각 보내기·반복은 currentTime 을 그대로 쓴다 (소리와 메트로놈은 같은 흐름이라 서로 맞다).
-   */
-  get heardTime() {
-    if (this.paused) return this.pos;
-    const a = this.anchor;
-    let ctxNow = this.ctx.currentTime;
-    try {
-      const ts = this.ctx.getOutputTimestamp?.();
-      if (ts && ts.contextTime != null && ts.performanceTime != null && ts.contextTime > 0) {
-        // 시각표는 오디오 스레드가 갱신해 조금 묵어 있다 — 그 뒤 지난 시간만큼 앞으로
-        ctxNow = ts.contextTime + Math.max(0, performance.now() - ts.performanceTime) / 1000;
-      } else {
-        ctxNow -= (this.ctx.outputLatency || 0) + (this.ctx.baseLatency || 0);
-      }
-    } catch {
-      ctxNow -= this.ctx.outputLatency || 0;
-    }
-    // 시각표가 출력보다 앞서지는 않는다 (드물게 브라우저가 이상한 값을 줄 때 대비)
-    ctxNow = Math.min(ctxNow, this.ctx.currentTime);
-    // 예비박 중(아직 시작 전)에는 currentTime 처럼 시작 위치보다 앞인 값이 나온다
-    return (a.song + (ctxNow * this.sr - a.ctxFrame) * this.tempo) / this.sr;
-  }
   set currentTime(v: number) {
     if (this.paused) this.pos = v;
     else this.startAt(this.ctx.currentTime + 0.03, v);
