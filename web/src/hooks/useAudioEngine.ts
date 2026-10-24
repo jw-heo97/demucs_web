@@ -473,12 +473,14 @@ export function useAudioEngine(job: Job | null, opts: EngineOptions = {}) {
       const as = audiosRef.current;
       if (as.length) {
         const t = as[0].currentTime;
+        // 화면에는 지금 들리는 위치 (출력 지연만큼 늦다) — 마디가 소리보다 먼저 넘어가지 않게
+        const heard = (as[0] as unknown as { heardTime?: number }).heardTime ?? t;
         // 상태 갱신은 ~30fps 로 제한한다. 매 프레임 올리면 마디표까지 통째로
         // 다시 그려져 무거워진다 (재생 위치 표시에는 이 정도면 충분).
         const now = performance.now();
         if (now - lastPush.current > 33) {
           lastPush.current = now;
-          setTime(Math.max(0, t)); // 예비박 동안은 곡 0초 앞일 수 있다
+          setTime(Math.max(0, heard)); // 예비박 동안은 곡 0초 앞일 수 있다
         }
         if (playing && !as[0].paused) {
           lastTime.current = Math.max(0, t);
