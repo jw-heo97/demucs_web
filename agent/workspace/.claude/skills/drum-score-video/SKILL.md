@@ -1,6 +1,6 @@
 ---
 name: drum-score-video
-description: 드럼 연주 영상(YouTube)에 나오는 악보 띠를 뽑아 악보 PDF(영상 그림 그대로)를 만들고, 분리된 곡 음원에 맞춘 송 맵(1마디 1박·BPM·박자·구간 이름)을 저장한다. 음표는 받아 적지 않는다. score 도구(get_job, download_video, find_score_band, extract_strips, edit_strip, add_strip, align_audio, build_score, save_result, report)와 함께 쓴다.
+description: 드럼 연주 영상(YouTube)에 나오는 악보 띠를 뽑아 악보 PDF 와 음표 악보(마디별 악기 칸)를 만들고, 분리된 곡 음원에 맞춘 송 맵(1마디 1박·BPM·박자·구간 이름)을 저장한다. score 도구(get_job, download_video, find_score_band, extract_strips, edit_strip, add_strip, align_audio, build_score, set_timing, measure_images, write_measures, check_measures, refine_timing, save_result, report)와 함께 쓴다.
 ---
 
 # 연주 영상 → 악보 + 송 맵
@@ -60,12 +60,13 @@ description: 드럼 연주 영상(YouTube)에 나오는 악보 띠를 뽑아 악
 8. **build_score(tempo)** — 앱의 악보 분석기로 다시 읽은 마디 수가 띠 마디 수와 같아야 한다.
    다르면 훅이 저장을 막는다. 구간 이름이 marks 로 읽혔는지도 본다.
 
-9. **save_result(anchor, bpm, beats)** — 송 맵은 새 버전("AI 악보")으로 저장되고 활성화된다
-   (사용자의 기존 버전은 남는다). names 를 생략하면 띠의 구간 표시를 쓴다.
-   음표는 받아 적지 않는다 — 사용자가 송 맵에서 고칠 마디만 손으로 그려 넣는다.
-   1마디 1박이 한 박쯤 틀릴 수 있다(띠가 넘어가는 시각 기준). 사용자가 송 맵에서 미세 조정한다 — report 에 근거를 적는다.
+9. **음표 받아 적기** — [transcribe.md](transcribe.md) 를 읽고 따른다: set_timing → measure_images →
+   write_measures (전부) → ⚠ 마디 다시 보기 → refine_timing 으로 1마디 1박 검산. 사용자가 송 맵에서 음표를 고치는 출발점이다.
 
-10. **report(status, summary)** — 한국어로: 마디 수, 템포, 1마디 1박, 구간 수, 고친 것, **확신 없는 것**
+10. **save_result(anchor, bpm, beats)** — 송 맵은 새 버전("AI 악보")으로 저장되고 활성화된다
+   (사용자의 기존 버전은 남는다). names 를 생략하면 띠의 구간 표시를 쓴다.
+
+11. **report(status, summary)** — 한국어로: 마디 수, 템포, 1마디 1박, 구간 수, 고친 것, **확신 없는 것**
     (예: "37~40마디 띠가 시간상 5마디라 반복으로 봤음", "첫 마디를 2박으로 봤음"). 실패면 왜인지.
 
 ## 주의
