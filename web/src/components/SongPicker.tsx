@@ -1,5 +1,4 @@
 import { useMemo, useState } from "react";
-import { scoreRel } from "../lib/instrument";
 import { clock } from "../lib/time";
 import type { Job } from "../types";
 
@@ -37,7 +36,7 @@ export function SongPicker({
             <span className="caret" style={{ transform: "none" }}>♪</span>
             <span className="job-title" title={nameOf(j)}>{nameOf(j)}</span>
             <span className="chips">
-              {j.files?.some((f) => f.rel === scoreRel("score.pdf")) ? <span className="chip" title="악보 있음">🎼</span> : null}
+              {j.files?.some((f) => f.rel === "score.pdf") ? <span className="chip" title="악보 있음">🎼</span> : null}
               {j.bpm ? <span className="chip">♩={j.bpm}</span> : null}
               {j.duration ? <span className="chip">{clock(j.duration)}</span> : null}
             </span>

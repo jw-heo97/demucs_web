@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import type { Job } from "../types";
-import type { Instrument } from "../lib/instrument";
 import { useMe } from "../lib/me";
 import { JobRow } from "./JobRow";
 
@@ -10,20 +9,17 @@ interface Props {
   onChanged: () => void;
   picked: { videoId: string; title: string } | null;
   onPickedUsed: () => void;
-  /** 고른 악기 — 분리 기본값을 정한다 */
-  instrument: Instrument;
 }
 
-export function WorkTab({ jobs, onChanged, picked, onPickedUsed, instrument }: Props) {
+export function WorkTab({ jobs, onChanged, picked, onPickedUsed }: Props) {
   const { canEdit } = useMe();
   const [url, setUrl] = useState("");
   const [title, setTitle] = useState("");
   const [format, setFormat] = useState("both");
-  // 분리 기본값은 악기마다 (드럼: 드럼만 + 드럼 뺀 반주)
-  const [target, setTarget] = useState<string>(instrument.target);
+  const [target, setTarget] = useState("all");
   const [saveOriginal, setSaveOriginal] = useState(true);
   const [metronome, setMetronome] = useState(true);
-  const [minusMixes, setMinusMixes] = useState(instrument.minus);
+  const [minusMixes, setMinusMixes] = useState(false);
   const [scoreUrl, setScoreUrl] = useState("");
   const [hint, setHint] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
@@ -54,7 +50,6 @@ export function WorkTab({ jobs, onChanged, picked, onPickedUsed, instrument }: P
         metronome,
         minus_mixes: minusMixes,
         score_url: scoreUrl.trim() || undefined,
-        instrument: instrument.key,
       });
       setUrl("");
       setTitle("");
@@ -107,7 +102,7 @@ export function WorkTab({ jobs, onChanged, picked, onPickedUsed, instrument }: P
             </select>
           </div>
           <div>
-            <label>분리 대상 <span className="meta">{instrument.icon} {instrument.label} 기본: {instrument.note}</span></label>
+            <label>분리 대상</label>
             <select value={target} onChange={(e) => setTarget(e.target.value)}>
               <option value="all">전체 (4스템)</option>
               <option value="vocals">보컬</option>
@@ -126,11 +121,7 @@ export function WorkTab({ jobs, onChanged, picked, onPickedUsed, instrument }: P
         </label>
         <label className="check">
           <input type="checkbox" checked={minusMixes} onChange={(e) => setMinusMixes(e.target.checked)} />
-          {target === "all" ? (
-            <>각 스템 제외 믹스도 저장 <span className="meta">(용량 2배 — 보통 불필요)</span></>
-          ) : (
-            <>고른 스템을 뺀 반주도 저장 <span className="meta">(연습용 반주 — no_{target})</span></>
-          )}
+          각 스템 제외 믹스도 저장 <span className="meta">(용량 2배 — 보통 불필요)</span>
         </label>
 
         <div className="actions">

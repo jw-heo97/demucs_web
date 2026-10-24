@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { scoreRel } from "../lib/instrument";
 import { ask, confirmBox } from "../lib/dialog";
 import { api } from "../api";
 import { useMe } from "../lib/me";
@@ -119,7 +118,7 @@ export function PlaylistTab({ jobs, onChanged }: Props) {
   // 연결된 악보 (곡이 바뀌면 다시 받는다)
   const [score, setScore] = useState<ScoreData | null>(null);
   const [showScore, setShowScore] = useState(() => lsGet(LS_SHOWSCORE) !== "0");
-  const scoreJob = curJob?.files.some((f) => f.rel === scoreRel("score.pdf")) ? curJob.id : null;
+  const scoreJob = curJob?.files.some((f) => f.rel === "score.pdf") ? curJob.id : null;
   useEffect(() => {
     let alive = true;
     setScore(null);

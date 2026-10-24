@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { DialogHost } from "./lib/dialog";
 import { api } from "./api";
 import { MeContext, type Me } from "./lib/me";
@@ -9,8 +9,6 @@ import { PlaylistTab } from "./components/PlaylistTab";
 import { SearchTab } from "./components/SearchTab";
 import { SongMapTab } from "./components/SongMapTab";
 import { WorkTab } from "./components/WorkTab";
-import { InstrumentPicker } from "./components/InstrumentPicker";
-import { instrumentOf, saveInstrument, savedInstrument, setCurrentInstrument, type Instrument } from "./lib/instrument";
 import type { Job } from "./types";
 
 type TabKey = "work" | "library" | "play" | "playlist" | "map" | "tube" | "access";
@@ -22,16 +20,6 @@ export function App() {
   const [playPick, setPlayPick] = useState<{ id: string; n: number } | null>(null);
   const [mapPick, setMapPick] = useState<{ id: string; n: number } | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
-  // 연습할 악기 — 접속하면 먼저 고른다 (이 기기에 기억)
-  const [instrument, setInstrument] = useState<Instrument | null>(() => savedInstrument());
-  // 악보 API·파일은 고른 악기 것을 쓴다 (탭들은 악기를 고른 뒤에 그려지므로 그리기 전에 맞춰 둔다)
-  if (instrument) setCurrentInstrument(instrument.key);
-  // 고른 악기의 곡만 (예전 곡은 드럼)
-  const allJobs = jobs;
-  const myJobs = useMemo(
-    () => allJobs.filter((j) => (j.instrument ?? "drum") === (instrument?.key ?? "drum")),
-    [allJobs, instrument],
-  );
   const [info, setInfo] = useState<string>("");
   const [pick, setPick] = useState<{ videoId: string; title: string } | null>(null);
   // 내 권한: 접속자 관리 탭(관리자)·수정 가능 여부. 서버가 정하고 여기선 보여 주기만 한다.
@@ -104,14 +92,7 @@ export function App() {
   return (
     <MeContext.Provider value={me}>
     <div className="wrap">
-      <div className="titlebar">
-        <h1>Demucs Web</h1>
-        {instrument && (
-          <button className="ghost instrument-chip" onClick={() => setInstrument(null)} title="악기 바꾸기">
-            {instrument.icon} {instrument.label}
-          </button>
-        )}
-      </div>
+      <h1>Demucs Web</h1>
       <div className="sub">{info}</div>
       {newBuild && (
         <div className="updatebar">
@@ -125,15 +106,6 @@ export function App() {
         </div>
       )}
 
-      {!instrument ? (
-        <InstrumentPicker
-          onPick={(k) => {
-            saveInstrument(k);
-            setInstrument(instrumentOf(k));
-          }}
-        />
-      ) : (
-      <>
       <div className="tabs" role="tablist">
         {(
           [
@@ -159,11 +131,11 @@ export function App() {
       </div>
 
       {tab === "work" && (
-        <WorkTab jobs={myJobs} onChanged={refresh} picked={pick} onPickedUsed={() => setPick(null)} instrument={instrument} />
+        <WorkTab jobs={jobs} onChanged={refresh} picked={pick} onPickedUsed={() => setPick(null)} />
       )}
       {tab === "library" && (
         <LibraryTab
-          jobs={myJobs}
+          jobs={jobs}
           onChanged={refresh}
           onOpen={(id) => {
             setPlayPick((p) => ({ id, n: (p?.n ?? 0) + 1 }));
@@ -173,7 +145,7 @@ export function App() {
       )}
       {tab === "play" && (
         <PlayerTab
-          jobs={myJobs}
+          jobs={jobs}
           onChanged={refresh}
           pick={playPick}
           onOpenMap={(id) => {
@@ -183,8 +155,8 @@ export function App() {
           onPickSong={(id) => setPlayPick((p) => ({ id, n: (p?.n ?? 0) + 1 }))}
         />
       )}
-      {tab === "playlist" && <PlaylistTab jobs={myJobs} onChanged={refresh} />}
-      {tab === "map" && <SongMapTab jobs={myJobs} onChanged={refresh} pick={mapPick} />}
+      {tab === "playlist" && <PlaylistTab jobs={jobs} onChanged={refresh} />}
+      {tab === "map" && <SongMapTab jobs={jobs} onChanged={refresh} pick={mapPick} />}
       {tab === "access" && admin && <AccessTab />}
       {tab === "tube" && (
         <SearchTab
@@ -193,8 +165,6 @@ export function App() {
             setTab("work");
           }}
         />
-      )}
-      </>
       )}
       <DialogHost />
     </div>
