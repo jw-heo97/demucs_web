@@ -88,6 +88,8 @@ export function PlayerTab({ jobs, onChanged, pick, onOpenMap, onPickSong }: Prop
   // 연결된 악보
   const [score, setScore] = useState<ScoreData | null>(null);
   const scoreJob = job?.files.some((f) => f.rel === "score.pdf") ? job.id : null;
+  // 악보를 바꾸면(같은 곡에 새 PDF) 다시 받는다 — 곡 id 만 보면 예전 악보가 계속 보였다
+  const scoreSig = job?.files.find((f) => f.rel === "score.pdf")?.mtime ?? null;
   useEffect(() => {
     let alive = true;
     setScore(null);
@@ -95,7 +97,7 @@ export function PlayerTab({ jobs, onChanged, pick, onOpenMap, onPickSong }: Prop
     return () => {
       alive = false;
     };
-  }, [scoreJob]);
+  }, [scoreJob, scoreSig]);
 
   // 편집 가능한 음표 악보. 원본 악보(PDF·영상 악보 그림)도 있으면 둘 중 고른다 — 기본은 원본 (보기 익숙한 쪽)
   const [notation, setNotation] = useState<Notation | null>(null);

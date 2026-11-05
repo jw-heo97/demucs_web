@@ -119,6 +119,8 @@ export function PlaylistTab({ jobs, onChanged }: Props) {
   const [score, setScore] = useState<ScoreData | null>(null);
   const [showScore, setShowScore] = useState(() => lsGet(LS_SHOWSCORE) !== "0");
   const scoreJob = curJob?.files.some((f) => f.rel === "score.pdf") ? curJob.id : null;
+  // 악보를 바꾸면(같은 곡에 새 PDF) 다시 받는다 — 곡 id 만 보면 예전 악보가 계속 보였다
+  const scoreSig = curJob?.files.find((f) => f.rel === "score.pdf")?.mtime ?? null;
   useEffect(() => {
     let alive = true;
     setScore(null);
@@ -126,7 +128,7 @@ export function PlaylistTab({ jobs, onChanged }: Props) {
     return () => {
       alive = false;
     };
-  }, [scoreJob]);
+  }, [scoreJob, scoreSig]);
 
   const bars = useMemo(
     () => (curJob ? barsFromMap((curJob.songmap as never) ?? null, curJob.duration) : []),

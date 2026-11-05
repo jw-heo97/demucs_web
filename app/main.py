@@ -627,7 +627,12 @@ def _score_dir(job_id: str) -> Path:
 
 
 def _score_payload(job_id: str, data: dict) -> dict:
-    return {**data, "page_urls": [f"/api/jobs/{job_id}/score/pages/{i + 1}"
+    # 악보를 바꿔도 쪽 그림 주소가 같으면 화면·브라우저가 예전 그림을 계속 쓴다 → 분석 시각을 붙인다
+    try:
+        v = int((_score_dir(job_id) / scores.SCORE_JSON).stat().st_mtime)
+    except (OSError, HTTPException):
+        v = 0
+    return {**data, "page_urls": [f"/api/jobs/{job_id}/score/pages/{i + 1}?v={v}"
                                   for i in range(len(data.get("pages", [])))]}
 
 
