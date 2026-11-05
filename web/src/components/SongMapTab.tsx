@@ -391,7 +391,16 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
     if (!map) return null;
     const n = sc.order ? sc.order.length : sc.measures.length;
     const markAt = new Map(sc.marks.map((m) => [m.measure, m.text]));
-    const base = map.ranges[0];
+    // 악보 분석은 박자표를 읽지 않아 구간 박자는 지금 송 맵에서 가장 많은 마디가 쓰는 박자로 한다.
+    // 1마디 박자를 물려주면 1마디가 못갖춘마디(2/4 등)인 곡은 모든 구간이 그 박자가 되어 마디가 빨리 넘어간다.
+    const count = new Map<string, number>();
+    for (const b of bars) {
+      const k = `${b.beats_per_bar}/${b.beat_unit}`;
+      count.set(k, (count.get(k) ?? 0) + 1);
+    }
+    const main = [...count.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "4/4";
+    const [mb, mu] = main.split("/").map(Number);
+    const base = { ...map.ranges[0], beats_per_bar: mb, beat_unit: mu, click_beats: null };
     const ranges: MapRange[] = [];
     for (let b = 1; b <= n; b++) {
       const name = markAt.get(sc.order ? sc.order[b - 1] : b);
