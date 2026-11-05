@@ -679,9 +679,8 @@ def ai_score_start(job_id: str, payload: dict = Body(...)):
     {mode: "pdf"} — 곡에 이미 있는 악보 PDF 로 음표 악보·송 맵 새 버전을 만든다 (PDF 는 그대로)."""
     job = _require_job(job_id, done=True)
     if payload.get("mode") == "pdf":
-        if not (job.out_dir and (job.out_dir / scores.SCORE_PDF).exists()):
-            raise HTTPException(400, "이 곡에는 악보 PDF 가 없습니다.")
-        return _agent("POST", "/runs", {"job_id": job_id, "mode": "pdf"})
+        # 악보 PDF → AI 는 끈다 (쓸모가 없었다). 악보 PDF 는 올리면 바로 분석되고, 송 맵은 '악보로 송 맵 만들기' 로
+        raise HTTPException(400, "악보 PDF 로 AI 악보 만들기는 꺼져 있습니다.")
     url = (payload.get("score_url") or "").strip()
     if not url:
         raise HTTPException(400, "악보 영상 주소가 필요합니다.")
