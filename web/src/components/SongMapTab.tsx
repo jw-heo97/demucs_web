@@ -1,4 +1,5 @@
 import { readClickOffset } from "../hooks/useLiveMetronome";
+import { createPortal } from "react-dom";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ask, choose, confirmBox } from "../lib/dialog";
 import { api } from "../api";
@@ -413,6 +414,8 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
   };
 
   const [scoreData, setScoreData] = useState<ScoreData | null>(null);
+  // 음표 악보 편집 창 (✏ 악보 편집 으로 연다)
+  const [editorOpen, setEditorOpen] = useState(false);
   const buildFromScore = async () => {
     if (!job || !scoreData) return;
     const m = mapFromScore(scoreData);
@@ -583,9 +586,21 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
             >
               악보로 송 맵 만들기
             </button>
+            <button className={`ghost${editorOpen ? " on" : ""}`} onClick={() => setEditorOpen((v) => !v)} title="음표 악보 편집 창 열기/닫기">
+              ✏ 악보 편집
+            </button>
           </ScorePanel>
 
-          {/* 음표 악보 편집 (AI 가 받아 적은 것 또는 빈 악보에서) */}
+          {/* 음표 악보 편집 — 필요할 때만 떠 있는 창으로 (재생 막대 위). 화면에 길게 깔지 않는다 */}
+          {editorOpen &&
+            createPortal(
+              <div className="float-editor" role="dialog" aria-label="악보 편집">
+                <div className="float-editor-head">
+                  <b>악보 편집</b>
+                  <span style={{ flex: 1 }} />
+                  <button className="ghost" onClick={() => setEditorOpen(false)} aria-label="닫기">✕</button>
+                </div>
+                <div className="float-editor-body">
           <NotationEditor
             job={job}
             bars={bars}
@@ -604,6 +619,10 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
               setMsg("악보의 박자·구간으로 송 맵을 바꿨습니다 — 아래 구성표에서 확인하고 저장하세요.");
             }}
           />
+                </div>
+              </div>,
+              document.body,
+            )}
 
           <div className="panel">
             {stale && (

@@ -437,3 +437,11 @@ button.danger { background: var(--err); }
 /* 음표 악보 쪽 보기 (A4, 한 쪽이 화면 높이에 들어오게) */
 .notation.paged { margin: 0 auto 14px; }
 .notation.paged.selecting .score-bar { touch-action: none; }   /* 구간 반복 중: 어느 방향으로 끌어도 구간 고르기 */
+
+/* 송 맵: 음표 악보 편집 창 (필요할 때만, 아래 재생 막대 위에 떠 있는다) */
+.float-editor { position: fixed; left: 50%; transform: translateX(-50%); bottom: 72px; z-index: 45;
+  width: min(1100px, calc(100vw - 16px)); max-height: min(55vh, calc(100vh - 140px)); display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.35); }
+.float-editor-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.float-editor-body { overflow: auto; padding: 0 4px 6px; }
+.float-editor-body > .panel { margin: 6px 0 0; border: none; box-shadow: none; }
