@@ -147,7 +147,8 @@ export function AiScore({ job, onChanged }: { job: Job; onChanged: () => void })
             ✨ AI 악보
           </button>
         )}
-        {canEdit && hasPdf && (
+        {/* 악보 PDF → AI 는 끔 (쓸모가 없었다) */}
+        {false && canEdit && hasPdf && (
           <button className="ghost" onClick={() => void fromPdf()} disabled={busy} title="곡에 있는 악보 PDF 로 음표 악보·송 맵 만들기">
             ✨ PDF → 음표 악보
           </button>
