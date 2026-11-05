@@ -3,7 +3,7 @@ import { api } from "../api";
 import { useAudioEngine } from "../hooks/useAudioEngine";
 import { colorOf, sectionColors } from "../lib/sectionColors";
 import { barAtTime, barsFromMap } from "../lib/songmap";
-import type { Bar, Job, ScoreData } from "../types";
+import type { Bar, Job, ScoreData, ScoreList } from "../types";
 import { AiScore } from "./AiScore";
 import { Mixer, type MixerControl } from "./Mixer";
 import { ScoreSheet, useBarDrag } from "./ScoreView";
@@ -90,6 +90,27 @@ export function PlayerTab({ jobs, onChanged, pick, onOpenMap, onPickSong }: Prop
   const scoreJob = job?.files.some((f) => f.rel === "score.pdf") ? job.id : null;
   // 악보를 바꾸면(같은 곡에 새 PDF) 다시 받는다 — 곡 id 만 보면 예전 악보가 계속 보였다
   const scoreSig = job?.files.find((f) => f.rel === "score.pdf")?.mtime ?? null;
+  // 이 곡에 올린 악보 목록 (둘 이상이면 위에서 고른다)
+  const [scoreList, setScoreList] = useState<ScoreList | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setScoreList(null);
+    if (scoreJob) api.scores(scoreJob).then((l) => alive && setScoreList(l)).catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [scoreJob, scoreSig]);
+  const pickScore = async (sid: string) => {
+    if (!job) return;
+    try {
+      const r = await api.activateScore(job.id, sid);
+      setScoreList(r.scores);
+      setScore(r.score);
+      onChanged();
+    } catch {
+      /* 목록은 다음 갱신 때 다시 맞춰진다 */
+    }
+  };
   useEffect(() => {
     let alive = true;
     setScore(null);
@@ -195,6 +216,18 @@ export function PlayerTab({ jobs, onChanged, pick, onOpenMap, onPickSong }: Prop
         />
       </div>
 
+      {scoreList && scoreList.items.length > 1 && (
+        <div className="actions sheet-switch">
+          <span className="meta">악보</span>
+          <select className="score-pick" value={scoreList.active ?? ""} onChange={(e) => void pickScore(e.target.value)}>
+            {scoreList.items.map((it) => (
+              <option key={it.id} value={it.id}>
+                {it.name} ({it.measures}마디)
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
       {notation && hasOriginal && (
         <div className="actions sheet-switch">
           <span className="meta">악보</span>

@@ -4,7 +4,7 @@
  * 인증은 없다 — 접근 제어는 Tailscale 이 맡는다 (README 참고).
  */
 import type { Notation } from "./lib/notation";
-import type { AiRun, InkDoc, Job, JobTrack, MapPayload, MapVersion, Playlist, ScoreData, SearchItem, SongMap } from "./types";
+import type { AiRun, InkDoc, Job, JobTrack, MapPayload, MapVersion, Playlist, ScoreData, ScoreList, SearchItem, SongMap } from "./types";
 
 /** 앱에서는 다른 오리진의 서버를 봐야 하므로 베이스 URL 을 바꿀 수 있게 한다. */
 export const BASE =
@@ -257,13 +257,26 @@ export const api = {
 
   // --- 악보 ---
   score: (id: string) => get<ScoreData>(`/api/jobs/${id}/score`),
-  uploadScore: (id: string, pdf: Blob) =>
-    request<ScoreData>(`/api/jobs/${id}/score`, {
+  /** 악보를 목록에 새로 넣고 고른다 (전에 있던 악보는 목록에 남는다) */
+  uploadScore: (id: string, pdf: Blob, name?: string) =>
+    request<ScoreData>(`/api/jobs/${id}/score${name ? `?name=${encodeURIComponent(name)}` : ""}`, {
       method: "PUT",
       body: pdf,
       headers: { "Content-Type": "application/pdf" },
     }),
   deleteScore: (id: string) => del(`/api/jobs/${id}/score`),
+  // 곡의 악보 목록
+  scores: (id: string) => get<ScoreList>(`/api/jobs/${id}/scores`),
+  activateScore: (id: string, sid: string) =>
+    post<{ scores: ScoreList; score: ScoreData | null }>(`/api/jobs/${id}/scores/${sid}/activate`),
+  renameScore: (id: string, sid: string, name: string) =>
+    request<{ scores: ScoreList; score: ScoreData | null }>(`/api/jobs/${id}/scores/${sid}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name }),
+      headers: { "Content-Type": "application/json" },
+    }),
+  deleteScoreItem: (id: string, sid: string) =>
+    del<{ scores: ScoreList; score: ScoreData | null }>(`/api/jobs/${id}/scores/${sid}`),
 
   // --- 사용자 트랙 (녹음·반주) ---
   uploadTrack: (id: string, audio: Blob, name: string, offsetMs: number) =>

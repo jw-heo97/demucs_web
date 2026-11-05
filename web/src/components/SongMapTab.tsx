@@ -560,6 +560,7 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
           <ScorePanel
             jobId={job.id}
             onScore={setScoreData}
+            onLibrary={onChanged}
             bar={barAtTime(bars, engine.time)?.bar ?? 1}
             onPickBar={(b) => {
               const t = bars.find((x) => x.bar === b)?.start;

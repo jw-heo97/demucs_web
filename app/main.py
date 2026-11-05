@@ -25,6 +25,7 @@ import downloader
 import lock as song_lock
 import notation
 import scores
+import score_library
 import separator
 import tracks as user_tracks
 from config import CORS_ORIGINS, MAX_DURATION_SEC, METRONOME_DEFAULT, OUTPUT_DIR, WORK_DIR
@@ -808,24 +809,78 @@ def get_score(job_id: str):
 
 
 @app.put("/api/jobs/{job_id}/score")
-async def put_score(job_id: str, request: Request):
-    """악보 PDF 를 올린다 (본문 = PDF 그대로). 곡 폴더에 score.pdf 로 저장하고 분석한다."""
+async def put_score(job_id: str, request: Request, name: Optional[str] = None):
+    """악보 PDF 를 올린다 (본문 = PDF 그대로). 곡의 악보 목록에 새로 넣고 고른다 (전에 있던 악보는 목록에 남는다).
+    name: 목록에 보일 이름 (없으면 '악보 N')."""
     d = _score_dir(job_id)
     body = await request.body()
     if not body.startswith(b"%PDF"):
         raise HTTPException(400, "PDF 파일이 아닙니다.")
     if len(body) > MAX_SCORE_BYTES:
         raise HTTPException(400, "악보 파일이 너무 큽니다 (30MB 까지).")
+    prev = score_library.load(d).get("active")
+    sid = score_library.add(d, name)
     tmp = d / (scores.SCORE_PDF + ".tmp")
     tmp.write_bytes(body)
     tmp.replace(d / scores.SCORE_PDF)
     try:
         data = await asyncio.to_thread(scores.rebuild, d)
-    except Exception as e:                 # 깨진 PDF 등
+    except Exception as e:                 # 깨진 PDF 등 — 넣은 것을 빼고 전에 고른 악보로
+        score_library.remove(d, sid)
+        if prev:
+            try:
+                score_library.activate(d, prev)
+            except score_library.LibraryError:
+                pass
         raise HTTPException(400, f"악보를 읽지 못했습니다: {e}") from e
     job = store.get(job_id)
     job.files = store._scan_files(job, d)
     return _score_payload(job_id, data)
+
+
+# --- 곡의 악보 목록 (여러 개 올리고 골라 쓰기, app/score_library.py) ---
+@app.get("/api/jobs/{job_id}/scores")
+def list_scores(job_id: str):
+    return score_library.view(_score_dir(job_id))
+
+
+def _after_library(job_id: str, d: Path) -> dict:
+    job = store.get(job_id)
+    job.files = store._scan_files(job, d)
+    data = scores.load(d)
+    return {"scores": score_library.view(d), "score": _score_payload(job_id, data) if data else None}
+
+
+@app.post("/api/jobs/{job_id}/scores/{sid}/activate")
+def activate_score(job_id: str, sid: str):
+    d = _score_dir(job_id)
+    try:
+        score_library.activate(d, sid)
+    except score_library.LibraryError as e:
+        raise HTTPException(404, str(e)) from e
+    if scores.load(d) is None and (d / scores.SCORE_PDF).exists():
+        scores.rebuild(d)
+    return _after_library(job_id, d)
+
+
+@app.patch("/api/jobs/{job_id}/scores/{sid}")
+def rename_score(job_id: str, sid: str, payload: dict = Body(...)):
+    d = _score_dir(job_id)
+    try:
+        score_library.rename(d, sid, str(payload.get("name") or ""))
+    except score_library.LibraryError as e:
+        raise HTTPException(400, str(e)) from e
+    return _after_library(job_id, d)
+
+
+@app.delete("/api/jobs/{job_id}/scores/{sid}")
+def delete_score_item(job_id: str, sid: str):
+    d = _score_dir(job_id)
+    try:
+        score_library.remove(d, sid)
+    except score_library.LibraryError as e:
+        raise HTTPException(404, str(e)) from e
+    return _after_library(job_id, d)
 
 
 @app.post("/api/jobs/{job_id}/score/analyze")
@@ -841,8 +896,13 @@ def analyze_score(job_id: str):
 
 @app.delete("/api/jobs/{job_id}/score")
 def delete_score(job_id: str):
+    """고른 악보를 지운다 (목록에 다른 악보가 있으면 가장 최근 것으로)."""
     d = _score_dir(job_id)
-    scores.remove(d)
+    active = score_library.load(d).get("active")
+    if active:
+        score_library.remove(d, active)
+    else:
+        scores.remove(d)
     job = store.get(job_id)
     job.files = store._scan_files(job, d)
     return {"deleted": True}

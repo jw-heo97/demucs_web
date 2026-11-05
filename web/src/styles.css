@@ -396,6 +396,9 @@ button.danger { background: var(--err); }
   :root:not([data-theme="light"]) .score-page .nt-patch, :root:not([data-theme="light"]) .score-page .ink-layer { filter: invert(0.92) hue-rotate(180deg); }
 }
 
+/* 악보 여러 개 고르기 */
+.score-pick { width: auto; max-width: 260px; padding: 4px 8px; }
+
 /* 재생 창: 원본 악보 / 음표 악보 고르기 */
 .sheet-switch { justify-content: center; margin: 4px 0 8px; }
 .sheet-switch button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
