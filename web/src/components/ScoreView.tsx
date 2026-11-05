@@ -352,7 +352,8 @@ export function ScorePanel({
         </div>
       ))}
       {score && score.measures.length > 0 && (
-        <ScoreView score={score} bar={bar} onPickBar={onPickBar} />
+        // 재생 창처럼 한 쪽씩 (옆으로 밀거나 ‹ › 로 넘기고, 연주 위치의 쪽을 따라간다)
+        <ScoreSheet score={score} bar={bar} loop={null} onPickBar={onPickBar ?? (() => {})} />
       )}
       {score && score.measures.length === 0 && (
         <div className="empty">마디를 찾지 못했습니다. 악보 프로그램에서 내보낸 PDF 인지 확인해 주세요 (스캔본은 안 됩니다).</div>
