@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { confirmBox } from "../lib/dialog";
+import { ask, confirmBox } from "../lib/dialog";
 import { api } from "../api";
 import { useMe } from "../lib/me";
 import type { NMeasure, Notation } from "../lib/notation";
-import type { ScoreData, ScoreMeasure } from "../types";
+import type { ScoreData, ScoreList, ScoreMeasure } from "../types";
 import { INK_COLORS, InkLayer, InkZoom, useScoreInk, type InkTool } from "./ScoreInk";
 
 /** 한 번에 보여줄 마디 수. 지금 마디가 든 4마디 묶음 + 다음 4마디라 늘 앞이 보인다. */
@@ -185,9 +185,12 @@ export function ScorePanel({
   bar,
   onPickBar,
   onScore,
+  onLibrary,
   children,
 }: {
   jobId: string;
+  /** 악보를 넣거나 고르거나 지웠을 때 (곡 파일 목록 새로 읽기) */
+  onLibrary?: () => void;
   bar: number;
   onPickBar?: (bar: number) => void;
   /** 불러온 악보를 바깥(송 맵 만들기)에서도 쓰게 알려준다 */
@@ -196,6 +199,7 @@ export function ScorePanel({
 }) {
   const { canEdit } = useMe();
   const [score, setScore] = useState<ScoreData | null | undefined>(undefined);
+  const [list, setList] = useState<ScoreList>({ active: null, items: [] });
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const file = useRef<HTMLInputElement | null>(null);
@@ -208,18 +212,51 @@ export function ScorePanel({
       .score(jobId)
       .then((s) => alive && setScore(s))
       .catch(() => alive && setScore(null));
+    api.scores(jobId).then((l) => alive && setList(l)).catch(() => {});
     return () => {
       alive = false;
     };
   }, [jobId]);
+  const reloadList = () => api.scores(jobId).then(setList).catch(() => {});
+  // 고르기·이름·지우기 결과 반영
+  const applyLib = (r: { scores: ScoreList; score: ScoreData | null }) => {
+    setList(r.scores);
+    setScore(r.score);
+    onLibrary?.();
+  };
+  async function pick(sid: string) {
+    setBusy(true);
+    try {
+      applyLib(await api.activateScore(jobId, sid));
+      setMsg("");
+    } catch (e) {
+      setMsg((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function renameCur() {
+    const cur = list.items.find((x) => x.active);
+    if (!cur) return;
+    const name = await ask({ title: "악보 이름", value: cur.name, okText: "바꾸기" });
+    if (!name?.trim()) return;
+    try {
+      applyLib(await api.renameScore(jobId, cur.id, name.trim()));
+    } catch (e) {
+      setMsg((e as Error).message);
+    }
+  }
   useEffect(() => onScore?.(score ?? null), [score, onScore]);
 
   async function upload(f: File) {
     setBusy(true);
     setMsg("악보를 읽는 중…");
     try {
-      const s = await api.uploadScore(jobId, f);
+      // 목록에 새로 넣는다 — 이름은 파일 이름 (확장자 빼고)
+      const s = await api.uploadScore(jobId, f, f.name.replace(/\.pdf$/i, ""));
       setScore(s);
+      void reloadList();
+      onLibrary?.();
       setMsg(`${s.pages.length}쪽 · ${s.measures.length}마디${s.tempo ? ` · ♩=${s.tempo}` : ""}`);
     } catch (e) {
       setMsg((e as Error).message);
@@ -230,11 +267,24 @@ export function ScorePanel({
   }
 
   async function remove() {
-    if (!(await confirmBox({ title: "악보 연결 끊기", message: "이 곡에서 악보 연결을 끊고 score.pdf 를 지웁니다.", okText: "끊기", danger: true })))
+    const cur = list.items.find((x) => x.active);
+    const rest = list.items.length - 1;
+    if (
+      !(await confirmBox({
+        title: "악보 지우기",
+        message: `'${cur?.name ?? "악보"}' 를 이 곡에서 지웁니다.` + (rest > 0 ? ` 남은 악보 ${rest}개 중 가장 최근 것을 고릅니다.` : ""),
+        okText: "지우기",
+        danger: true,
+      }))
+    )
       return;
     try {
-      await api.deleteScore(jobId);
-      setScore(null);
+      if (cur) applyLib(await api.deleteScoreItem(jobId, cur.id));
+      else {
+        await api.deleteScore(jobId);
+        setScore(null);
+        onLibrary?.();
+      }
       setMsg("");
     } catch (e) {
       setMsg((e as Error).message);
@@ -254,6 +304,22 @@ export function ScorePanel({
             </span>
           )}
         </h2>
+        {list.items.length > 1 && (
+          <select
+            className="score-pick"
+            value={list.active ?? ""}
+            disabled={busy || !canEdit}
+            onChange={(e) => void pick(e.target.value)}
+            title="이 곡에 올린 악보 중 고르기"
+          >
+            {list.items.map((it) => (
+              <option key={it.id} value={it.id}>
+                {it.name} ({it.measures}마디)
+              </option>
+            ))}
+          </select>
+        )}
+        {list.items.length === 1 && <span className="meta">{list.items[0].name}</span>}
         <span style={{ flex: 1 }} />
         {score && children}
         <input
@@ -264,13 +330,18 @@ export function ScorePanel({
           onChange={(e) => e.target.files?.[0] && void upload(e.target.files[0])}
         />
         {canEdit && (
-          <button className="ghost" disabled={busy} onClick={() => file.current?.click()}>
-            {score ? "악보 바꾸기" : "악보 PDF 올리기"}
+          <button className="ghost" disabled={busy} onClick={() => file.current?.click()} title="악보 PDF 를 이 곡의 악보 목록에 넣고 고릅니다">
+            {score ? "악보 추가" : "악보 PDF 올리기"}
+          </button>
+        )}
+        {score && canEdit && list.items.length > 0 && (
+          <button className="ghost" onClick={() => void renameCur()}>
+            이름
           </button>
         )}
         {score && canEdit && (
           <button className="ghost" onClick={remove}>
-            연결 끊기
+            지우기
           </button>
         )}
       </div>

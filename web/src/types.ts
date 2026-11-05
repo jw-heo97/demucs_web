@@ -158,6 +158,20 @@ export interface ScoreMeasure {
   sys_x1: number;
 }
 
+/** 곡에 올린 악보 하나 (여러 개 올리고 골라 쓴다) */
+export interface ScoreItem {
+  id: string;
+  name: string;
+  at?: number;
+  pages: number;
+  measures: number;
+  active: boolean;
+}
+export interface ScoreList {
+  active: string | null;
+  items: ScoreItem[];
+}
+
 export interface ScoreData {
   version: number;
   pages: { w: number; h: number; img: string }[];
