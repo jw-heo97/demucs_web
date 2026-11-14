@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { api } from "../api";
+import { audioCtx } from "../lib/audioCtx";
 import type { Bar } from "../types";
 import type { useAudioEngine } from "./useAudioEngine";
 
@@ -33,6 +35,49 @@ function speak(text: string) {
   synth.speak(u);
 }
 
+// ---- 서버가 만든 안내 소리를 곡 위에 얹는다 (app/tts.py)
+// 브라우저 음성 합성은 아이패드·아이폰에서 말하는 동안 곡 소리를 OS 가 줄였다 키운다(더킹) — 끌 수 없다.
+// 소리 파일을 Web Audio 로 틀면 그냥 섞여 들린다. 못 받은 이름만 예전처럼 음성 합성으로.
+const clips = new Map<string, Promise<AudioBuffer | null>>();
+
+function loadClip(text: string): Promise<AudioBuffer | null> {
+  let p = clips.get(text);
+  if (!p) {
+    p = fetch(api.fileUrl(`/api/tts?text=${encodeURIComponent(text)}`))
+      .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(String(r.status)))))
+      .then((b) => audioCtx().decodeAudioData(b))
+      .catch(() => {
+        clips.delete(text); // 다음에 다시 받아 본다
+        return null;
+      });
+    clips.set(text, p);
+  }
+  return p;
+}
+
+let playing: AudioBufferSourceNode | null = null;
+
+/** 구간 이름을 읽는다: 받아 둔 소리가 있으면 곡 위에 얹고, 없으면 음성 합성 */
+async function announce(text: string) {
+  const buf = await loadClip(text);
+  const ctx = audioCtx();
+  if (buf && ctx.state === "running") {
+    // 앞 안내가 아직 나오는 중이면 끊는다 — 늦은 안내는 틀린 안내다
+    try {
+      playing?.stop();
+    } catch {
+      /* 이미 끝남 */
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    src.start();
+    playing = src;
+    return;
+  }
+  speak(text);
+}
+
 /** 구간 이름이 바뀌는 마디들 */
 function sectionsOf(bars: Bar[]): Section[] {
   const out: Section[] = [];
@@ -61,6 +106,11 @@ export function useSectionVoice(engine: Engine, bars: Bar[]) {
     }
   });
   const sections = useMemo(() => sectionsOf(bars), [bars]);
+  // 켜져 있으면 이 곡의 구간 이름 소리를 미리 받아 둔다 (말할 때 기다리지 않게)
+  useEffect(() => {
+    if (!enabled) return;
+    for (const n of new Set(sections.map((x) => x.name))) void loadClip(n);
+  }, [enabled, sections]);
   const sectionsRef = useRef(sections);
   sectionsRef.current = sections;
   // 이번 재생에서 이미 읽은 구간 (탐색하거나 멈추면 비운다)
@@ -73,14 +123,18 @@ export function useSectionVoice(engine: Engine, bars: Bar[]) {
     } catch {
       /* 기억만 못 할 뿐 */
     }
-    // 켜는 순간(사용자 제스처 안)에 한 번 말해 둬야 iOS 가 이후의 음성을 허락한다
-    if (on) speak("구간 안내");
-    else if (canSpeak()) window.speechSynthesis.cancel();
+    // 켜는 순간(사용자 제스처 안)에 오디오를 깨워 두고 한 번 들려준다 (iOS 는 제스처 안에서만 소리를 허락한다)
+    if (on) {
+      void audioCtx().resume();
+      void announce("구간 안내");
+    } else if (canSpeak()) window.speechSynthesis.cancel();
   }, []);
 
   /** 재생 버튼을 누른 순간(제스처 안) 호출 — iOS 음성 잠금을 풀어둔다 */
   const prime = useCallback(() => {
-    if (!enabled || !canSpeak()) return;
+    if (!enabled) return;
+    void audioCtx().resume();
+    if (!canSpeak()) return;
     const u = new SpeechSynthesisUtterance(" ");
     u.volume = 0;
     window.speechSynthesis.speak(u);
@@ -103,7 +157,7 @@ export function useSectionVoice(engine: Engine, bars: Bar[]) {
   );
 
   useEffect(() => {
-    if (!enabled || !canSpeak()) return;
+    if (!enabled) return;
     let last: number | null = null;
     let wasPlaying = false;
     let startedAt = 0;
@@ -140,7 +194,7 @@ export function useSectionVoice(engine: Engine, bars: Bar[]) {
         ss.forEach((s, i) => {
           if (last! < s.cue && t >= s.cue && !said.current.has(i)) {
             said.current.add(i);
-            speak(s.name);
+            void announce(s.name);
           }
         });
       }
@@ -154,5 +208,5 @@ export function useSectionVoice(engine: Engine, bars: Bar[]) {
     said.current.clear();
   }, [sections]);
 
-  return { enabled, setEnabled, available: canSpeak() && sections.length > 0, prime, cueAt };
+  return { enabled, setEnabled, available: sections.length > 0, prime, cueAt };
 }

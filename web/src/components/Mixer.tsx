@@ -925,8 +925,8 @@ function BpmControl({ base, rate, onRate }: { base: number; rate: number; onRate
     onRate(Math.abs(r - 1) < 0.002 ? 1 : r);
     setDraft(String(Math.round(base * r)));
   };
-  // 5 단위로 맞춰 올리고 내린다 (143 에서 +5 → 145)
-  const step = (d: number) => apply(d > 0 ? Math.floor(cur / 5) * 5 + 5 : Math.ceil(cur / 5) * 5 - 5);
+  // 지금 속도에서 5 씩 (138 에서 −5 → 133). 5 단위로 맞추면 138 → 135 처럼 3 만 바뀌었다
+  const step = (d: number) => apply(cur + (d > 0 ? 5 : -5));
   const off = Math.abs(rate - 1) >= 0.002;
   return (
     <span className="bpmctl" title={`원곡 ♩=${Math.round(base * 100) / 100} 기준. 음정은 그대로입니다.`}>
