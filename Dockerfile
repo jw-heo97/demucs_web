@@ -49,6 +49,10 @@ RUN python -c "from demucs.pretrained import get_model; get_model('htdemucs')" \
  && du -sh /opt/cache/* \
  && test -n "$(find /opt/cache -type f -size +10M -print -quit)"
 
+# 구간 안내 음성(app/tts.py). 브라우저 음성 합성은 iOS 가 재생 중인 곡 소리를 줄여서(더킹),
+# 서버에서 짧은 소리 파일로 만들어 재생기에 얹는다. 모델 레이어 캐시를 깨지 않게 그 뒤에 둔다.
+RUN apt-get update  && apt-get install -y --no-install-recommends espeak-ng  && rm -rf /var/lib/apt/lists/*
+
 COPY app/ /app/
 
 # 1단계에서 빌드한 React 번들을 정적 파일로 얹는다 (main.py 가 /ui 로 서빙)

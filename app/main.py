@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 import os
 import threading
 import urllib.error
@@ -26,6 +27,7 @@ import lock as song_lock
 import notation
 import scores
 import score_library
+import tts
 import separator
 import tracks as user_tracks
 from config import CORS_ORIGINS, MAX_DURATION_SEC, METRONOME_DEFAULT, OUTPUT_DIR, WORK_DIR
@@ -836,6 +838,19 @@ async def put_score(job_id: str, request: Request, name: Optional[str] = None):
     job = store.get(job_id)
     job.files = store._scan_files(job, d)
     return _score_payload(job_id, data)
+
+
+# --- 구간 안내 음성 (app/tts.py) ---
+@app.get("/api/tts")
+def get_tts(text: str):
+    """구간 이름을 읽은 소리(wav). 화면이 받아 두었다가 재생 중인 곡 위에 얹는다."""
+    try:
+        p = tts.wav(text)
+    except tts.TTSError as e:
+        raise HTTPException(400, str(e)) from e
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise HTTPException(503, f"음성을 만들 수 없습니다: {e}") from e
+    return FileResponse(p, media_type="audio/wav", headers={"Cache-Control": "public, max-age=86400"})
 
 
 # --- 곡의 악보 목록 (여러 개 올리고 골라 쓰기, app/score_library.py) ---
