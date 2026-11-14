@@ -24,8 +24,8 @@ function speak(text: string) {
   if (!canSpeak()) return;
   const synth = window.speechSynthesis;
   const u = new SpeechSynthesisUtterance(text);
-  // 한글이 있으면 한국어 음성, 아니면(Verse, Chorus…) 영어 음성 — 한국어 음성이 영어를 읽으면 어색하다
-  const lang = /[가-힣]/.test(text) ? "ko-KR" : "en-US";
+  // 영어로만 읽는다 (한글은 spoken() 에서 이미 뺐다)
+  const lang = "en-US";
   u.lang = lang;
   const voice = synth.getVoices().find((v) => v.lang.replace("_", "-").startsWith(lang));
   if (voice) u.voice = voice;
@@ -35,15 +35,28 @@ function speak(text: string) {
   synth.speak(u);
 }
 
-// ---- 서버가 만든 안내 소리를 곡 위에 얹는다 (app/tts.py)
+// ---- 서버가 만든 안내 소리를 곡 위에 얹는다 (app/tts.py, 영어만)
 // 브라우저 음성 합성은 아이패드·아이폰에서 말하는 동안 곡 소리를 OS 가 줄였다 키운다(더킹) — 끌 수 없다.
-// 소리 파일을 Web Audio 로 틀면 그냥 섞여 들린다. 못 받은 이름만 예전처럼 음성 합성으로.
+// 소리 파일을 Web Audio 로 틀면 그냥 섞여 들린다. 못 받은 이름만 영어 음성 합성으로.
+
+/** 읽을 영어 글자 (서버 tts.spoken 과 같은 규칙): '구간3' → 'Section 3', 다른 한글은 뺀다. 비면 읽지 않는다 */
+export function spoken(name: string): string {
+  return name
+    .replace(/구간\s*(\d+)/g, "Section $1")
+    .replace(/[가-힣ㄱ-ㆎ]+/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .join(" ")
+    .slice(0, 40);
+}
+const readable = (t: string) => /[A-Za-z0-9]/.test(t);
 const clips = new Map<string, Promise<AudioBuffer | null>>();
 
 function loadClip(text: string): Promise<AudioBuffer | null> {
   let p = clips.get(text);
   if (!p) {
-    p = fetch(api.fileUrl(`/api/tts?text=${encodeURIComponent(text)}`))
+    // v: 목소리를 바꾸면 올린다 — 브라우저가 들고 있는 예전 소리를 쓰지 않게 (2 = Piper 영어)
+    p = fetch(api.fileUrl(`/api/tts?text=${encodeURIComponent(text)}&v=2`))
       .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(String(r.status)))))
       .then((b) => audioCtx().decodeAudioData(b))
       .catch(() => {
@@ -58,7 +71,9 @@ function loadClip(text: string): Promise<AudioBuffer | null> {
 let playing: AudioBufferSourceNode | null = null;
 
 /** 구간 이름을 읽는다: 받아 둔 소리가 있으면 곡 위에 얹고, 없으면 음성 합성 */
-async function announce(text: string) {
+async function announce(name: string) {
+  const text = spoken(name);
+  if (!readable(text)) return; // 한글만 있는 이름은 읽지 않는다
   const buf = await loadClip(text);
   const ctx = audioCtx();
   if (buf && ctx.state === "running") {
@@ -109,7 +124,7 @@ export function useSectionVoice(engine: Engine, bars: Bar[]) {
   // 켜져 있으면 이 곡의 구간 이름 소리를 미리 받아 둔다 (말할 때 기다리지 않게)
   useEffect(() => {
     if (!enabled) return;
-    for (const n of new Set(sections.map((x) => x.name))) void loadClip(n);
+    for (const n of new Set(sections.map((x) => spoken(x.name)))) if (readable(n)) void loadClip(n);
   }, [enabled, sections]);
   const sectionsRef = useRef(sections);
   sectionsRef.current = sections;
@@ -126,7 +141,7 @@ export function useSectionVoice(engine: Engine, bars: Bar[]) {
     // 켜는 순간(사용자 제스처 안)에 오디오를 깨워 두고 한 번 들려준다 (iOS 는 제스처 안에서만 소리를 허락한다)
     if (on) {
       void audioCtx().resume();
-      void announce("구간 안내");
+      void announce("Section guide");
     } else if (canSpeak()) window.speechSynthesis.cancel();
   }, []);
 

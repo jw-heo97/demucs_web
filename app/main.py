@@ -848,7 +848,7 @@ def get_tts(text: str):
         p = tts.wav(text)
     except tts.TTSError as e:
         raise HTTPException(400, str(e)) from e
-    except (OSError, subprocess.TimeoutExpired) as e:
+    except Exception as e:  # noqa: BLE001 — 모델이 없거나 깨짐: 화면은 영어 음성 합성으로
         raise HTTPException(503, f"음성을 만들 수 없습니다: {e}") from e
     return FileResponse(p, media_type="audio/wav", headers={"Cache-Control": "public, max-age=86400"})
 
