@@ -49,9 +49,12 @@ RUN python -c "from demucs.pretrained import get_model; get_model('htdemucs')" \
  && du -sh /opt/cache/* \
  && test -n "$(find /opt/cache -type f -size +10M -print -quit)"
 
-# 구간 안내 음성(app/tts.py). 브라우저 음성 합성은 iOS 가 재생 중인 곡 소리를 줄여서(더킹),
-# 서버에서 짧은 소리 파일로 만들어 재생기에 얹는다. 모델 레이어 캐시를 깨지 않게 그 뒤에 둔다.
-RUN apt-get update  && apt-get install -y --no-install-recommends espeak-ng  && rm -rf /var/lib/apt/lists/*
+# 구간 안내 음성(app/tts.py): Piper(가벼운 신경망 TTS, onnx — torch 없이) + 영어 목소리 하나.
+# 브라우저 음성 합성은 iOS 가 재생 중인 곡 소리를 줄여서(더킹), 서버에서 소리 파일로 만들어 재생기에 얹는다.
+# 모델 레이어 캐시를 깨지 않게 그 뒤에 둔다. 빌드 때 한 번 읽혀 보고 실패하면 빌드를 멈춘다.
+ARG PIPER_VOICE=en_US-lessac-medium
+ENV PIPER_MODEL=/opt/piper/${PIPER_VOICE}.onnx
+RUN pip install "piper-tts==1.2.0"  && mkdir -p /opt/piper  && python -c "import urllib.request as u; b='https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/medium/${PIPER_VOICE}.onnx'; u.urlretrieve(b, '/opt/piper/${PIPER_VOICE}.onnx'); u.urlretrieve(b + '.json', '/opt/piper/${PIPER_VOICE}.onnx.json')"  && python -c "import wave; from piper.voice import PiperVoice; v=PiperVoice.load('/opt/piper/${PIPER_VOICE}.onnx'); w=wave.open('/tmp/t.wav','wb'); v.synthesize('Chorus', w); w.close(); print('piper ok')"  && rm -f /tmp/t.wav
 
 COPY app/ /app/
 
