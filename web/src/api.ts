@@ -184,6 +184,14 @@ export const api = {
   /** 원본 악보 위 펜 필기 */
   scoreInk: (id: string) => get<InkDoc>(`/api/jobs/${id}/score/ink`),
   saveScoreInk: (id: string, doc: InkDoc) => put<InkDoc>(`/api/jobs/${id}/score/ink`, doc),
+  /** 고른 악보(PDF)의 그 마디를 AI 가 칸으로 받아 적는다 (저장은 안 한다) */
+  readMeasure: (id: string, bar: number, beats: number, unit: number, steps?: number) =>
+    post<{ measures: Notation["measures"]; note?: string; seconds?: number }>(`/api/jobs/${id}/notation/read`, {
+      bar,
+      beats,
+      unit,
+      steps,
+    }),
   /** 손으로 그린 마디(PNG) → 칸 (저장은 안 한다) */
   recognizeDrawing: (
     id: string,

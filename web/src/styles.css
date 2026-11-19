@@ -455,5 +455,7 @@ button.danger { background: var(--err); }
 .float-editor-body { overflow: auto; padding: 0 4px 6px; }
 .float-editor-body > .panel { margin: 6px 0 0; border: none; box-shadow: none; }
 
+.read-note { margin: 0 0 6px; }
+
 /* 악보 편집: 안 고친 마디를 열 때 시작 내용 고르기 */
 .start-pick { margin: 0 0 6px; padding: 6px 8px; border: 1px dashed var(--accent); border-radius: 8px; }
