@@ -684,13 +684,11 @@ export function ScoreSheet({
   // 필기 중에 마디를 누르면 그 마디를 크게 띄워 쓴다
   const [zoom, setZoom] = useState<number | null>(null);
   const [tool, setTool] = useState<InkTool>({ kind: "pen", color: INK_COLORS[0].c });
-  const edited = notation?.measures.some((x) => x.edited) ?? false;
 
   return (
     <div className={`sheet${onSelect ? " selecting" : ""}`} style={{ maxWidth: `calc((100vh - 70px) * ${pg.w / pg.h})` }}>
       {jobId && (
         <div className="actions ink-bar">
-          {edited && <span className="meta"><span className="patch-key" /> 송 맵에서 고친 마디</span>}
           <span style={{ flex: 1 }} />
           {inking ? (
             <>
