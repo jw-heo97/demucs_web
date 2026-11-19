@@ -559,14 +559,33 @@ export const PATCH_ABOVE = 1.5;
 export const PATCH_SPAN = 1.5 + 1 + 0.9;
 
 /** 고친 마디 하나: 원본 그림 위에 흰 칸을 덮고 고친 음표를 그린다 (VexFlow 는 그릴 때만 받는다) */
-export function MeasurePatch({ m, aspect }: { m: NMeasure; aspect: number }) {
+/**
+ * 덮개에 같이 그릴 것: 줄 첫 마디면 음자리표, 곡 첫 마디거나 박자가 바뀌면 박자표, 반복 시작·끝이면 도돌이표.
+ * 덮개가 원본의 마디를 통째로 가리므로 원본에 있던 이것들을 다시 그려야 한다.
+ */
+export function patchDeco(score: ScoreData, mi: number, notation: Notation, bar: number): PatchDecoT {
+  const ms = score.measures[mi];
+  const prev = mi > 0 ? score.measures[mi - 1] : null;
+  const m = notation.measures[bar - 1];
+  const pm = bar > 1 ? notation.measures[bar - 2] : null;
+  return {
+    clef: !prev || prev.page !== ms.page || prev.system !== ms.system,
+    time: bar === 1 || (!!m && !!pm && (m.beats !== pm.beats || m.unit !== pm.unit)),
+    repeatStart: !!score.repeats?.starts.includes(mi + 1),
+    repeatEnd: !!score.repeats?.ends.includes(mi + 1),
+  };
+}
+type PatchDecoT = { clef?: boolean; time?: boolean; repeatStart?: boolean; repeatEnd?: boolean };
+
+export function MeasurePatch({ m, aspect, deco }: { m: NMeasure; aspect: number; deco?: PatchDecoT }) {
   const el = useRef<HTMLDivElement | null>(null);
+  const decoKey = JSON.stringify(deco ?? {});
   useEffect(() => {
     let alive = true;
     import("../lib/drawNotation").then(({ drawMeasurePatch }) => {
       if (!alive || !el.current) return;
       try {
-        drawMeasurePatch(el.current, m, aspect);
+        drawMeasurePatch(el.current, m, aspect, deco);
       } catch {
         /* 못 그리면 원본 그대로 보인다 */
       }
@@ -574,7 +593,8 @@ export function MeasurePatch({ m, aspect }: { m: NMeasure; aspect: number }) {
     return () => {
       alive = false;
     };
-  }, [m, aspect]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [m, aspect, decoKey]);
   return <div ref={el} className="nt-patch-svg" />;
 }
 
@@ -731,7 +751,7 @@ export function ScoreSheet({
                   height: `${((h * PATCH_SPAN) / pg.h) * 100}%`,
                 }}
               >
-                <MeasurePatch m={nm} aspect={w / (h * PATCH_SPAN)} />
+                <MeasurePatch m={nm} aspect={w / (h * PATCH_SPAN)} deco={patchDeco(score, mi, notation, b!)} />
               </div>
             );
           })}
