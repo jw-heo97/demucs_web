@@ -21,6 +21,8 @@ export interface NMeasure {
   simile?: boolean;
   /** 사용자가 고친 마디 — 원본 악보(PDF) 위에 이 마디만 덮어 그린다 */
   edited?: boolean;
+  /** 박마다 편집 칸 수 (그 박만 셋잇단 등). 없으면 타격으로 짐작한다 */
+  divs?: number[];
 }
 
 export interface Notation {
@@ -89,7 +91,7 @@ export function resample(m: NMeasure, steps: number): NMeasure {
     });
     lanes[k] = arr.join("");
   }
-  return { ...m, steps, lanes };
+  return { ...m, steps, lanes, divs: undefined };
 }
 
 /** 박자를 바꾼다: 칸 간격(16분 등)은 그대로 두고 길이만 맞춘다 */
@@ -101,7 +103,7 @@ export function changeMeter(m: NMeasure, beats: number, unit: number): NMeasure 
   for (const [k, v] of Object.entries(m.lanes) as [Lane, string][]) {
     lanes[k] = v.slice(0, steps).padEnd(steps, "-");
   }
-  return { ...m, beats, unit, steps, lanes };
+  return { ...m, beats, unit, steps, lanes, divs: undefined };
 }
 
 export function cell(m: NMeasure, lane: Lane, i: number): string {
@@ -116,6 +118,83 @@ export function setCell(m: NMeasure, lane: Lane, i: number, c: string): NMeasure
   if (/^-+$/.test(s)) delete lanes[lane];
   else lanes[lane] = s;
   return { ...m, lanes, simile: false };
+}
+
+// ---- 박마다 나누기 (편집 칸): 한 박을 2·3·4·6·8 칸으로 따로 고른다 (그 박만 셋잇단 등)
+/** 고를 수 있는 박 나누기 (누를 때 이 차례로) */
+export const BEAT_DIVS = [4, 3, 6, 8, 2] as const;
+export const BEAT_DIV_LABEL: Record<number, string> = { 1: "4분", 2: "8분", 3: "셋잇단", 4: "16분", 6: "16분셋", 8: "32분", 12: "16+셋", 24: "세밀" };
+
+/** 한 박을 가장 잘게 나눌 칸 수 — 2·3·4·6·8 을 다 담는다 (분모 8 이상은 12: 서버 한도 192칸 안에) */
+const finePer = (m: Pick<NMeasure, "unit">) => (m.unit >= 8 ? 12 : 24);
+
+/** 가장 잘게 (박마다 다르게 나눠도 담기게) */
+export function toFine(m: NMeasure): NMeasure {
+  const steps = m.beats * finePer(m);
+  return m.steps === steps ? m : { ...resample(m, steps), divs: m.divs };
+}
+
+/** 박 b 의 타격 틱들 (박 안에서 0 부터) */
+function beatHits(m: NMeasure, b: number): number[] {
+  const st = stepTicks(m);
+  const B = beatTicks(m);
+  const out: number[] = [];
+  for (const v of Object.values(m.lanes)) {
+    [...(v ?? "")].forEach((c, i) => {
+      const t = Math.round(i * st) - b * B;
+      if (c !== "-" && t >= 0 && t < B) out.push(t);
+    });
+  }
+  return out;
+}
+
+/** 박 b 를 몇 칸으로 보나: 타격이 다 들어맞는 가장 작은 나누기 (없으면 마디 기본 칸) */
+export function beatDiv(m: NMeasure, b: number): number {
+  const B = beatTicks(m);
+  const set = m.divs?.[b];
+  if (set && B % set === 0) return set;
+  const hits = beatHits(m, b);
+  // 마디 기본 칸(16분 등). 아주 잘게 나뉜 마디(편집 뒤)는 16분으로 본다
+  let base = Math.max(1, Math.round(m.steps / m.beats));
+  if (base > 8 || B % base !== 0) base = B % 4 === 0 ? 4 : 2;
+  const fits = (d: number) => B % d === 0 && hits.every((t) => t % (B / d) === 0);
+  if (fits(base)) return base;
+  for (const d of [2, 4, 3, 6, 8, 12, 24]) if (fits(d)) return d;
+  return base;
+}
+
+/** 박 b 를 d 칸으로: 타격은 가장 가까운 새 칸으로 (겹치면 앞의 것) */
+export function setBeatDiv(m: NMeasure, b: number, d: number): NMeasure {
+  const f = toFine(m);
+  const per = f.steps / f.beats;
+  const lanes: NMeasure["lanes"] = {};
+  for (const [k, v] of Object.entries(f.lanes) as [Lane, string][]) {
+    const arr = [...v];
+    const seg = arr.slice(b * per, (b + 1) * per);
+    const next = Array(per).fill("-");
+    seg.forEach((c, i) => {
+      if (c === "-") return;
+      const j = Math.min(d - 1, Math.round((i * d) / per)) * (per / d);
+      if (next[j] === "-") next[j] = c;
+    });
+    arr.splice(b * per, per, ...next);
+    lanes[k] = arr.join("");
+  }
+  const divs = Array.from({ length: f.beats }, (_, i) => (i === b ? d : beatDiv(m, i)));
+  return compact({ ...f, lanes, simile: false, divs });
+}
+
+/** 칸 수를 타격이 담기는 가장 작은 값으로 줄인다 (저장 크기·보기 위해) — 박마다 기본 칸 수는 남긴다 */
+export function compact(m: NMeasure, minPer = 4): NMeasure {
+  const tot = measureTicks(m);
+  const st = stepTicks(m);
+  const ticks: number[] = [];
+  for (const v of Object.values(m.lanes)) [...(v ?? "")].forEach((c, i) => c !== "-" && ticks.push(Math.round(i * st)));
+  const cands = [1, 2, 3, 4, 6, 8, 12, 24].map((d) => m.beats * d).filter((s) => s >= m.beats * Math.min(minPer, finePer(m)));
+  for (const s of cands) {
+    if (tot % s === 0 && ticks.every((t) => t % (tot / s) === 0)) return s === m.steps ? m : { ...resample(m, s), divs: m.divs };
+  }
+  return m;
 }
 
 /** 칸을 누를 때 기호 순환 */

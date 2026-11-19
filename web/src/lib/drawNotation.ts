@@ -110,9 +110,11 @@ function tokenize(m: NMeasure, evs: Ev[]): { toks: Tok[]; triplets: [number, num
       n -= pick[0] / B;
     }
   };
+  // 싱코페이션: 앞 박 뒷박에서 친 음이 이 박 앞부분까지 이어진다 (8분-4분-8분). 이 박은 그만큼 건너서 시작한다
+  let carry = 0;
   for (let b = 0; b < M; b += B) {
-    const inBeat = evs.filter((e) => e.tick >= b && e.tick < b + B);
-    if (!inBeat.length) {
+    const inBeat = evs.filter((e) => e.tick >= b + carry && e.tick < b + B);
+    if (!inBeat.length && !carry) {
       restRun.push(b);
       continue;
     }
@@ -123,7 +125,8 @@ function tokenize(m: NMeasure, evs: Ev[]): { toks: Tok[]; triplets: [number, num
     const snap = (t: number) => b + Math.round((t - b) / unit) * unit;
     const pts = [...new Map(inBeat.map((e) => [snap(e.tick), e])).entries()].sort((x, y) => x[0] - y[0]);
     const first = toks.length;
-    let cur = b;
+    let cur = b + carry;
+    carry = 0;
     const fill = (len: number, ev?: Ev) => {
       // len 틱을 음표(첫 조각만 ev) + 쉼표로
       let left = len;
@@ -144,10 +147,22 @@ function tokenize(m: NMeasure, evs: Ev[]): { toks: Tok[]; triplets: [number, num
     for (let i = 0; i < pts.length; i++) {
       const [t, e] = pts[i];
       if (t > cur) fill(t - cur);
-      const end = i + 1 < pts.length ? pts[i + 1][0] : b + B;
+      const last = i + 1 >= pts.length;
+      // 박의 뒷박(8분 엇박)에서 친 마지막 음이고, 다음 타격이 정확히 4분 뒤(다음 박의 뒷박)면
+      // 쉼표로 끊지 않고 4분음표 하나로 (싱코페이션). 4/4 마디 한가운데(2박→3박)는 넘지 않는다 — 관례
+      const next = evs.find((x) => x.tick >= b + B);
+      const mid = m.unit === 4 && m.beats === 4 ? M / 2 : -1;
+      if (last && !trip && t - b === B / 2 && next && next.tick - t === B && b + B !== mid && next.tick < M) {
+        toks.push({ dur: B === 48 ? "q" : B === 24 ? "8" : "q", dots: 0, ev: e });
+        carry = B / 2;
+        cur = b + B;
+        continue;
+      }
+      const end = last ? b + B : pts[i + 1][0];
       fill(end - t, e);
       cur = end;
     }
+    if (!pts.length && cur < b + B) fill(b + B - cur);
     if (trip) triplets.push([first, toks.length]);
   }
   flushRests();
@@ -187,7 +202,9 @@ function buildVoice(m: NMeasure, feet: boolean, solo: boolean) {
   const beams = Beam.generateBeams(notes, {
     groups: [m.unit === 8 && m.beats % 3 === 0 ? new Fraction(3, 8) : new Fraction(1, m.unit)],
     stem_direction: stem,
-    beam_rests: false,
+    // 박 안의 16분 쉼표 등은 빔을 끊지 않는다 (가운데 쉼표만 — 일반 드럼 악보처럼)
+    beam_rests: true,
+    beam_middle_only: true,
     maintain_stem_directions: true,
   });
   return { voice, beams, tuplets, weight: notes.length };

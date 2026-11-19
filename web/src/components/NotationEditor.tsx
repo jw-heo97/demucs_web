@@ -5,7 +5,15 @@ import { useMe } from "../lib/me";
 import {
   LANES,
   FEET,
+  BEAT_DIVS,
+  BEAT_DIV_LABEL,
+  beatDiv,
+  beatTicks,
   changeMeter,
+  compact,
+  setBeatDiv,
+  stepTicks,
+  toFine,
   emptyMeasure,
   nextSymbol,
   resample,
@@ -368,7 +376,7 @@ export function NotationEditor({
             <button className="ghost" onClick={() => onPlayFrom(n)} title="이 마디부터 재생 (예비박)">▶ 여기서 재생</button>
             <span style={{ flex: 1 }} />
             <button className="ghost" onClick={() => setDraw(drawRange(sel!, false))} title="펜으로 그려서 AI 가 읽기 (고른 마디들)">
-              ✍ 그리기{sel!.to > sel!.from ? ` (${Math.min(8, sel!.to - sel!.from + 1)}마디)` : ""}
+              {sel!.to > sel!.from ? `✍ 그리기 (${Math.min(8, sel!.to - sel!.from + 1)}마디)` : "✍ 이 마디"}
             </button>
             <button className="ghost" onClick={() => setDraw(drawRange(sel!, true))} title="이 마디가 있는 줄 전체를 펜으로">
               ✍ 이 줄
@@ -419,33 +427,66 @@ export function NotationEditor({
             ))}
           </div>
 
-          <div className="ntgrid" style={{ ["--steps" as string]: cur.steps }}>
+          {/* 박마다 블록 — 블록마다 나누기(16분·셋잇단…)를 따로 고른다 */}
+          <div className="ntgrid" style={{ ["--beats" as string]: cur.beats }}>
+            <div className="ntrow ntdivs">
+              <div className="ntlane">박</div>
+              {Array.from({ length: cur.beats }, (_, b) => {
+                const d = beatDiv(cur, b);
+                const nextD = BEAT_DIVS[(BEAT_DIVS.indexOf(d as (typeof BEAT_DIVS)[number]) + 1) % BEAT_DIVS.length];
+                return (
+                  <button
+                    key={b}
+                    className={`ghost ntdiv${d === 3 || d === 6 ? " trip" : ""}`}
+                    onClick={() => editMeasure(n, (m) => setBeatDiv(m, b, nextD))}
+                    title={`${b + 1}박: ${BEAT_DIV_LABEL[d] ?? d} — 누르면 ${BEAT_DIV_LABEL[nextD]}`}
+                  >
+                    {b + 1}박 · {BEAT_DIV_LABEL[d] ?? d}
+                  </button>
+                );
+              })}
+            </div>
             {lanesShown.map((lane) => (
               <div key={lane} className={`ntrow${FEET.includes(lane) ? " feet" : ""}`}>
                 <div className="ntlane" title={LANES.find((l) => l.key === lane)?.label}>
                   {LANES.find((l) => l.key === lane)?.short}
                 </div>
-                {Array.from({ length: cur.steps }, (_, i) => {
-                  const c = cur.lanes[lane]?.[i] ?? "-";
-                  const perBeat = cur.steps / cur.beats;
+                {Array.from({ length: cur.beats }, (_, b) => {
+                  const d = beatDiv(cur, b);
+                  const B = beatTicks(cur);
                   return (
-                    <button
-                      key={i}
-                      className={`ntcell${c !== "-" ? " hit" : ""}${i % perBeat === 0 ? " beat" : ""}`}
-                      onClick={() =>
-                        editMeasure(n, (m) => {
-                          const want = tool === "o" && lane !== "hh" ? "x" : tool;
-                          const now = m.lanes[lane]?.[i] ?? "-";
-                          return setCell(m, lane, i, now === want ? "-" : want);
-                        })
-                      }
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        editMeasure(n, (m) => setCell(m, lane, i, nextSymbol(lane, m.lanes[lane]?.[i] ?? "-")));
-                      }}
-                    >
-                      {c === "-" ? "" : c}
-                    </button>
+                    <div key={b} className="ntbeat">
+                      {Array.from({ length: d }, (_, k) => {
+                        const tick = b * B + (k * B) / d;
+                        const idx = tick / stepTicks(cur);
+                        const c = Number.isInteger(idx) ? cur.lanes[lane]?.[idx] ?? "-" : "-";
+                        // 누르면 가장 잘게 나눈 마디에서 고치고, 다시 줄인다 (박마다 다른 나누기가 담기게)
+                        const put = (f: (now: string) => string) =>
+                          editMeasure(n, (m) => {
+                            const fm = toFine(m);
+                            const i = Math.round(tick / stepTicks(fm));
+                            return compact(setCell(fm, lane, i, f(fm.lanes[lane]?.[i] ?? "-")));
+                          });
+                        return (
+                          <button
+                            key={k}
+                            className={`ntcell${c !== "-" ? " hit" : ""}${k === 0 ? " beat" : ""}`}
+                            onClick={() =>
+                              put((now) => {
+                                const want = tool === "o" && lane !== "hh" ? "x" : tool;
+                                return now === want ? "-" : want;
+                              })
+                            }
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              put((now) => nextSymbol(lane, now));
+                            }}
+                          >
+                            {c === "-" ? "" : c}
+                          </button>
+                        );
+                      })}
+                    </div>
                   );
                 })}
               </div>

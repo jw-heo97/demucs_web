@@ -92,6 +92,10 @@ def normalize(data: Any) -> dict:
             item["simile"] = True
         if m.get("edited"):
             item["edited"] = True
+        # 박마다 나누기(편집 칸에서 그 박만 셋잇단 등) — 박 수만큼, 알려진 값만
+        divs = m.get("divs")
+        if isinstance(divs, list) and len(divs) == beats and all(d in (1, 2, 3, 4, 6, 8, 12, 24) for d in divs):
+            item["divs"] = [int(d) for d in divs]
         out.append(item)
     res = {"version": 1, "measures": out}
     if data.get("tempo"):
