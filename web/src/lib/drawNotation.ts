@@ -341,7 +341,15 @@ export const PATCH_SPAN = PATCH_ABOVE + 1 + PATCH_BELOW;
  * aspect: 덮을 칸의 가로/세로. 칸은 오선 위로 PATCH_ABOVE, 아래로 PATCH_BELOW (오선 높이 기준) 더 크다 —
  * 위가 모자라면 음표 기둥 끝의 빔이 잘려 박 안 음표가 이어져 보이지 않는다.
  */
-export function drawMeasurePatch(el: HTMLElement, m: NMeasure, aspect: number): void {
+/** 덮개에 원본처럼 같이 그릴 것 — 줄 첫 마디의 음자리표, 박자표, 도돌이표 (덮개가 원본의 이것들을 가리지 않게) */
+export interface PatchDeco {
+  clef?: boolean;
+  time?: boolean;
+  repeatStart?: boolean;
+  repeatEnd?: boolean;
+}
+
+export function drawMeasurePatch(el: HTMLElement, m: NMeasure, aspect: number, deco: PatchDeco = {}): void {
   el.innerHTML = "";
   const SP = 10; // 줄 간격 (VexFlow 기본)
   const staffH = 4 * SP;
@@ -361,7 +369,11 @@ export function drawMeasurePatch(el: HTMLElement, m: NMeasure, aspect: number): 
   }
   // 맨 윗줄이 칸 위에서 0.6 오선 높이에 오게 (Stave 는 y 아래 4칸 뒤에 첫 줄을 긋는다)
   const stave = new Stave(0, staffH * PATCH_ABOVE - 4 * SP, W, { left_bar: false, right_bar: false });
-  stave.setBegBarType(BarlineType.NONE).setEndBarType(BarlineType.NONE);
+  stave
+    .setBegBarType(deco.repeatStart ? BarlineType.REPEAT_BEGIN : BarlineType.NONE)
+    .setEndBarType(deco.repeatEnd ? BarlineType.REPEAT_END : BarlineType.NONE);
+  if (deco.clef) stave.addClef("percussion");
+  if (deco.time) stave.addTimeSignature(`${m.beats}/${m.unit}`);
   stave.setContext(ctx).draw();
   if (m.simile) {
     ctx.save();

@@ -28,7 +28,7 @@ import {
 import type { Bar, Job, MapRange, ScoreData, SongMap } from "../types";
 import { DrawPad } from "./DrawPad";
 import { NotationView } from "./NotationView";
-import { MeasurePatch, PATCH_SPAN, ScoreCrop, ScoreSheet, measureOfBar } from "./ScoreView";
+import { MeasurePatch, PATCH_SPAN, ScoreCrop, ScoreSheet, measureOfBar, patchDeco } from "./ScoreView";
 
 const SYM_LABEL: Record<string, string> = {
   x: "침", ">": "악센트", g: "고스트", f: "플램", o: "열린 HH",
@@ -686,7 +686,7 @@ export function NotationEditor({
                   <div>
                     <div className="meta">{cur!.edited ? "고친 모양 (원본 위에 이렇게 덮입니다)" : "고친 모양 — 아직 안 고침 (원본 그대로 보입니다)"}</div>
                     <div className="ink-zoom-box patch-preview" style={{ width: `min(100%, calc(26vh * ${pa}))`, aspectRatio: `${pa}` }}>
-                      <MeasurePatch m={cur!} aspect={pa} />
+                      <MeasurePatch m={cur!} aspect={pa} deco={nt ? patchDeco(score!, k, nt, sel!.from) : undefined} />
                     </div>
                   </div>
                 </div>

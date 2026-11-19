@@ -183,6 +183,8 @@ export interface ScoreData {
   warnings: string[];
   /** 음원 n번째 마디 = 악보 order[n-1] 번째 마디 (반복 기호가 있는 악보) */
   order?: number[];
+  /** 반복 기호가 있는 악보 마디 (1부터): 시작 ‖: · 끝 :‖ */
+  repeats?: { starts: number[]; ends: number[] };
 }
 
 /** AI 악보 에이전트의 진행 상황 (agent/service.py) */
