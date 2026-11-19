@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ApiError, api } from "../api";
+import { ApiError, api, type ReadAll } from "../api";
 import { ask, confirmBox } from "../lib/dialog";
 import { useMe } from "../lib/me";
 import type { AiRun, Job } from "../types";
@@ -110,48 +110,75 @@ export function AiScore({ job, onChanged }: { job: Job; onChanged: () => void })
     }
   }
 
-  // 곡에 이미 있는 악보 PDF 로 (PDF 는 그대로, 음표 악보 + 송 맵 새 버전)
-  async function fromPdf() {
-    setErr("");
-    const hasNotation = job.files.some((f) => f.rel === "_notation.json");
+  const hasPdf = job.files.some((f) => f.rel === "score.pdf");
+
+  // ---- AI 악보(악보 PDF): 고른 악보를 AI 가 읽어 음표 악보를 통째로 채운다 (뒤에서 돈다)
+  const [ra, setRa] = useState<ReadAll | null>(null);
+  const raTimer = useRef<number | undefined>(undefined);
+  const pollRa = async (id: string) => {
+    window.clearTimeout(raTimer.current);
+    try {
+      const st = await api.readAllStatus(id);
+      if (jobRef.current !== id) return;
+      setRa(st.phase === "idle" ? null : st);
+      if (st.phase === "running") raTimer.current = window.setTimeout(() => void pollRa(id), 2000);
+      else if (st.phase === "done") onChanged();
+    } catch {
+      /* 다음에 다시 */
+    }
+  };
+  useEffect(() => {
+    setRa(null);
+    void pollRa(job.id);
+    return () => window.clearTimeout(raTimer.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job.id]);
+  async function readAll() {
     if (
       !(await confirmBox({
-        title: "악보 PDF 로 음표 악보 만들기",
+        title: "AI 악보",
         message:
-          "AI 가 이 곡의 악보 PDF 를 마디마다 읽어 음표 악보(송 맵에서 음표를 고칠 수 있는 악보)를 받아 적고, " +
-          "구간 이름·박자·템포를 읽어 송 맵 새 버전('AI 악보')을 만듭니다. PDF 와 지금 송 맵 버전은 그대로 남습니다." +
-          (hasNotation ? " 지금 있는 음표 악보는 이력에 남기고 새로 씁니다." : ""),
+          "고른 악보 PDF 를 AI 가 줄마다 읽어 음표 악보(악보 편집의 박 표)를 채웁니다. 곡 길이에 따라 10분 넘게 걸릴 수 있고, " +
+          "그동안 다른 일을 해도 됩니다. 이미 고친 마디는 그대로 두고, 지금 음표 악보는 이력에 남습니다.",
         okText: "시작",
       }))
     )
       return;
     try {
-      const r = await api.aiFromPdf(job.id);
-      setRun(r);
-      setOpen(true);
-      lastPhase.current = r.phase;
-      void poll(job.id);
+      setRa(await api.readAll(job.id));
+      raTimer.current = window.setTimeout(() => void pollRa(job.id), 2000);
     } catch (e) {
       setErr((e as Error).message);
     }
   }
-
-  const hasPdf = job.files.some((f) => f.rel === "score.pdf");
+  const raBusy = ra?.phase === "running";
   const busy = run?.phase === "queued" || run?.phase === "running";
   const step = run ? STEP[run.state] ?? run.state : "";
   return (
     <div className="aiscore">
       <div className="actions" style={{ marginTop: 0 }}>
         {canEdit && (
-          <button className="ghost" onClick={() => void start()} disabled={busy} title="연주 영상에 나오는 악보로 악보 PDF·송 맵 만들기">
+          <button className="ghost" onClick={() => void start()} disabled={busy} title="연주 영상(YouTube)에 나오는 악보로 악보 PDF·송 맵 만들기">
+            ✨ AI 유튜브
+          </button>
+        )}
+        {canEdit && hasPdf && (
+          <button className="ghost" onClick={() => void readAll()} disabled={raBusy} title="고른 악보 PDF 를 AI 가 읽어 음표 악보(박 표)를 미리 채웁니다">
             ✨ AI 악보
           </button>
         )}
-        {/* 악보 PDF → AI 는 끔 (쓸모가 없었다) */}
-        {false && canEdit && hasPdf && (
-          <button className="ghost" onClick={() => void fromPdf()} disabled={busy} title="곡에 있는 악보 PDF 로 음표 악보·송 맵 만들기">
-            ✨ PDF → 음표 악보
-          </button>
+        {ra && (
+          <span className={`meta${ra.phase === "failed" ? " err" : ""}`} title={(ra.notes ?? []).join(" / ")}>
+            <span className={`badge${ra.phase === "done" ? " done" : ra.phase === "failed" ? " error" : ""}`}>
+              {ra.phase === "running" ? "읽는 중" : ra.phase === "done" ? "완료" : "실패"}
+            </span>{" "}
+            {ra.phase === "running"
+              ? `AI 악보 ${ra.done ?? 0}/${ra.total || "?"}줄`
+              : ra.phase === "done"
+                ? `AI 악보 — ${ra.measures ?? 0}마디 채움${ra.notes?.length ? ` (메모 ${ra.notes.length}개)` : ""}`
+                : ra.error}
+            {raBusy && <span className="dots" />}
+          </span>
         )}
         {run && (
           <button className="ghost aistatus" onClick={() => setOpen((v) => !v)} title="진행 기록 보기">

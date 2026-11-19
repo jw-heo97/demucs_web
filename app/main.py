@@ -27,6 +27,7 @@ import lock as song_lock
 import notation
 import scores
 import score_library
+import score_read
 import tts
 import separator
 import tracks as user_tracks
@@ -770,6 +771,30 @@ def notation_read(job_id: str, payload: dict = Body(...)):
              "steps": payload.get("steps")}]
     return _agent("POST", "/recognize", {"image": base64.b64encode(png).decode(), "measures": meas,
                                           "first_bar": bar, "kind": "print"}, timeout=240)
+
+
+@app.post("/api/jobs/{job_id}/notation/read-all")
+def notation_read_all(job_id: str):
+    """AI 악보(악보 PDF): 고른 악보를 줄마다 AI 가 읽어 음표 악보를 통째로 채운다 (뒤에서 돈다, 고친 마디는 그대로)."""
+    d = _score_dir(job_id)
+    job = _require_job(job_id, done=True)
+    try:
+        return score_read.start(job_id, d, job.bars,
+                                lambda p: _agent("POST", "/recognize", p, timeout=300))
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@app.get("/api/jobs/{job_id}/notation/read-all")
+def notation_read_all_status(job_id: str):
+    st = score_read.status(job_id)
+    if st.get("phase") == "done" and not st.get("scanned"):
+        # 다 읽었으면 곡 파일 목록에 _notation.json 이 보이게
+        job = _require_job(job_id)
+        if job.out_dir:
+            job.files = store._scan_files(job, job.out_dir)
+        st["scanned"] = True
+    return st
 
 
 @app.get("/api/jobs/{job_id}/notation/history")

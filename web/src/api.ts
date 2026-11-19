@@ -6,6 +6,18 @@
 import type { Notation } from "./lib/notation";
 import type { AiRun, InkDoc, Job, JobTrack, MapPayload, MapVersion, Playlist, ScoreData, ScoreList, SearchItem, SongMap } from "./types";
 
+/** AI 악보(악보 PDF) 진행 */
+export interface ReadAll {
+  phase: "idle" | "running" | "done" | "failed";
+  done?: number;
+  total?: number;
+  measures?: number;
+  notes?: string[];
+  error?: string | null;
+  started?: number;
+  finished?: number;
+}
+
 /** 앱에서는 다른 오리진의 서버를 봐야 하므로 베이스 URL 을 바꿀 수 있게 한다. */
 export const BASE =
   (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, "") ?? "";
@@ -184,6 +196,9 @@ export const api = {
   /** 원본 악보 위 펜 필기 */
   scoreInk: (id: string) => get<InkDoc>(`/api/jobs/${id}/score/ink`),
   saveScoreInk: (id: string, doc: InkDoc) => put<InkDoc>(`/api/jobs/${id}/score/ink`, doc),
+  /** AI 악보(악보 PDF): 고른 악보 전체를 줄마다 읽어 음표 악보를 채운다 (뒤에서 돈다) */
+  readAll: (id: string) => post<ReadAll>(`/api/jobs/${id}/notation/read-all`),
+  readAllStatus: (id: string) => get<ReadAll>(`/api/jobs/${id}/notation/read-all`),
   /** 고른 악보(PDF)의 그 마디를 AI 가 칸으로 받아 적는다 (저장은 안 한다) */
   readMeasure: (id: string, bar: number, beats: number, unit: number, steps?: number) =>
     post<{ measures: Notation["measures"]; note?: string; seconds?: number }>(`/api/jobs/${id}/notation/read`, {
