@@ -551,8 +551,12 @@ export function useBarDrag(onSelect: (a: number, b: number) => void, onClick: (b
  * 마디에서 미리 넘긴다), ‹ › 로 넘길 수도 있다. 마디를 누르면 그 마디로 이동, 여러 마디를 끌면
  * 그 범위를 반복한다. 반복 중인 마디는 칠해 둔다.
  */
+// 고친 마디 덮개 크기 — lib/drawNotation 의 PATCH_* 와 같아야 한다 (그 모듈은 그릴 때만 받는다)
+export const PATCH_ABOVE = 1.5;
+export const PATCH_SPAN = 1.5 + 1 + 0.9;
+
 /** 고친 마디 하나: 원본 그림 위에 흰 칸을 덮고 고친 음표를 그린다 (VexFlow 는 그릴 때만 받는다) */
-function MeasurePatch({ m, aspect }: { m: NMeasure; aspect: number }) {
+export function MeasurePatch({ m, aspect }: { m: NMeasure; aspect: number }) {
   const el = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     let alive = true;
@@ -569,6 +573,38 @@ function MeasurePatch({ m, aspect }: { m: NMeasure; aspect: number }) {
     };
   }, [m, aspect]);
   return <div ref={el} className="nt-patch-svg" />;
+}
+
+/** 원본 악보의 마디 하나를 잘라 크게 (편집 창의 '원본') */
+export function scoreCropRect(score: ScoreData, mi: number) {
+  const m = score.measures[mi];
+  const pg = score.pages[m.page];
+  const sh = m.bot - m.top;
+  const pad = sh * 0.5;
+  const x0 = Math.max(0, m.x0 - pad);
+  const x1 = Math.min(pg.w, m.x1 + pad);
+  const y0 = Math.max(0, Math.min(m.y0, m.top - sh * 1.4));
+  const y1 = Math.min(pg.h, Math.max(m.y1, m.bot + sh * 1.2));
+  return { m, pg, x0, x1, y0, y1, aspect: (x1 - x0) / (y1 - y0) };
+}
+
+export function ScoreCrop({ score, mi, maxH }: { score: ScoreData; mi: number; maxH: string }) {
+  const { m, pg, x0, x1, y0, y1, aspect } = scoreCropRect(score, mi);
+  return (
+    <div className="ink-zoom-box" style={{ width: `min(100%, calc(${maxH} * ${aspect}))`, aspectRatio: `${aspect}` }}>
+      <img
+        src={api.fileUrl(score.page_urls[m.page])}
+        alt=""
+        draggable={false}
+        style={{
+          width: `${(pg.w / (x1 - x0)) * 100}%`,
+          height: `${(pg.h / (y1 - y0)) * 100}%`,
+          left: `${(-x0 / (x1 - x0)) * 100}%`,
+          top: `${(-y0 / (y1 - y0)) * 100}%`,
+        }}
+      />
+    </div>
+  );
 }
 
 export function ScoreSheet({
@@ -681,7 +717,7 @@ export function ScoreSheet({
             const h = ms.bot - ms.top;
             const x0 = ms.x0 + h * 0.06;
             const w = ms.x1 - ms.x0 - h * 0.12;
-            const top = ms.top - h * 0.6;
+            const top = ms.top - h * PATCH_ABOVE;
             return (
               <div
                 key={`p${mi}`}
@@ -691,10 +727,10 @@ export function ScoreSheet({
                   left: `${(x0 / pg.w) * 100}%`,
                   width: `${(w / pg.w) * 100}%`,
                   top: `${(top / pg.h) * 100}%`,
-                  height: `${((h * 2.3) / pg.h) * 100}%`,
+                  height: `${((h * PATCH_SPAN) / pg.h) * 100}%`,
                 }}
               >
-                <MeasurePatch m={nm} aspect={w / (h * 2.3)} />
+                <MeasurePatch m={nm} aspect={w / (h * PATCH_SPAN)} />
               </div>
             );
           })}

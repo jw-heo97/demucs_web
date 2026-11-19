@@ -1,11 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { api } from "../api";
 import { choose, confirmBox } from "../lib/dialog";
 import { useMe } from "../lib/me";
 import {
   LANES,
   FEET,
+  BEAT_DIVS,
+  BEAT_DIV_LABEL,
+  beatDiv,
+  beatTicks,
   changeMeter,
+  compact,
+  setBeatDiv,
+  stepTicks,
+  toFine,
   emptyMeasure,
   nextSymbol,
   resample,
@@ -16,9 +25,10 @@ import {
   type NMeasure,
   type Notation,
 } from "../lib/notation";
-import type { Bar, Job, MapRange, SongMap } from "../types";
+import type { Bar, Job, MapRange, ScoreData, SongMap } from "../types";
 import { DrawPad } from "./DrawPad";
 import { NotationView } from "./NotationView";
+import { MeasurePatch, PATCH_SPAN, ScoreCrop, ScoreSheet, measureOfBar } from "./ScoreView";
 
 const SYM_LABEL: Record<string, string> = {
   x: "침", ">": "악센트", g: "고스트", f: "플램", o: "열린 HH",
@@ -39,8 +49,11 @@ export function NotationEditor({
   onSeek,
   onPlayFrom,
   onApplyMap,
+  score,
 }: {
   job: Job;
+  /** 원래 악보(PDF·영상 악보 그림). 있으면 그 위에서 고칠 마디를 고르고, 고친 마디만 덮어 그린다 */
+  score?: ScoreData | null;
   /** 송 맵 마디 (빈 악보를 만들 때 박자·구간을 가져온다) */
   bars: Bar[];
   /** 지금 재생 마디 */
@@ -109,6 +122,9 @@ export function NotationEditor({
     });
     setDirty(true);
   };
+  const original = !!score && score.measures.length > 0;
+  // 안 고친 마디를 열 때 '들어 있는 음표로 시작 / 비우고 새로' 를 고른 마디들 (이번 편집 동안)
+  const [decided, setDecided] = useState<Set<number>>(() => new Set());
   const editMeasure = (n: number, f: (m: NMeasure) => NMeasure) =>
     update((prev) => {
       const ms = prev.measures.slice();
@@ -124,7 +140,8 @@ export function NotationEditor({
     });
     change({ version: 1, tempo: map?.bpm, measures: ms });
     setEditing(true);
-    setSel({ from: 1, to: 1 });
+    // 원본 악보가 있으면 고칠 마디를 직접 고른다
+    if (!original) setSel({ from: 1, to: 1 });
   }
 
   async function save(): Promise<boolean> {
@@ -235,6 +252,21 @@ export function NotationEditor({
   }, [nt, sel, editing]);
 
   if (nt === undefined) return null;
+  // 원본 악보가 있으면 음표 악보 없이 시작한다 — 고칠 마디만 채운다 (빈 악보는 처음 편집할 때 만든다)
+  if (nt === null && original)
+    return (
+      <div className="panel">
+        <div className="actions" style={{ marginTop: 0, marginBottom: 8 }}>
+          <h2 style={{ margin: 0 }}>악보 편집</h2>
+          <span className="meta">원본 악보에서 고칠 마디만 칸 편집·손그림으로 고칩니다. 고친 마디만 원본 위에 덮어 그립니다.</span>
+          <span style={{ flex: 1 }} />
+          {canEdit && (
+            <button className="ghost" onClick={createEmpty} disabled={!bars.length}>✏ 편집</button>
+          )}
+        </div>
+        <ScoreSheet score={score!} bar={bar} loop={null} onPickBar={onSeek} />
+      </div>
+    );
   if (nt === null)
     return (
       <div className="panel">
@@ -254,7 +286,19 @@ export function NotationEditor({
   const n = sel?.from ?? 0;
   // 그리기 범위: 고른 마디들, 또는 그 마디가 있는 줄 전체 (8마디까지)
   const drawRange = (s: { from: number; to: number }, line: boolean) => {
-    const ln = line ? lines.find(([a, b]) => s.from >= a && s.from <= b) : undefined;
+    let ln = line ? lines.find(([a, b]) => s.from >= a && s.from <= b) : undefined;
+    if (line && original) {
+      const sys = (b: number) => {
+        const k = measureOfBar(score!, b);
+        return k == null ? "" : `${score!.measures[k].page}:${score!.measures[k].system}`;
+      };
+      const me = sys(s.from);
+      let a = s.from;
+      let b = s.from;
+      while (a > 1 && sys(a - 1) === me) a--;
+      while (b < nt.measures.length && sys(b + 1) === me) b++;
+      ln = [a, b];
+    }
     const [a, b] = ln ?? [s.from, s.to];
     return { from: a, to: Math.min(b, a + 7, nt.measures.length) };
   };
@@ -291,6 +335,15 @@ export function NotationEditor({
       change({ ...nt, measures: ms });
       setSel({ from: Math.min(sel.from, ms.length), to: Math.min(sel.from, ms.length) });
     },
+    // 고친 표시만 지운다 — 원본 악보에서 이 마디는 다시 원본 그림으로 보인다
+    revert: () => {
+      if (!sel) return;
+      update((prev) => {
+        const ms = prev.measures.slice();
+        for (let k = sel.from; k <= sel.to; k++) if (ms[k - 1]) ms[k - 1] = { ...ms[k - 1], edited: false };
+        return { ...prev, measures: ms };
+      });
+    },
     simile: () => {
       if (!sel || sel.from < 2) return;
       editMeasure(sel.from, (m) => {
@@ -300,43 +353,7 @@ export function NotationEditor({
     },
   };
 
-  return (
-    <div className="panel">
-      <div className="actions" style={{ marginTop: 0, marginBottom: 8 }}>
-        <h2 style={{ margin: 0 }}>
-          악보 편집 <span className="meta">{nt.measures.length}마디{nt.tempo ? ` · ♩=${nt.tempo}` : ""}</span>
-        </h2>
-        <span style={{ flex: 1 }} />
-        {mismatch && <span className="err" title={mismatch}>⚠ 송 맵과 다름</span>}
-        {editing && canEdit && map && (
-          <button className="ghost" onClick={toMap} title="악보의 박자·구간 이름으로 송 맵 구간을 다시 만듭니다 (1마디 1박·BPM 은 그대로)">
-            송 맵에 박자·구간 반영
-          </button>
-        )}
-        {editing && (
-          <button onClick={() => void save()} disabled={!dirty}>
-            {dirty ? "저장" : "저장됨"}
-          </button>
-        )}
-        {canEdit &&
-          (editing ? (
-            <button className="ghost" onClick={() => void endEdit()}>편집 끝</button>
-          ) : (
-            <button className="ghost" onClick={() => setEditing(true)}>✏ 편집</button>
-          ))}
-      </div>
-      {msg && <div className="meta" style={{ marginBottom: 6 }}>{msg}</div>}
-
-      <NotationView
-        notation={nt}
-        bar={bar}
-        selected={editing ? sel : null}
-        onPickBar={editing ? pickBar : onSeek}
-        onSelect={editing ? (a, b) => setSel({ from: a, to: b }) : undefined}
-        follow={!editing || !sel}
-        onLines={setLines}
-        popupBar={editing && cur && canEdit ? (draw ? draw.from : sel!.from) : null}
-        popup={editing && cur && canEdit && (draw ? (
+  const editorBody = editing && cur && canEdit && (draw ? (
           <DrawPad
             key={`${draw.from}-${draw.to}`}
             jobId={job.id}
@@ -358,6 +375,21 @@ export function NotationEditor({
           />
         ) : (
         <div className="nted">
+          {!cur.edited && Object.keys(cur.lanes).length > 0 && !decided.has(n) && (
+            <div className="actions start-pick">
+              <span className="meta">이 마디는 아직 안 고쳤습니다 — 들어 있는 음표로 시작할까요?</span>
+              <button className="ghost" onClick={() => setDecided((d) => new Set(d).add(n))}>들어 있는 음표로 시작</button>
+              <button
+                className="ghost"
+                onClick={() => {
+                  editMeasure(n, (m) => ({ ...emptyMeasure(m.beats, m.unit, m.steps), section: m.section }));
+                  setDecided((d) => new Set(d).add(n));
+                }}
+              >
+                비우고 새로
+              </button>
+            </div>
+          )}
           <div className="actions" style={{ marginTop: 0 }}>
             <button className="ghost" onClick={() => n > 1 && setSel({ from: n - 1, to: n - 1 })} disabled={n <= 1}>◀</button>
             <b>
@@ -368,7 +400,7 @@ export function NotationEditor({
             <button className="ghost" onClick={() => onPlayFrom(n)} title="이 마디부터 재생 (예비박)">▶ 여기서 재생</button>
             <span style={{ flex: 1 }} />
             <button className="ghost" onClick={() => setDraw(drawRange(sel!, false))} title="펜으로 그려서 AI 가 읽기 (고른 마디들)">
-              ✍ 그리기{sel!.to > sel!.from ? ` (${Math.min(8, sel!.to - sel!.from + 1)}마디)` : ""}
+              {sel!.to > sel!.from ? `✍ 그리기 (${Math.min(8, sel!.to - sel!.from + 1)}마디)` : "✍ 이 마디"}
             </button>
             <button className="ghost" onClick={() => setDraw(drawRange(sel!, true))} title="이 마디가 있는 줄 전체를 펜으로">
               ✍ 이 줄
@@ -419,33 +451,66 @@ export function NotationEditor({
             ))}
           </div>
 
-          <div className="ntgrid" style={{ ["--steps" as string]: cur.steps }}>
+          {/* 박마다 블록 — 블록마다 나누기(16분·셋잇단…)를 따로 고른다 */}
+          <div className="ntgrid" style={{ ["--beats" as string]: cur.beats }}>
+            <div className="ntrow ntdivs">
+              <div className="ntlane">박</div>
+              {Array.from({ length: cur.beats }, (_, b) => {
+                const d = beatDiv(cur, b);
+                const nextD = BEAT_DIVS[(BEAT_DIVS.indexOf(d as (typeof BEAT_DIVS)[number]) + 1) % BEAT_DIVS.length];
+                return (
+                  <button
+                    key={b}
+                    className={`ghost ntdiv${d === 3 || d === 6 ? " trip" : ""}`}
+                    onClick={() => editMeasure(n, (m) => setBeatDiv(m, b, nextD))}
+                    title={`${b + 1}박: ${BEAT_DIV_LABEL[d] ?? d} — 누르면 ${BEAT_DIV_LABEL[nextD]}`}
+                  >
+                    {b + 1}박 · {BEAT_DIV_LABEL[d] ?? d}
+                  </button>
+                );
+              })}
+            </div>
             {lanesShown.map((lane) => (
               <div key={lane} className={`ntrow${FEET.includes(lane) ? " feet" : ""}`}>
                 <div className="ntlane" title={LANES.find((l) => l.key === lane)?.label}>
                   {LANES.find((l) => l.key === lane)?.short}
                 </div>
-                {Array.from({ length: cur.steps }, (_, i) => {
-                  const c = cur.lanes[lane]?.[i] ?? "-";
-                  const perBeat = cur.steps / cur.beats;
+                {Array.from({ length: cur.beats }, (_, b) => {
+                  const d = beatDiv(cur, b);
+                  const B = beatTicks(cur);
                   return (
-                    <button
-                      key={i}
-                      className={`ntcell${c !== "-" ? " hit" : ""}${i % perBeat === 0 ? " beat" : ""}`}
-                      onClick={() =>
-                        editMeasure(n, (m) => {
-                          const want = tool === "o" && lane !== "hh" ? "x" : tool;
-                          const now = m.lanes[lane]?.[i] ?? "-";
-                          return setCell(m, lane, i, now === want ? "-" : want);
-                        })
-                      }
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        editMeasure(n, (m) => setCell(m, lane, i, nextSymbol(lane, m.lanes[lane]?.[i] ?? "-")));
-                      }}
-                    >
-                      {c === "-" ? "" : c}
-                    </button>
+                    <div key={b} className="ntbeat">
+                      {Array.from({ length: d }, (_, k) => {
+                        const tick = b * B + (k * B) / d;
+                        const idx = tick / stepTicks(cur);
+                        const c = Number.isInteger(idx) ? cur.lanes[lane]?.[idx] ?? "-" : "-";
+                        // 누르면 가장 잘게 나눈 마디에서 고치고, 다시 줄인다 (박마다 다른 나누기가 담기게)
+                        const put = (f: (now: string) => string) =>
+                          editMeasure(n, (m) => {
+                            const fm = toFine(m);
+                            const i = Math.round(tick / stepTicks(fm));
+                            return compact(setCell(fm, lane, i, f(fm.lanes[lane]?.[i] ?? "-")));
+                          });
+                        return (
+                          <button
+                            key={k}
+                            className={`ntcell${c !== "-" ? " hit" : ""}${k === 0 ? " beat" : ""}`}
+                            onClick={() =>
+                              put((now) => {
+                                const want = tool === "o" && lane !== "hh" ? "x" : tool;
+                                return now === want ? "-" : want;
+                              })
+                            }
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              put((now) => nextSymbol(lane, now));
+                            }}
+                          >
+                            {c === "-" ? "" : c}
+                          </button>
+                        );
+                      })}
+                    </div>
                   );
                 })}
               </div>
@@ -476,15 +541,97 @@ export function NotationEditor({
             <button className="ghost" onClick={() => ops.insert(false)}>앞에 마디 추가</button>
             <button className="ghost" onClick={() => ops.insert(true)}>뒤에 마디 추가</button>
             <button className="ghost" onClick={() => void ops.remove()}>마디 삭제</button>
+            {original && cur.edited && (
+              <button className="ghost" onClick={ops.revert} title="고친 표시를 지워 원본 그림으로 되돌립니다">원본으로</button>
+            )}
             <span className="meta">칸을 누르면 고른 기호, 같은 기호면 지움 · 오른쪽 클릭은 기호 차례로 · ←→ 마디 · Ctrl+Z</span>
           </div>
           {n > 1 && !cur.simile && sameContent(cur, nt.measures[n - 2]) && (
             <div className="meta">앞 마디와 같습니다 — % 로 표시할 수 있습니다.</div>
           )}
         </div>
-        ))}
+        ));
+
+  return (
+    <div className="panel">
+      <div className="actions" style={{ marginTop: 0, marginBottom: 8 }}>
+        <h2 style={{ margin: 0 }}>
+          악보 편집 <span className="meta">{nt.measures.length}마디{nt.tempo ? ` · ♩=${nt.tempo}` : ""}</span>
+        </h2>
+        <span style={{ flex: 1 }} />
+        {mismatch && <span className="err" title={mismatch}>⚠ 송 맵과 다름</span>}
+        {editing && canEdit && map && (
+          <button className="ghost" onClick={toMap} title="악보의 박자·구간 이름으로 송 맵 구간을 다시 만듭니다 (1마디 1박·BPM 은 그대로)">
+            송 맵에 박자·구간 반영
+          </button>
+        )}
+        {editing && (
+          <button onClick={() => void save()} disabled={!dirty}>
+            {dirty ? "저장" : "저장됨"}
+          </button>
+        )}
+        {canEdit &&
+          (editing ? (
+            <button className="ghost" onClick={() => void endEdit()}>편집 끝</button>
+          ) : (
+            <button className="ghost" onClick={() => setEditing(true)}>✏ 편집</button>
+          ))}
+      </div>
+      {msg && <div className="meta" style={{ marginBottom: 6 }}>{msg}</div>}
+
+      {original ? (
+        <ScoreSheet
+          score={score!}
+          notation={nt}
+          bar={bar}
+          loop={editing && sel ? sel : null}
+          onPickBar={editing ? pickBar : onSeek}
+          onSelect={editing ? (a, b) => setSel({ from: a, to: b }) : undefined}
+        />
+      ) : (
+      <NotationView
+        notation={nt}
+        bar={bar}
+        selected={editing ? sel : null}
+        onPickBar={editing ? pickBar : onSeek}
+        onSelect={editing ? (a, b) => setSel({ from: a, to: b }) : undefined}
+        follow={!editing || !sel}
+        onLines={setLines}
+        popupBar={editing && cur && canEdit ? (draw ? draw.from : sel!.from) : null}
+        popup={editorBody}
       />
-      {editing && !cur && <div className="meta" style={{ marginTop: 6 }}>고칠 마디를 누르세요. 여러 마디를 끌어 고르면 복사·삭제를 한꺼번에.</div>}
+      )}
+      {original && editorBody && createPortal(
+        <div className="ink-zoom-back" onPointerDown={(e) => e.target === e.currentTarget && !draw && setSel(null)}>
+          <div className="ink-zoom measure-modal">
+            {!draw && (() => {
+              const k = measureOfBar(score!, sel!.from);
+              if (k == null) return null;
+              const sm = score!.measures[k];
+              const h = sm.bot - sm.top;
+              const pa = (sm.x1 - sm.x0 - h * 0.12) / (h * PATCH_SPAN);
+              return (
+                <div className="measure-compare">
+                  <div>
+                    <div className="meta">원본</div>
+                    <ScoreCrop score={score!} mi={k} maxH="26vh" />
+                  </div>
+                  <div>
+                    <div className="meta">{cur!.edited ? "고친 모양 (원본 위에 이렇게 덮입니다)" : "고친 모양 — 아직 안 고침 (원본 그대로 보입니다)"}</div>
+                    <div className="ink-zoom-box patch-preview" style={{ width: `min(100%, calc(26vh * ${pa}))`, aspectRatio: `${pa}` }}>
+                      <MeasurePatch m={cur!} aspect={pa} />
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+            {editorBody}
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {editing && !cur && <div className="meta" style={{ marginTop: 6 }}>고칠 마디를 누르세요{original ? " — 원본과 고친 모양을 나란히 보며 칸 편집·✍ 그리기로 고칩니다" : ". 여러 마디를 끌어 고르면 복사·삭제를 한꺼번에"}.</div>}
       {!editing && canEdit && <div className="meta" style={{ marginTop: 6 }}>마디를 누르면 그 마디로 이동합니다. 고치려면 ✏ 편집.</div>}
     </div>
   );

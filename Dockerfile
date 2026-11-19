@@ -28,7 +28,11 @@ ENV PYTHONUNBUFFERED=1 \
 
 # ffmpeg: 베이스 이미지에 없음. 오디오 디코딩 + mp3 인코딩에 필수.
 # tini: ffmpeg 자식 프로세스 좀비 수거 + SIGTERM 전달.
-RUN apt-get update \
+# 우분투 패키지 서버: 이 PC 망에서 archive/security.ubuntu.com 이 막힐 때가 있어(접속 거부) 국내 미러를 쓴다.
+# 원래 서버로 쓰려면: docker compose build --build-arg UBUNTU_MIRROR=archive.ubuntu.com api
+ARG UBUNTU_MIRROR=mirror.kakao.com
+RUN sed -i "s#http://archive.ubuntu.com#http://${UBUNTU_MIRROR}#g; s#http://security.ubuntu.com#http://${UBUNTU_MIRROR}#g" /etc/apt/sources.list \
+ && apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg tini ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 

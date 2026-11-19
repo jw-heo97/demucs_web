@@ -603,6 +603,7 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
                 <div className="float-editor-body">
           <NotationEditor
             job={job}
+            score={scoreData}
             bars={bars}
             bar={barAtTime(bars, engine.time)?.bar ?? 1}
             map={map}
