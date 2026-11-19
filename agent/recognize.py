@@ -46,8 +46,22 @@ SYSTEM = """너는 드럼 악보 받아 적기 담당이다. 사용자가 아이
 
 """ + _lane_guide()
 
+# 인쇄된 악보(올린 악보 PDF 에서 잘라낸 마디)를 읽을 때 — 손글씨 대신
+SYSTEM_PRINT = """너는 드럼 악보 받아 적기 담당이다. 인쇄된 드럼 악보(PDF)에서 잘라낸 마디 그림을 칸 형식으로 옮긴다.
 
-async def recognize(png_b64: str, measures: list[dict], first_bar: int = 1) -> dict:
+그림은 악보 그대로다 (마디 앞뒤가 조금 같이 잘려 들어올 수 있다 — 가운데의 마디만, 마디선 사이만 읽는다).
+음표 길이(8분·16분·점음표·셋잇단)와 쉼표를 빔·꼬리·점으로 정확히 세어 타격 시점을 정한다.
+머리 모양: x(가위표) = 심벌류(크래시·하이햇·라이드), 동그라미/점 = 북(스네어·탐·킥). 기둥의 사선은 더블 스트로크(1·2·3),
+기둥에 z 는 버즈, > 는 악센트, 괄호는 고스트, 작은 앞꾸밈음은 플램, 음표 위 o 는 열린 하이햇. 쉼표는 비운다.
+'%' (앞 마디 반복) 마디면 lanes 를 비우고 note 에 '% 마디' 라고 적는다.
+
+순서: drawing 으로 그림을 보고 → answer 로 마디마다 칸을 낸다. answer 가 오류를 돌려주면 고쳐서 다시 낸다.
+확신 없는 곳은 answer 의 note 에 한국어로 짧게 적는다.
+
+""" + _lane_guide()
+
+
+async def recognize(png_b64: str, measures: list[dict], first_bar: int = 1, kind: str = "draw") -> dict:
     """measures: [{beats, unit, steps?}] (그림 왼쪽부터). 돌려줌: {measures: [{beats, unit, steps, lanes}], note}"""
     if not measures or len(measures) > 8:
         raise ValueError("마디는 1~8개")
@@ -101,7 +115,7 @@ async def recognize(png_b64: str, measures: list[dict], first_bar: int = 1) -> d
     if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
         env["CLAUDE_CODE_OAUTH_TOKEN"] = os.environ["CLAUDE_CODE_OAUTH_TOKEN"]
     opts = ClaudeAgentOptions(
-        system_prompt=SYSTEM,
+        system_prompt=SYSTEM_PRINT if kind == "print" else SYSTEM,
         mcp_servers={"draw": server},
         allowed_tools=["mcp__draw__drawing", "mcp__draw__answer"],
         disallowed_tools=["Bash", "Read", "Write", "Edit", "NotebookEdit", "WebFetch", "WebSearch", "Task", "Agent", "Skill"],
@@ -115,7 +129,8 @@ async def recognize(png_b64: str, measures: list[dict], first_bar: int = 1) -> d
     t0 = time.time()
     span = f"{first_bar}마디" if len(meters) == 1 else f"{first_bar}~{first_bar + len(meters) - 1}마디"
     async with ClaudeSDKClient(options=opts) as client:
-        await client.query(f"{span}를 손으로 그린 악보입니다. drawing 으로 보고 answer 로 받아 적어 주세요.")
+        what = "악보 PDF 에서 잘라낸" if kind == "print" else "손으로 그린"
+        await client.query(f"{span}를 {what} 악보입니다. drawing 으로 보고 answer 로 받아 적어 주세요.")
         async for msg in client.receive_response():
             if isinstance(msg, ResultMessage) and msg.is_error and not out:
                 raise RuntimeError(str(msg.result)[:300])

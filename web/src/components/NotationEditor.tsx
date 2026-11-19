@@ -131,6 +131,10 @@ export function NotationEditor({
   const original = !!score && score.measures.length > 0;
   // 안 고친 마디를 열 때 '들어 있는 음표로 시작 / 비우고 새로' 를 고른 마디들 (이번 편집 동안)
   const [decided, setDecided] = useState<Set<number>>(() => new Set());
+  // 원본 악보에서 읽기: 읽는 중인 마디·걸린 초, 이번 편집에서 이미 읽어 본 마디(자동은 한 번만)
+  const [reading, setReading] = useState<{ bar: number; sec: number } | null>(null);
+  const [readNote, setReadNote] = useState<{ bar: number; text: string } | null>(null);
+  const triedRead = useRef(new Set<number>());
   const editMeasure = (n: number, f: (m: NMeasure) => NMeasure) =>
     update((prev) => {
       const ms = prev.measures.slice();
@@ -219,6 +223,43 @@ export function NotationEditor({
   }
 
   const cur = sel ? nt?.measures[sel.from - 1] ?? null : null;
+
+  // 원본 악보의 그 마디를 AI 가 받아 적어 칸을 채운다 — 제안일 뿐이라 '고친 마디'(덮개)로 치지 않는다
+  async function readFromScore(b: number) {
+    const m = nt?.measures[b - 1];
+    if (!m || reading) return;
+    triedRead.current.add(b);
+    const t0 = Date.now();
+    setReading({ bar: b, sec: 0 });
+    setReadNote(null);
+    const tick = window.setInterval(() => setReading({ bar: b, sec: Math.round((Date.now() - t0) / 1000) }), 1000);
+    try {
+      const r = await api.readMeasure(job.id, b, m.beats, m.unit, m.steps);
+      const got = r.measures?.[0];
+      if (got) {
+        update((prev) => {
+          const ms = prev.measures.slice();
+          const old = ms[b - 1];
+          ms[b - 1] = { ...old, steps: got.steps, lanes: got.lanes, simile: false, divs: undefined };
+          return { ...prev, measures: ms };
+        });
+        setDecided((d) => new Set(d).add(b));
+      }
+      setReadNote({ bar: b, text: `원본에서 읽음 (${r.seconds ?? Math.round((Date.now() - t0) / 1000)}초)${r.note ? ` — ${r.note}` : ""}` });
+    } catch (e) {
+      setReadNote({ bar: b, text: `원본에서 읽지 못했습니다: ${(e as Error).message}` });
+    } finally {
+      window.clearInterval(tick);
+      setReading(null);
+    }
+  }
+  // 아직 안 고쳤고 비어 있는 마디를 열면 원본에서 한 번 읽어 둔다
+  useEffect(() => {
+    if (!original || !editing || !canEdit || !sel || !cur || reading) return;
+    if (cur.edited || Object.keys(cur.lanes).length || triedRead.current.has(sel.from)) return;
+    void readFromScore(sel.from);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sel?.from, editing, original]);
   const [extraLanes, setExtraLanes] = useState<Lane[]>([]);
   const mismatch = useMismatch(nt ?? null, bars);
   const lanesShown = useMemo<Lane[]>(() => {
@@ -392,7 +433,10 @@ export function NotationEditor({
           />
         ) : (
         <div className="nted">
-          {!cur.edited && Object.keys(cur.lanes).length > 0 && !decided.has(n) && (
+          {original && (reading?.bar === n || readNote?.bar === n) && (
+            <div className="meta read-note">{reading?.bar === n ? `원본에서 읽는 중… ${reading.sec}초` : readNote?.text}</div>
+          )}
+          {!cur.edited && Object.keys(cur.lanes).length > 0 && !decided.has(n) && reading?.bar !== n && (
             <div className="actions start-pick">
               <span className="meta">이 마디는 아직 안 고쳤습니다 — 들어 있는 음표로 시작할까요?</span>
               <button className="ghost" onClick={() => setDecided((d) => new Set(d).add(n))}>들어 있는 음표로 시작</button>
@@ -419,6 +463,12 @@ export function NotationEditor({
             <button className="ghost" onClick={() => setDraw(drawRange(sel!, false))} title="펜으로 그려서 AI 가 읽기 (고른 마디들)">
               {sel!.to > sel!.from ? `✍ 그리기 (${Math.min(8, sel!.to - sel!.from + 1)}마디)` : "✍ 이 마디"}
             </button>
+            {original && (
+              <button className="ghost" onClick={() => void readFromScore(n)} disabled={!!reading}
+                title="원본 악보의 이 마디를 AI 가 읽어 칸을 채웁니다 (지금 칸은 바뀝니다, 저장 전까지 파일은 그대로)">
+                🖼 원본에서 읽기
+              </button>
+            )}
             <button className="ghost" onClick={() => setDraw(drawRange(sel!, true))} title="이 마디가 있는 줄 전체를 펜으로">
               ✍ 이 줄
             </button>

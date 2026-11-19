@@ -116,7 +116,8 @@ async def recognize_drawing(payload: dict = Body(...)):
         raise HTTPException(400, "image 와 measures 가 필요합니다.")
     async with draw_slots:
         try:
-            return await recognize(img, ms, int(payload.get("first_bar") or 1))
+            return await recognize(img, ms, int(payload.get("first_bar") or 1),
+                                   "print" if payload.get("kind") == "print" else "draw")
         except ValueError as e:
             raise HTTPException(400, str(e)) from e
         except Exception as e:  # noqa: BLE001

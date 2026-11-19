@@ -738,6 +738,40 @@ def notation_recognize(job_id: str, payload: dict = Body(...)):
                                           "first_bar": payload.get("first_bar")}, timeout=240)
 
 
+@app.post("/api/jobs/{job_id}/notation/read")
+def notation_read(job_id: str, payload: dict = Body(...)):
+    """{bar, beats, unit, steps?} — 고른 악보(PDF)에서 그 마디를 잘라 AI 가 칸으로 받아 적는다 (저장은 안 한다).
+    악보 편집에서 마디를 열 때 칸을 미리 채워 두려고 쓴다."""
+    import base64
+    import pymupdf
+
+    d = _score_dir(job_id)
+    data = scores.load(d)
+    if not data or not (d / scores.SCORE_PDF).exists():
+        raise HTTPException(404, "이 곡에 악보가 없습니다.")
+    bar = int(payload.get("bar") or 0)
+    order = data.get("order")
+    k = (order[bar - 1] if order and 0 < bar <= len(order) else bar) - 1
+    if not (0 <= k < len(data.get("measures", []))):
+        raise HTTPException(400, f"악보에 {bar}마디가 없습니다.")
+    m = data["measures"][k]
+    sh = m["bot"] - m["top"]
+    pad = sh * 0.3
+    try:
+        doc = pymupdf.open(d / scores.SCORE_PDF)
+        page = doc[m["page"]]
+        clip = pymupdf.Rect(max(0, m["x0"] - pad), max(0, m["y0"]), min(page.rect.width, m["x1"] + pad),
+                            min(page.rect.height, m["y1"]))
+        png = page.get_pixmap(dpi=200, clip=clip).tobytes("png")
+        doc.close()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"악보를 자르지 못했습니다: {e}") from e
+    meas = [{"beats": int(payload.get("beats") or 4), "unit": int(payload.get("unit") or 4),
+             "steps": payload.get("steps")}]
+    return _agent("POST", "/recognize", {"image": base64.b64encode(png).decode(), "measures": meas,
+                                          "first_bar": bar, "kind": "print"}, timeout=240)
+
+
 @app.get("/api/jobs/{job_id}/notation/history")
 def notation_history(job_id: str):
     return {"history": notation.history(_score_dir(job_id))}
