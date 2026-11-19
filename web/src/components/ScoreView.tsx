@@ -186,9 +186,12 @@ export function ScorePanel({
   onPickBar,
   onScore,
   onLibrary,
+  hideSheet,
   children,
 }: {
   jobId: string;
+  /** 악보 쪽을 그리지 않는다 (그 자리에서 악보 편집이 같은 쪽을 그린다) */
+  hideSheet?: boolean;
   /** 악보를 넣거나 고르거나 지웠을 때 (곡 파일 목록 새로 읽기) */
   onLibrary?: () => void;
   bar: number;
@@ -351,7 +354,7 @@ export function ScorePanel({
           {w}
         </div>
       ))}
-      {score && score.measures.length > 0 && (
+      {score && score.measures.length > 0 && !hideSheet && (
         // 재생 창처럼 한 쪽씩 (옆으로 밀거나 ‹ › 로 넘기고, 연주 위치의 쪽을 따라간다)
         <ScoreSheet score={score} bar={bar} loop={null} onPickBar={onPickBar ?? (() => {})} />
       )}

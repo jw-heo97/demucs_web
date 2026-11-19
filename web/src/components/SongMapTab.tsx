@@ -416,6 +416,8 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
   const [scoreData, setScoreData] = useState<ScoreData | null>(null);
   // 음표 악보 편집 창 (✏ 악보 편집 으로 연다)
   const [editorOpen, setEditorOpen] = useState(false);
+  // 악보(PDF)가 있는 곡은 악보 칸에서 바로 편집한다
+  const sheetEdit = !!scoreData && scoreData.measures.length > 0;
   const buildFromScore = async () => {
     if (!job || !scoreData) return;
     const m = mapFromScore(scoreData);
@@ -563,6 +565,7 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
           <ScorePanel
             jobId={job.id}
             onScore={setScoreData}
+            hideSheet={editorOpen && sheetEdit}
             onLibrary={onChanged}
             bar={barAtTime(bars, engine.time)?.bar ?? 1}
             onPickBar={(b) => {
@@ -586,13 +589,41 @@ export function SongMapTab({ jobs, onChanged, pick }: Props) {
             >
               악보로 송 맵 만들기
             </button>
-            <button className={`ghost${editorOpen ? " on" : ""}`} onClick={() => setEditorOpen((v) => !v)} title="음표 악보 편집 창 열기/닫기">
-              ✏ 악보 편집
-            </button>
+            {!(editorOpen && sheetEdit) && (
+              <button className={`ghost${editorOpen ? " on" : ""}`} onClick={() => setEditorOpen((v) => !v)}
+                title={sheetEdit ? "이 악보에서 바로 마디를 고칩니다" : "음표 악보 편집 창 열기/닫기"}>
+                ✏ 악보 편집
+              </button>
+            )}
           </ScorePanel>
 
-          {/* 음표 악보 편집 — 필요할 때만 떠 있는 창으로 (재생 막대 위). 화면에 길게 깔지 않는다 */}
-          {editorOpen &&
+          {/* 악보가 있으면: 악보 칸 자리에서 바로 편집 (같은 악보를 두 번 그리지 않는다) */}
+          {editorOpen && sheetEdit && (
+            <NotationEditor
+              inline
+              onDone={() => setEditorOpen(false)}
+              job={job}
+              score={scoreData}
+              bars={bars}
+              bar={barAtTime(bars, engine.time)?.bar ?? 1}
+              map={map}
+              onSeek={(b) => {
+                const t = bars.find((x) => x.bar === b)?.start;
+                if (t != null) engine.seek(t);
+              }}
+              onPlayFrom={(b) => {
+                const t = bars.find((x) => x.bar === b)?.start;
+                if (t != null) mixer.current?.playFrom(t, loop);
+              }}
+              onApplyMap={(m) => {
+                setMap(m);
+                setMsg("악보의 박자·구간으로 송 맵을 바꿨습니다 — 아래 구성표에서 확인하고 저장하세요.");
+              }}
+            />
+          )}
+
+          {/* 악보가 없으면: 음표 악보 편집 — 필요할 때만 떠 있는 창으로 (재생 막대 위) */}
+          {editorOpen && !sheetEdit &&
             createPortal(
               <div className="float-editor" role="dialog" aria-label="악보 편집">
                 <div className="float-editor-head">

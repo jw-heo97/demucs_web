@@ -50,8 +50,14 @@ export function NotationEditor({
   onPlayFrom,
   onApplyMap,
   score,
+  inline,
+  onDone,
 }: {
   job: Job;
+  /** 악보 칸 자리에서 바로 편집 (악보 편집 단추로 열 때) — 열리자마자 편집 모드 */
+  inline?: boolean;
+  /** 편집을 끝냈을 때 (악보 칸으로 돌아간다) */
+  onDone?: () => void;
   /** 원래 악보(PDF·영상 악보 그림). 있으면 그 위에서 고칠 마디를 고르고, 고친 마디만 덮어 그린다 */
   score?: ScoreData | null;
   /** 송 맵 마디 (빈 악보를 만들 때 박자·구간을 가져온다) */
@@ -187,6 +193,7 @@ export function NotationEditor({
     setSel(null);
     setDraw(null);
     setEditing(false);
+    onDone?.();
   }
 
   // 악보의 박자·구간 → 송 맵 구간 (1마디 1박·BPM 은 그대로)
@@ -250,6 +257,16 @@ export function NotationEditor({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [nt, sel, editing]);
+
+  // 악보 편집 단추로 열었으면 바로 편집 모드 (음표 악보가 없으면 빈 악보를 만들어서)
+  const started = useRef(false);
+  useEffect(() => {
+    if (!inline || started.current || nt === undefined || !canEdit) return;
+    started.current = true;
+    if (nt === null && original) createEmpty();
+    else if (nt) setEditing(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inline, nt, canEdit]);
 
   if (nt === undefined) return null;
   // 원본 악보가 있으면 음표 악보 없이 시작한다 — 고칠 마디만 채운다 (빈 악보는 처음 편집할 때 만든다)
